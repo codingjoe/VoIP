@@ -18,20 +18,20 @@ python3 -m pip install libsip[pygments]  # with Pygments syntax highlighting sup
 
 The SIP library provides two classes for SIP messages: `Request` and `Response`.
 
-- `parse`: Parse a SIP message from bytes.
+- `Message.parse`: Parse a SIP message from bytes.
 - `__bytes__`: Convert the SIP message to bytes.
 
 ```python
->>> import sip
->>> sip.parse(b"INVITE sip:bob@biloxi.com SIP/2.0\r\nVia: SIP/2.0/UDP pc33.atlanta.com\r\n\r\n")
-Request(method='INVITE', uri='sip:bob@biloxi.com', headers={'Via': 'SIP/2.0/UDP pc33.atlanta.com'}, body=b'', version='SIP/2.0')
->>> sip.parse(b"SIP/2.0 200 OK\r\n\r\n")
-Response(status_code=200, reason='OK', headers={}, body=b'', version='SIP/2.0')
+>>> from sip import Message
+>>> Message.parse(b"INVITE sip:bob@biloxi.com SIP/2.0\r\nVia: SIP/2.0/UDP pc33.atlanta.com\r\n\r\n")
+Request(method='INVITE', uri='sip:bob@biloxi.com', headers={'Via': 'SIP/2.0/UDP pc33.atlanta.com'}, version='SIP/2.0')
+>>> Message.parse(b"SIP/2.0 200 OK\r\n\r\n")
+Response(status_code=200, reason='OK', headers={}, version='SIP/2.0')
 ```
 
 #### Asyncio SIP Protocol datagram endpoint
 
-`SIPProtocol` is a subclass of `asyncio.DatagramProtocol` that dispatches received UDP
+`SessionInitiationProtocol` (aliased as `SIP`) is a subclass of `asyncio.DatagramProtocol` that dispatches received UDP
 datagrams to the appropriate handler:
 
 - `request_received`: Called when a SIP request is received.
@@ -42,7 +42,7 @@ import asyncio
 import sip
 
 
-class MyProtocol(sip.SIPProtocol):
+class MyProtocol(sip.SIP):
     def request_received(self, request: sip.Request, addr: tuple[str, int]) -> None:
         print(request, addr)
 

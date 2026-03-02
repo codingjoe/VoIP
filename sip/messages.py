@@ -7,7 +7,7 @@ import dataclasses
 __all__ = ["Request", "Response"]
 
 
-@dataclasses.dataclass(kw_only=True, frozen=True)
+@dataclasses.dataclass(kw_only=True)
 class Message:
     """A SIP message (RFC 3261 §7)."""
 
@@ -21,7 +21,14 @@ class Message:
         header_section, _, body = data.partition(b"\r\n\r\n")
         lines = header_section.decode().split("\r\n")
         first_line, *header_lines = lines
-        headers = dict(line.split(": ", 1) for line in header_lines if ": " in line)
+        headers = {}
+        for line in header_lines:
+            if not line:
+                continue
+            name, sep, value = line.partition(":")
+            if not sep:
+                continue
+            headers[name.strip()] = value.strip()
         parts = first_line.split(" ", 2)
         if first_line.startswith("SIP/"):
             version, status_code_str, reason = parts
@@ -48,7 +55,7 @@ class Message:
         return NotImplemented
 
 
-@dataclasses.dataclass(kw_only=True, frozen=True)
+@dataclasses.dataclass(kw_only=True)
 class Request(Message):
     """A SIP request message (RFC 3261 §7.1)."""
 
@@ -59,7 +66,7 @@ class Request(Message):
         return f"{self.method} {self.uri} {self.version}"
 
 
-@dataclasses.dataclass(kw_only=True, frozen=True)
+@dataclasses.dataclass(kw_only=True)
 class Response(Message):
     """A SIP response message (RFC 3261 §7.2)."""
 
