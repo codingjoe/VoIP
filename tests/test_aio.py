@@ -3,8 +3,8 @@
 import errno
 
 import pytest
-from sip.messages import Request, Response
 from sip.aio import SessionInitiationProtocol
+from sip.messages import Request, Response
 
 
 class ConcreteProtocol(SessionInitiationProtocol):

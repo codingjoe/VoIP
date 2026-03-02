@@ -31,11 +31,15 @@ class SIPMessage:
                 version=version,
             )
         method, uri, version = parts
-        return Request(method=method, uri=uri, headers=headers, body=body, version=version)
+        return Request(
+            method=method, uri=uri, headers=headers, body=body, version=version
+        )
 
     def __bytes__(self) -> bytes:
         """Serialize to bytes."""
-        header_lines = "".join(f"{name}: {value}\r\n" for name, value in self.headers.items())
+        header_lines = "".join(
+            f"{name}: {value}\r\n" for name, value in self.headers.items()
+        )
         return f"{self._first_line()}\r\n{header_lines}\r\n".encode() + self.body
 
     def _first_line(self) -> str:

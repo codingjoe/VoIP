@@ -1,11 +1,9 @@
 """Tests for SIP message parsing and serialization."""
-import pytest
 
 from sip.messages import Request, Response, SIPMessage
 
 
 class TestSIPMessage:
-
     def test_first_line__not_implemented(self):
         """Return NotImplemented when calling _first_line on SIPMessage."""
         message = SIPMessage()
@@ -76,7 +74,6 @@ class TestSIPMessage:
             headers={"From": "sip:bob@biloxi.com"},
         )
         assert SIPMessage.parse(bytes(response)) == response
-
 
 
 class TestRequest:
