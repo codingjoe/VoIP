@@ -59,7 +59,47 @@ async def main():
 asyncio.run(main())
 ```
 
-## SIP lexer plugin for [Pygments](https://pygments.org/)
+#### Incoming call handler
+
+Subclass `IncomingCall` and override `handle` to process audio data received over RTP.
+Register it with `SessionInitiationProtocol` by overriding `invite_received`:
+
+```python
+import asyncio
+import sip
+
+
+class MyCall(sip.IncomingCall):
+    def handle(self, audio: bytes) -> None:
+        # Process raw RTP audio payload (e.g. write to a file or pipe)
+        print(f"Received {len(audio)} bytes of audio")
+
+
+class MyProtocol(sip.SIP):
+    def invite_received(self, call: sip.IncomingCall, addr: tuple[str, int]) -> None:
+        asyncio.create_task(call.answer())  # send 200 OK and open RTP port
+
+    def response_received(self, response: sip.Response, addr: tuple[str, int]) -> None:
+        print(response, addr)
+
+
+async def main():
+    loop = asyncio.get_running_loop()
+    await loop.create_datagram_endpoint(MyProtocol, local_addr=("0.0.0.0", 5060))
+    await asyncio.sleep(3600)
+
+
+asyncio.run(main())
+```
+
+`IncomingCall` also exposes:
+
+- `caller` – the SIP address from the `From` header.
+- `answer()` – coroutine that sends `200 OK` with an SDP body and opens a UDP port for
+  incoming RTP audio.
+- `reject(status_code, reason)` – sends a non-2xx response (default `486 Busy Here`).
+
+
 
 The SIP library comes with a lexer plugin for [Pygments](https://pygments.org/) to
 highlight SIP messages. It's based on the HTTP lexer and adds SIP-specific keywords.

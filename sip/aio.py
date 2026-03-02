@@ -6,6 +6,7 @@ import asyncio
 import errno
 import logging
 
+from .calls import IncomingCall
 from .messages import Message, Request, Response
 
 logger = logging.getLogger(__name__)
@@ -16,7 +17,11 @@ __all__ = ["SIP", "SessionInitiationProtocol"]
 class SessionInitiationProtocol(asyncio.DatagramProtocol):
     """An asyncio protocol handler for the Session Initiation Protocol (RFC 3261)."""
 
-    __slots__ = ()
+    __slots__ = ("_transport",)
+
+    def connection_made(self, transport: asyncio.DatagramTransport) -> None:
+        """Store the transport for sending SIP messages."""
+        self._transport = transport
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         """Dispatch a received datagram to the appropriate handler."""
@@ -27,7 +32,18 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
                 self.response_received(response, addr)
 
     def request_received(self, request: Request, addr: tuple[str, int]) -> None:
-        """Handle a received SIP request. Override in subclasses to process requests."""
+        """Dispatch a received SIP request to the appropriate handler."""
+        match request.method:
+            case "INVITE":
+                self.invite_received(
+                    IncomingCall(request, addr, self._transport),
+                    addr,
+                )
+            case _:
+                return NotImplemented
+
+    def invite_received(self, call: IncomingCall, addr: tuple[str, int]) -> None:
+        """Handle an incoming call. Override in subclasses to process calls."""
         return NotImplemented
 
     def response_received(self, response: Response, addr: tuple[str, int]) -> None:
