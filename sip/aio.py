@@ -6,7 +6,7 @@ import asyncio
 import errno
 import logging
 
-from .messages import Request, Response, Message
+from .messages import Message, Request, Response
 
 logger = logging.getLogger(__name__)
 

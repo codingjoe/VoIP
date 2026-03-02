@@ -1,6 +1,6 @@
 """Tests for SIP message parsing and serialization."""
 
-from sip.messages import Request, Response, Message
+from sip.messages import Message, Request, Response
 
 
 class TestSIPMessage:
