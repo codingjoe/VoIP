@@ -33,6 +33,12 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 
+[project.optional-dependencies]
+pygments = ["Pygments"]
+
+[project.entry-points."pygments.lexers"]
+sip = "sip.lexers:SIPLexer"
+
 [tool.flit.module]
 name = "sip"
 
