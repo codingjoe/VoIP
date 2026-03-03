@@ -49,6 +49,7 @@ jobs:
         extra:
           - pygments
           - whisper
+          - cli
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
