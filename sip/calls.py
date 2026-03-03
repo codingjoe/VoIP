@@ -212,7 +212,11 @@ class RegisterProtocol(IncomingCallProtocol):
             self._server_addr[1],
             self._cseq,
         )
+        local_address = self._transport.get_extra_info("sockname")
+        branch = f"z9hG4bK{uuid.uuid4().hex}"
+        logger.debug("REGISTER Via branch: %s", branch)
         headers = {
+            "Via": f"SIP/2.0/UDP {local_address[0]}:{local_address[1]};rport;branch={branch}",
             "From": self._aor,
             "To": self._aor,
             "Call-ID": self._call_id,

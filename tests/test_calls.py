@@ -380,6 +380,13 @@ def make_register_protocol(
     return RegisterProtocol(server_addr, aor, username, password)
 
 
+def make_mock_transport(host: str = "127.0.0.1", port: int = 5060):
+    """Return a MagicMock transport with get_extra_info('sockname') configured."""
+    transport = MagicMock()
+    transport.get_extra_info.return_value = (host, port)
+    return transport
+
+
 class TestParseAuthChallenge:
     def test_parses_realm_and_nonce(self):
         """Parse realm and nonce from a Digest challenge header."""
@@ -456,7 +463,7 @@ class TestRegisterProtocol:
     def test_connection_made__sends_register(self):
         """Send a REGISTER request immediately after connection is made."""
         p = make_register_protocol()
-        transport = MagicMock()
+        transport = make_mock_transport()
         p.connection_made(transport)
         transport.sendto.assert_called_once()
         data, addr = transport.sendto.call_args[0]
@@ -466,8 +473,8 @@ class TestRegisterProtocol:
     def test_register__includes_required_headers(self):
         """REGISTER request includes From, To, Call-ID, CSeq, Contact and Expires."""
         p = make_register_protocol()
-        transport = MagicMock()
-        p.connection_made(MagicMock())
+        transport = make_mock_transport()
+        p.connection_made(make_mock_transport())
         p._transport = transport
         transport.reset_mock()
         p.register()
@@ -480,7 +487,7 @@ class TestRegisterProtocol:
     def test_register__increments_cseq(self):
         """CSeq increments with each REGISTER sent."""
         p = make_register_protocol()
-        p.connection_made(MagicMock())
+        p.connection_made(make_mock_transport())
         assert p._cseq == 1
         p.register()
         assert p._cseq == 2
@@ -488,7 +495,7 @@ class TestRegisterProtocol:
     def test_register__with_authorization(self):
         """Authorization header is included when credentials are provided."""
         p = make_register_protocol()
-        p.connection_made(MagicMock())
+        p.connection_made(make_mock_transport())
         transport = p._transport
         transport.reset_mock()
         p.register(authorization='Digest username="alice"')
@@ -498,7 +505,7 @@ class TestRegisterProtocol:
     def test_register__with_proxy_authorization(self):
         """Proxy-Authorization header is included for proxy challenges."""
         p = make_register_protocol()
-        p.connection_made(MagicMock())
+        p.connection_made(make_mock_transport())
         transport = p._transport
         transport.reset_mock()
         p.register(proxy_authorization='Digest username="alice"')
@@ -514,7 +521,7 @@ class TestRegisterProtocol:
                 calls.append(True)
 
         p = ConcreteProtocol(("192.0.2.2", 5060), "sip:alice@example.com", "a", "b")
-        p.connection_made(MagicMock())
+        p.connection_made(make_mock_transport())
         p.response_received(
             Response(status_code=200, reason="OK", headers={"CSeq": "1 REGISTER"}),
             ("192.0.2.2", 5060),
@@ -530,7 +537,7 @@ class TestRegisterProtocol:
                 calls.append(True)
 
         p = ConcreteProtocol(("192.0.2.2", 5060), "sip:alice@example.com", "a", "b")
-        p.connection_made(MagicMock())
+        p.connection_made(make_mock_transport())
         p.response_received(
             Response(status_code=200, reason="OK", headers={"CSeq": "1 INVITE"}),
             ("192.0.2.2", 5060),
@@ -540,7 +547,7 @@ class TestRegisterProtocol:
     def test_response_received__401_retries_with_authorization(self):
         """Receiving 401 triggers a re-REGISTER with an Authorization header."""
         p = make_register_protocol(username="alice", password="test-password")  # noqa: S106
-        p.connection_made(MagicMock())
+        p.connection_made(make_mock_transport())
         transport = p._transport
         transport.reset_mock()
         challenge = 'Digest realm="example.com", nonce="abc123"'
@@ -562,7 +569,7 @@ class TestRegisterProtocol:
     def test_response_received__407_retries_with_proxy_authorization(self):
         """Receiving 407 triggers a re-REGISTER with a Proxy-Authorization header."""
         p = make_register_protocol(username="alice", password="test-password")  # noqa: S106
-        p.connection_made(MagicMock())
+        p.connection_made(make_mock_transport())
         transport = p._transport
         transport.reset_mock()
         challenge = 'Digest realm="example.com", nonce="xyz"'
@@ -581,7 +588,7 @@ class TestRegisterProtocol:
     def test_response_received__401_with_qop_auth_includes_nc_cnonce(self):
         """401 with qop=auth causes the retry to include nc and cnonce fields."""
         p = make_register_protocol()
-        p.connection_made(MagicMock())
+        p.connection_made(make_mock_transport())
         transport = p._transport
         transport.reset_mock()
         challenge = 'Digest realm="example.com", nonce="n", qop="auth"'
@@ -601,7 +608,7 @@ class TestRegisterProtocol:
     def test_response_received__401_with_opaque_echoes_opaque(self):
         """The opaque field from the challenge is echoed back in the Authorization."""
         p = make_register_protocol()
-        p.connection_made(MagicMock())
+        p.connection_made(make_mock_transport())
         transport = p._transport
         transport.reset_mock()
         challenge = 'Digest realm="example.com", nonce="n", opaque="secret-opaque"'
@@ -619,7 +626,7 @@ class TestRegisterProtocol:
     def test_response_received__other_status__returns_not_implemented(self):
         """An unhandled status code returns NotImplemented."""
         p = make_register_protocol()
-        p.connection_made(MagicMock())
+        p.connection_made(make_mock_transport())
         result = p.response_received(
             Response(
                 status_code=500, reason="Server Error", headers={"CSeq": "1 REGISTER"}
@@ -633,6 +640,17 @@ class TestRegisterProtocol:
         p = make_register_protocol()
         assert p.registered() is NotImplemented
 
+    def test_register__via_header_has_rport(self):
+        """REGISTER request includes a Via header with the rport parameter for NAT traversal."""
+        import re
+
+        p = make_register_protocol()
+        transport = make_mock_transport("192.0.2.10", 5060)
+        p.connection_made(transport)
+        data, _ = transport.sendto.call_args[0]
+        assert b"Via: SIP/2.0/UDP 192.0.2.10:5060;rport;branch=z9hG4bK" in data
+        assert re.search(rb"branch=z9hG4bK[0-9a-f]{32}", data)
+
     def test_invite_received_after_register(self):
         """INVITE dispatching still works after registration (inherits IncomingCallProtocol)."""
         calls = []
@@ -642,7 +660,7 @@ class TestRegisterProtocol:
                 calls.append((call, addr))
 
         p = ConcreteProtocol(("192.0.2.2", 5060), "sip:alice@example.com", "a", "b")
-        p.connection_made(MagicMock())
+        p.connection_made(make_mock_transport())
         request = Request(
             method="INVITE",
             uri="sip:alice@example.com",
@@ -657,7 +675,7 @@ class TestRegisterProtocol:
         import logging
 
         p = make_register_protocol()
-        p.connection_made(MagicMock())
+        p.connection_made(make_mock_transport())
         with caplog.at_level(logging.INFO, logger="sip.calls"):
             p.response_received(
                 Response(status_code=200, reason="OK", headers={"CSeq": "1 REGISTER"}),
@@ -670,7 +688,7 @@ class TestRegisterProtocol:
         import logging
 
         p = make_register_protocol()
-        p.connection_made(MagicMock())
+        p.connection_made(make_mock_transport())
         with caplog.at_level(logging.WARNING, logger="sip.calls"):
             p.response_received(
                 Response(
