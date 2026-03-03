@@ -212,7 +212,7 @@ class RegisterProtocol(IncomingCallProtocol):
             self._server_addr[1],
             self._cseq,
         )
-        local_address = self._transport.get_extra_info("sockname")
+        local_address = self._transport.get_extra_info("sockname") or ("0.0.0.0", 5060)  # noqa: S104
         branch = f"z9hG4bK{uuid.uuid4().hex}"
         logger.debug("REGISTER Via branch: %s", branch)
         headers = {

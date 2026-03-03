@@ -6,7 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
-CliRunner = pytest.importorskip("click.testing.CliRunner")
+_click_testing = pytest.importorskip("click.testing")
+CliRunner = _click_testing.CliRunner
 
 
 def make_runner():

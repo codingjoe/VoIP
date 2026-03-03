@@ -651,6 +651,21 @@ class TestRegisterProtocol:
         assert b"Via: SIP/2.0/UDP 192.0.2.10:5060;rport;branch=z9hG4bK" in data
         assert re.search(rb"branch=z9hG4bK[0-9a-f]{32}", data)
 
+    def test_register__via_branch_is_unique_per_request(self):
+        """Each REGISTER generates a unique Via branch to prevent transaction conflicts."""
+        import re
+
+        p = make_register_protocol()
+        transport = make_mock_transport()
+        p.connection_made(transport)
+        data1, _ = transport.sendto.call_args[0]
+        transport.reset_mock()
+        p.register()
+        data2, _ = transport.sendto.call_args[0]
+        branch1 = re.search(rb"branch=(z9hG4bK[0-9a-f]{32})", data1).group(1)
+        branch2 = re.search(rb"branch=(z9hG4bK[0-9a-f]{32})", data2).group(1)
+        assert branch1 != branch2
+
     def test_invite_received_after_register(self):
         """INVITE dispatching still works after registration (inherits IncomingCallProtocol)."""
         calls = []
