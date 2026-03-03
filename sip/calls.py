@@ -7,13 +7,13 @@ import hashlib
 import logging
 import os
 import re
-import socket
-import struct
 import uuid
 from collections.abc import Callable
 
 from .aio import SessionInitiationProtocol
 from .messages import Message, Request, Response
+from .rtp import RTPProtocol
+from .stun import STUNProtocol
 
 __all__ = ["IncomingCall", "IncomingCallProtocol", "RegisterProtocol", "RTPProtocol"]
 
@@ -51,21 +51,6 @@ def _digest_response(
             f"{ha1}:{nonce}:{nc}:{cnonce}:{qop}:{ha2}".encode()
         ).hexdigest()
     return hashlib.md5(f"{ha1}:{nonce}:{ha2}".encode()).hexdigest()  # noqa: S324
-
-
-class RTPProtocol(asyncio.DatagramProtocol):
-    """An asyncio DatagramProtocol for receiving RTP audio streams (RFC 3550)."""
-
-    rtp_header_size = 12
-
-    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
-        """Strip the fixed-size RTP header and forward the audio payload."""
-        if len(data) > self.rtp_header_size:
-            self.audio_received(data[self.rtp_header_size :])
-
-    def audio_received(self, data: bytes) -> None:
-        """Handle a decoded RTP audio payload. Override in subclasses."""
-        return NotImplemented
 
 
 class IncomingCall(RTPProtocol):
@@ -180,7 +165,7 @@ class IncomingCallProtocol(SessionInitiationProtocol):
         return NotImplemented
 
 
-class RegisterProtocol(IncomingCallProtocol):
+class RegisterProtocol(STUNProtocol, IncomingCallProtocol):
     """SIP UAC: registers with a carrier via digest auth and handles inbound calls."""
 
     def __init__(
@@ -191,6 +176,7 @@ class RegisterProtocol(IncomingCallProtocol):
         password: str,
         stun_server: tuple[str, int] | None = None,
     ) -> None:
+        super().__init__()
         self._server_addr = server_addr
         self._aor = aor
         self._username = username
@@ -199,7 +185,6 @@ class RegisterProtocol(IncomingCallProtocol):
         self._cseq = 0
         self._stun_server = stun_server
         self._public_addr: tuple[str, int] | None = None
-        self._stun_transactions: dict[bytes, asyncio.Future] = {}
 
     @property
     def _registrar_uri(self) -> str:
@@ -231,66 +216,12 @@ class RegisterProtocol(IncomingCallProtocol):
             )
         self.register()
 
-    async def _stun_discover(
-        self, host: str, port: int, timeout: float = 3.0
-    ) -> tuple[str, int]:
-        """Send a STUN Binding Request on the SIP socket and return the public address."""
-        magic_cookie = 0x2112A442
-        transaction_id = os.urandom(12)
-        # STUN Binding Request: type=0x0001, length=0
-        request = struct.pack(">HHI12s", 0x0001, 0, magic_cookie, transaction_id)
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[tuple[str, int]] = loop.create_future()
-        self._stun_transactions[transaction_id] = future
-        logger.debug("Sending STUN Binding Request to %s:%s", host, port)
-        self._transport.sendto(request, (host, port))
-        try:
-            return await asyncio.wait_for(future, timeout=timeout)
-        finally:
-            self._stun_transactions.pop(transaction_id, None)
-
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         """Multiplex STUN and SIP messages on the same UDP socket (RFC 7983)."""
         if data and data[0] < 4:  # STUN: first byte is 0–3
             self._handle_stun(data, addr)
         else:
             super().datagram_received(data, addr)
-
-    def _handle_stun(self, data: bytes, addr: tuple[str, int]) -> None:
-        """Parse a STUN Binding Success Response and resolve the pending STUN future."""
-        if len(data) < 20:
-            return
-        msg_type, _msg_len, magic_cookie = struct.unpack(">HHI", data[:8])
-        transaction_id = data[8:20]
-        if magic_cookie != 0x2112A442 or msg_type != 0x0101:  # Binding Success Response
-            return
-        future = self._stun_transactions.get(transaction_id)
-        if future is None or future.done():
-            return
-        # Parse attributes to find XOR-MAPPED-ADDRESS (0x0020) or MAPPED-ADDRESS (0x0001)
-        offset = 20
-        xor_mapped: tuple[str, int] | None = None
-        mapped: tuple[str, int] | None = None
-        while offset + 4 <= len(data):
-            attr_type, attr_len = struct.unpack(">HH", data[offset : offset + 4])
-            attr_val = data[offset + 4 : offset + 4 + attr_len]
-            if (
-                attr_type == 0x0020 and len(attr_val) >= 8 and attr_val[1] == 0x01
-            ):  # XOR-MAPPED IPv4
-                port = struct.unpack(">H", attr_val[2:4])[0] ^ (magic_cookie >> 16)
-                ip_int = struct.unpack(">I", attr_val[4:8])[0] ^ magic_cookie
-                xor_mapped = (socket.inet_ntoa(struct.pack(">I", ip_int)), port)
-            elif (
-                attr_type == 0x0001 and len(attr_val) >= 8 and attr_val[1] == 0x01
-            ):  # MAPPED-ADDRESS IPv4
-                port = struct.unpack(">H", attr_val[2:4])[0]
-                mapped = (socket.inet_ntoa(attr_val[4:8]), port)
-            offset += 4 + ((attr_len + 3) & ~3)  # attributes are 4-byte aligned
-        result = xor_mapped or mapped
-        if result:
-            future.set_result(result)
-        else:
-            future.set_exception(RuntimeError("No address attribute in STUN response"))
 
     def register(
         self,
