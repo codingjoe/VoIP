@@ -179,3 +179,15 @@ class TestWhisperCall:
             pytest.raises(ImportError, match="libopus"),
         ):
             WhisperCall(make_invite(), ("192.0.2.1", 5060), MagicMock())
+
+    def test_audio_received__logs_debug(self, caplog):
+        """Log a debug message for each received RTP packet."""
+        import logging
+
+        model_mock = MagicMock()
+        call = make_whisper_call(model_mock)
+        pcm_bytes = bytes(WhisperCall.opus_frame_size * 2)
+        call._decoder.decode.return_value = pcm_bytes
+        with caplog.at_level(logging.DEBUG, logger="sip.whisper"):
+            call.audio_received(b"opus_packet")
+        assert any("RTP audio" in r.message for r in caplog.records)

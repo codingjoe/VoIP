@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import os
 import re
 import uuid
@@ -13,6 +14,8 @@ from .aio import SessionInitiationProtocol
 from .messages import Message, Request, Response
 
 __all__ = ["IncomingCall", "IncomingCallProtocol", "RegisterProtocol", "RTPProtocol"]
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_auth_challenge(header: str) -> dict[str, str]:
@@ -75,6 +78,7 @@ class IncomingCall(RTPProtocol):
         self._request = request
         self._addr = addr
         self._send = send
+        logger.debug("Incoming call from %s via %s", request.headers.get("From", "unknown"), addr)
 
     @property
     def caller(self) -> str:
@@ -83,12 +87,14 @@ class IncomingCall(RTPProtocol):
 
     async def answer(self) -> None:
         """Answer the call and start receiving Opus audio via RTP (RFC 7587)."""
+        logger.info("Answering call from %s", self.caller)
         loop = asyncio.get_running_loop()
         rtp_transport, _ = await loop.create_datagram_endpoint(
             lambda: self,
             local_addr=("0.0.0.0", 0),  # noqa: S104
         )
         local_addr = rtp_transport.get_extra_info("sockname")
+        logger.debug("RTP listening on %s:%s", local_addr[0], local_addr[1])
         sdp = (
             f"v=0\r\n"
             f"c=IN IP4 {local_addr[0]}\r\n"
@@ -114,6 +120,7 @@ class IncomingCall(RTPProtocol):
 
     def reject(self, status_code: int = 486, reason: str = "Busy Here") -> None:
         """Reject the call."""
+        logger.info("Rejecting call from %s with %s %s", self.caller, status_code, reason)
         self._send(
             Response(
                 status_code=status_code,
@@ -133,16 +140,19 @@ class IncomingCallProtocol(SessionInitiationProtocol):
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
         """Store the transport for sending SIP messages."""
+        logger.debug("SIP transport connected")
         self._transport = transport
 
     def send(self, message: Message, addr: tuple[str, int]) -> None:
         """Serialize and send a SIP message to the given address."""
+        logger.debug("Sending %s to %s:%s", type(message).__name__, addr[0], addr[1])
         self._transport.sendto(bytes(message), addr)
 
     def request_received(self, request: Request, addr: tuple[str, int]) -> None:
         """Dispatch an INVITE request to invite_received."""
         match request.method:
             case "INVITE":
+                logger.info("INVITE received from %s", addr[0])
                 self.invite_received(self.create_call(request, addr), addr)
             case _:
                 return NotImplemented
@@ -192,6 +202,7 @@ class RegisterProtocol(IncomingCallProtocol):
     ) -> None:
         """Send a REGISTER request to the carrier, optionally with credentials."""
         self._cseq += 1
+        logger.debug("Sending REGISTER to %s:%s (CSeq %s)", self._server_addr[0], self._server_addr[1], self._cseq)
         headers = {
             "From": self._aor,
             "To": self._aor,
@@ -215,9 +226,11 @@ class RegisterProtocol(IncomingCallProtocol):
         if response.status_code == 200 and "REGISTER" in response.headers.get(
             "CSeq", ""
         ):
+            logger.info("Registration successful")
             self.registered()
             return
         if response.status_code in (401, 407):
+            logger.debug("Auth challenge received (%s), retrying with credentials", response.status_code)
             is_proxy = response.status_code == 407
             challenge_key = "Proxy-Authenticate" if is_proxy else "WWW-Authenticate"
             params = _parse_auth_challenge(response.headers.get(challenge_key, ""))
@@ -253,6 +266,7 @@ class RegisterProtocol(IncomingCallProtocol):
             else:
                 self.register(authorization=auth_value)
             return
+        logger.warning("Unexpected REGISTER response: %s %s", response.status_code, response.reason)
         return NotImplemented
 
     def registered(self) -> None:

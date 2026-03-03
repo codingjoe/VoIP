@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import numpy as np
 
@@ -11,6 +12,8 @@ import whisper
 from .calls import IncomingCall
 
 __all__ = ["WhisperCall"]
+
+logger = logging.getLogger(__name__)
 
 
 class WhisperCall(IncomingCall):
@@ -25,6 +28,7 @@ class WhisperCall(IncomingCall):
 
     def __init__(self, *args, model: str = "base", **kwargs) -> None:
         super().__init__(*args, **kwargs)
+        logger.debug("Loading Whisper model %r", model)
         self._whisper_model = whisper.load_model(model)
         try:
             import opuslib  # noqa: PLC0415
@@ -45,6 +49,7 @@ class WhisperCall(IncomingCall):
 
     def audio_received(self, data: bytes) -> None:
         """Decode an Opus RTP payload, buffer the PCM, and transcribe when ready."""
+        logger.debug("RTP audio packet received: %d bytes", len(data))
         pcm_bytes = self._decoder.decode(data, self.opus_frame_size)
         pcm = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
         # Resample from 48 kHz to 16 kHz by taking every third sample.
@@ -57,12 +62,15 @@ class WhisperCall(IncomingCall):
         chunk_samples = whisper.audio.SAMPLE_RATE * self.chunk_duration
         chunk = self._pcm_buffer[:chunk_samples]
         self._pcm_buffer = self._pcm_buffer[chunk_samples:]
+        logger.info("Transcribing %d samples (%.1f s)", len(chunk), len(chunk) / whisper.audio.SAMPLE_RATE)
         loop = asyncio.get_running_loop()
         text = await loop.run_in_executor(None, self._run_transcription, chunk)
         self.transcription_received(text.strip())
 
     def _run_transcription(self, audio: np.ndarray) -> str:
-        return self._whisper_model.transcribe(audio)["text"]
+        result = self._whisper_model.transcribe(audio)["text"]
+        logger.debug("Transcription result: %r", result)
+        return result
 
     def transcription_received(self, text: str) -> None:
         """Handle a transcription result. Override in subclasses."""

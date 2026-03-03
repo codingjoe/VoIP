@@ -271,6 +271,25 @@ class TestIncomingCall:
 
         asyncio.run(run())
 
+    def test_answer__logs_info(self, caplog):
+        """Log an info message when answering a call."""
+        import logging
+
+        async def run():
+            with caplog.at_level(logging.INFO, logger="sip.calls"):
+                await make_call().answer()
+
+        asyncio.run(run())
+        assert any("Answering" in r.message for r in caplog.records)
+
+    def test_reject__logs_info(self, caplog):
+        """Log an info message when rejecting a call."""
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="sip.calls"):
+            make_call().reject()
+        assert any("Rejecting" in r.message for r in caplog.records)
+
 
 class TestIncomingCallProtocol:
     def test_connection_made__stores_transport(self):
@@ -632,3 +651,29 @@ class TestRegisterProtocol:
         p.request_received(request, ("192.0.2.1", 5060))
         assert len(calls) == 1
         assert isinstance(calls[0][0], IncomingCall)
+
+    def test_response_received__200_ok__logs_info(self, caplog):
+        """Receiving 200 OK logs an info message."""
+        import logging
+
+        p = make_register_protocol()
+        p.connection_made(MagicMock())
+        with caplog.at_level(logging.INFO, logger="sip.calls"):
+            p.response_received(
+                Response(status_code=200, reason="OK", headers={"CSeq": "1 REGISTER"}),
+                ("192.0.2.2", 5060),
+            )
+        assert any("Registration successful" in r.message for r in caplog.records)
+
+    def test_response_received__unexpected_status__logs_warning(self, caplog):
+        """An unhandled status code logs a warning."""
+        import logging
+
+        p = make_register_protocol()
+        p.connection_made(MagicMock())
+        with caplog.at_level(logging.WARNING, logger="sip.calls"):
+            p.response_received(
+                Response(status_code=500, reason="Server Error", headers={"CSeq": "1 REGISTER"}),
+                ("192.0.2.2", 5060),
+            )
+        assert any("500" in r.message for r in caplog.records)
