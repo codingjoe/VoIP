@@ -53,6 +53,9 @@ voip = "voip.__main__:main"
 [project.entry-points."pygments.lexers"]
 sip = "voip.sip.lexers:SIPLexer"
 
+[tool.flit_core]
+module = "voip"
+
 [dependency-groups]
 dev = [
   { include-group = "test" },
