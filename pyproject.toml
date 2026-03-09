@@ -53,8 +53,8 @@ voip = "voip.__main__:main"
 [project.entry-points."pygments.lexers"]
 sip = "voip.sip.lexers:SIPLexer"
 
-[tool.flit_core]
-module = "voip"
+[tool.flit.module]
+name = "voip"
 
 [dependency-groups]
 dev = [
