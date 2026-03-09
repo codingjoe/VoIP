@@ -18,7 +18,18 @@ from voip.types import DigestQoP
 logger = logging.getLogger(__name__)
 
 
-class IncomingCall(RealtimeTransportProtocol):
+class _RTPReceiver(RealtimeTransportProtocol):
+    """Delegate RTP audio payloads to the owning IncomingCall instance."""
+
+    def __init__(self, call: IncomingCall) -> None:
+        self._call = call
+
+    def audio_received(self, data: bytes) -> None:
+        """Forward the RTP audio payload to the associated call."""
+        self._call.audio_received(data)
+
+
+class IncomingCall:
     """An inbound SIP call: answers or rejects the INVITE and receives Opus audio via RTP."""
 
     def __init__(
@@ -42,12 +53,15 @@ class IncomingCall(RealtimeTransportProtocol):
         """Return the caller's SIP address."""
         return self._request.headers.get("From", "")
 
+    def audio_received(self, data: bytes) -> None:
+        """Handle a decoded RTP audio payload. Override in subclasses."""
+
     async def answer(self) -> None:
         """Answer the call and start receiving Opus audio via RTP (RFC 7587)."""
         logger.info("Answering call from %s", self.caller)
         loop = asyncio.get_running_loop()
         rtp_transport, _ = await loop.create_datagram_endpoint(
-            lambda: self,
+            lambda: _RTPReceiver(self),
             local_addr=("0.0.0.0", 0),  # noqa: S104
         )
         local_addr = rtp_transport.get_extra_info("sockname")
