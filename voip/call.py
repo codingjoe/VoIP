@@ -8,7 +8,7 @@ import secrets
 import uuid
 from collections.abc import Callable
 
-from voip.rtp import RTPProtocol
+from voip.rtp import RealtimeTransportProtocol
 from voip.sip.messages import Request, Response
 from voip.sip.protocol import SessionInitiationProtocol
 from voip.sip.types import SIPStatus, SIPStatusCode
@@ -18,7 +18,7 @@ from voip.types import DigestQoP
 logger = logging.getLogger(__name__)
 
 
-class IncomingCall(RTPProtocol):
+class IncomingCall(RealtimeTransportProtocol):
     """An inbound SIP call: answers or rejects the INVITE and receives Opus audio via RTP."""
 
     def __init__(

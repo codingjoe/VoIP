@@ -100,7 +100,7 @@ def _parse_stun_server(stun_server: str) -> tuple[str, int] | None:
     help="SIP Address of Record (defaults to sip:{username}@{server_host}).",
 )
 @click.option("--username", envvar="SIP_USERNAME", required=True, help="SIP username.")
-@click.option("--password", envvar="SIP_PASSWORD", required=True, help="SIP password.")
+@click.option("--password", envvar="SIP_PASSWORD", help="SIP password.")
 @click.option(
     "--local-port", default=5060, show_default=True, help="Local UDP port to bind."
 )

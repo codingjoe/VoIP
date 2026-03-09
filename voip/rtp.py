@@ -7,7 +7,7 @@ import dataclasses
 import enum
 import logging
 
-__all__ = ["RTPPacket", "RTPPayloadType", "RTPProtocol"]
+__all__ = ["RTPPacket", "RTPPayloadType", "RealtimeTransportProtocol"]
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +53,12 @@ class RTPPacket:
         )
 
 
-class RTPProtocol(asyncio.DatagramProtocol):
-    """asyncio DatagramProtocol for receiving RTP audio streams (RFC 3550)."""
+class RealtimeTransportProtocol(asyncio.DatagramProtocol):
+    """
+    Real-time Transport Protocol (RTP) handler for receiving audio streams (RFC 3550).
+
+    See also: https://datatracker.ietf.org/doc/html/rfc3550#section-5
+    """
 
     rtp_header_size = 12
 
@@ -65,3 +69,6 @@ class RTPProtocol(asyncio.DatagramProtocol):
 
     def audio_received(self, data: bytes) -> None:
         """Handle a decoded RTP audio payload. Override in subclasses."""
+
+
+RTP = RealtimeTransportProtocol

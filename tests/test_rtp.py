@@ -5,7 +5,7 @@ from __future__ import annotations
 import struct
 
 import pytest
-from voip.rtp import RTPPacket, RTPPayloadType, RTPProtocol
+from voip.rtp import RealtimeTransportProtocol, RTPPacket, RTPPayloadType
 
 
 def make_rtp_packet(
@@ -81,13 +81,13 @@ class TestRTPPacket:
 class TestRTPProtocol:
     def test_rtp_header_size__class_attribute(self):
         """rtp_header_size is a class attribute set to the standard 12-byte header."""
-        assert RTPProtocol.rtp_header_size == 12
+        assert RealtimeTransportProtocol.rtp_header_size == 12
 
     def test_datagram_received__forwards_audio_payload(self):
         """Strip the RTP header and forward the audio payload to audio_received."""
         received: list[bytes] = []
 
-        class ConcreteRTP(RTPProtocol):
+        class ConcreteRTP(RealtimeTransportProtocol):
             def audio_received(self, data: bytes) -> None:
                 received.append(data)
 
@@ -100,7 +100,7 @@ class TestRTPProtocol:
         """Skip packets shorter than the 12-byte RTP header."""
         received: list[bytes] = []
 
-        class ConcreteRTP(RTPProtocol):
+        class ConcreteRTP(RealtimeTransportProtocol):
             def audio_received(self, data: bytes) -> None:
                 received.append(data)
 
@@ -111,7 +111,7 @@ class TestRTPProtocol:
         """Skip packets that contain only the 12-byte header with no audio payload."""
         received: list[bytes] = []
 
-        class ConcreteRTP(RTPProtocol):
+        class ConcreteRTP(RealtimeTransportProtocol):
             def audio_received(self, data: bytes) -> None:
                 received.append(data)
 
