@@ -2,10 +2,10 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://github.com/codingjoe/VoIP/raw/main/docs/images/logo-dark.svg">
     <source media="(prefers-color-scheme: light)" srcset="https://github.com/codingjoe/VoIP/raw/main/docs/images/logo-light.svg">
-    <img alt="Django HealthCheck: Pluggable health checks for Django applications" src="https://github.com/codingjoe/VoIP/raw/main/docs/images/logo-light.svg">
+    <img alt="Python VoIP" src="https://github.com/codingjoe/VoIP/raw/main/docs/images/logo-light.svg">
   </picture>
 <br>
-  <a href="https://codingjoe.dev/VoIP/">Documentation</a> |
+  <a href="https://github.com/codingjoe">Documentation</a> |
   <a href="https://github.com/codingjoe/VoIP/issues/new/choose">Issues</a> |
   <a href="https://github.com/codingjoe/VoIP/releases">Changelog</a> |
   <a href="https://github.com/sponsors/codingjoe">Funding</a> 💚
