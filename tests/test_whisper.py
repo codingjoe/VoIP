@@ -9,6 +9,7 @@ import pytest
 
 np = pytest.importorskip("numpy")
 pytest.importorskip("ffmpeg")
+pytest.importorskip("whisper")
 
 from voip.call import IncomingCall  # noqa: E402
 from voip.sip.messages import Request  # noqa: E402
@@ -163,28 +164,26 @@ class TestWhisperCall:
         call = make_whisper_call(model_mock)
         pcm_bytes = np.zeros(16000, dtype=np.float32).tobytes()
         with patch("voip.whisper.ffmpeg") as mock_ffmpeg:
-            mock_ffmpeg.input.return_value.output.return_value.run.return_value = (
-                pcm_bytes,
-                b"",
-            )
+            mock_proc = MagicMock()
+            mock_proc.returncode = 0
+            mock_proc.communicate.return_value = (pcm_bytes, b"")
+            mock_ffmpeg.input.return_value.output.return_value.run_async.return_value = mock_proc
             result = call._decode_opus(b"fake_ogg_data")
         mock_ffmpeg.input.assert_called_once_with("pipe:0", format="ogg")
         assert len(result) == 16000
 
     def test_decode_opus__raises_on_ffmpeg_error(self):
-        """Raise RuntimeError when ffmpeg raises an Error."""
+        """Raise RuntimeError when ffmpeg returns a non-zero exit code."""
         call = make_whisper_call(MagicMock())
-        error = MagicMock()
-        error.stderr = b"Invalid data"
         with (
             patch("voip.whisper.ffmpeg") as mock_ffmpeg,
             pytest.raises(RuntimeError, match="ffmpeg decoding failed"),
         ):
-            mock_ffmpeg.Error = type("Error", (Exception,), {})
-            mock_ffmpeg.input.return_value.output.return_value.run.side_effect = (
-                mock_ffmpeg.Error("fail")
-            )
-            mock_ffmpeg.input.return_value.output.return_value.run.side_effect.stderr = b"fail"
+            mock_ffmpeg.Error = type("Error", (Exception,), {"stderr": b"error output"})
+            mock_proc = MagicMock()
+            mock_proc.returncode = 1
+            mock_proc.communicate.return_value = (b"", b"error output")
+            mock_ffmpeg.input.return_value.output.return_value.run_async.return_value = mock_proc
             call._decode_opus(b"bad_data")
 
     def test_decode_opus__raises_on_ffmpeg_not_found(self):
@@ -195,7 +194,7 @@ class TestWhisperCall:
             pytest.raises(RuntimeError, match="ffmpeg is not installed"),
         ):
             mock_ffmpeg.Error = type("Error", (Exception,), {})
-            mock_ffmpeg.input.return_value.output.return_value.run.side_effect = (
+            mock_ffmpeg.input.return_value.output.return_value.run_async.side_effect = (
                 FileNotFoundError("ffmpeg not found")
             )
             call._decode_opus(b"bad_data")

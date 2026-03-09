@@ -6,7 +6,20 @@ import pytest
 
 pytest.importorskip("ffmpeg")
 
-from voip.call import RegisterProtocol
+from voip.stun import STUNProtocol
+
+
+class _STUNOnlyProtocol(STUNProtocol, asyncio.DatagramProtocol):
+    """Minimal datagram protocol that only handles STUN messages."""
+
+    def connection_made(self, transport):
+        self._transport = transport
+
+    def datagram_received(self, data, addr):
+        # STUN messages always have the first two bits set to 0 (RFC 7983),
+        # so the first byte is always < 4 (0b00xxxxxx).
+        if data and data[0] < 4:
+            self.handle_stun(data, addr)
 
 
 @pytest.mark.integration
@@ -15,13 +28,7 @@ def test_stun_discover__public_stun_server():
 
     async def run() -> tuple[str, int]:
         loop = asyncio.get_running_loop()
-        protocol = RegisterProtocol(
-            ("stun.l.google.com", 19302),
-            "sip:test@stun.l.google.com",
-            "test",
-            "test",
-            stun_server_address=("stun.l.google.com", 19302),
-        )
+        protocol = _STUNOnlyProtocol()
         transport, _ = await loop.create_datagram_endpoint(
             lambda: protocol,
             local_addr=("0.0.0.0", 0),  # noqa: S104 – ephemeral port for outbound STUN discovery

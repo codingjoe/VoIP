@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import struct
+import subprocess
 
 import ffmpeg
 import numpy as np
@@ -116,28 +117,34 @@ class WhisperCall(IncomingCall):
         self._packet_threshold = (
             self.opus_sample_rate * self.chunk_duration // self.opus_frame_size
         )
+        self._transcribe_task: asyncio.Task | None = None
 
     def audio_received(self, data: bytes) -> None:
         """Buffer an Opus RTP payload and transcribe when the chunk threshold is reached."""
         logger.debug("RTP audio packet received: %d bytes", len(data))
         self._opus_packets.append(data)
-        if len(self._opus_packets) >= self._packet_threshold:
-            asyncio.create_task(self._transcribe_chunk())
+        # asyncio is single-threaded: this check-and-create is atomic within the event loop.
+        if len(self._opus_packets) >= self._packet_threshold and self._transcribe_task is None:
+            self._transcribe_task = asyncio.create_task(self._transcribe_chunk())
 
     async def _transcribe_chunk(self) -> None:
-        """Decode and transcribe the buffered Opus packets."""
-        packets = self._opus_packets[: self._packet_threshold]
-        self._opus_packets = self._opus_packets[self._packet_threshold :]
-        ogg_data = _build_ogg_opus(packets)
-        loop = asyncio.get_running_loop()
-        audio = await loop.run_in_executor(None, self._decode_opus, ogg_data)
-        logger.info(
-            "Transcribing %d samples (%.1f s)",
-            len(audio),
-            len(audio) / whisper.audio.SAMPLE_RATE,
-        )
-        text = await loop.run_in_executor(None, self._run_transcription, audio)
-        self.transcription_received(text.strip())
+        """Decode and transcribe the buffered Opus packets, draining all complete chunks."""
+        try:
+            while len(self._opus_packets) >= self._packet_threshold:
+                packets = self._opus_packets[: self._packet_threshold]
+                self._opus_packets = self._opus_packets[self._packet_threshold :]
+                ogg_data = _build_ogg_opus(packets)
+                loop = asyncio.get_running_loop()
+                audio = await loop.run_in_executor(None, self._decode_opus, ogg_data)
+                logger.info(
+                    "Transcribing %d samples (%.1f s)",
+                    len(audio),
+                    len(audio) / whisper.audio.SAMPLE_RATE,
+                )
+                text = await loop.run_in_executor(None, self._run_transcription, audio)
+                self.transcription_received(text.strip())
+        finally:
+            self._transcribe_task = None
 
     #: Maximum seconds to wait for ffmpeg to decode an audio chunk.
     decode_timeout_secs = 60
@@ -148,7 +155,7 @@ class WhisperCall(IncomingCall):
         Requires the ``ffmpeg-python`` package and the system ``ffmpeg`` binary.
         """
         try:
-            out, _ = (
+            proc = (
                 ffmpeg.input(
                     "pipe:0", format="ogg"
                 )  # _build_ogg_opus always wraps in Ogg
@@ -158,11 +165,21 @@ class WhisperCall(IncomingCall):
                     ar=str(whisper.audio.SAMPLE_RATE),
                     ac="1",
                 )
-                .run(input=ogg_data, capture_stdout=True, capture_stderr=True)
+                .run_async(pipe_stdin=True, pipe_stdout=True, pipe_stderr=True)
             )
+            try:
+                out, err = proc.communicate(input=ogg_data, timeout=self.decode_timeout_secs)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                raise RuntimeError(
+                    f"ffmpeg decoding timed out after {self.decode_timeout_secs}s"
+                )
+            if proc.returncode != 0:
+                raise ffmpeg.Error("ffmpeg", b"", err)
         except ffmpeg.Error as exc:
             raise RuntimeError(
-                f"ffmpeg decoding failed: {exc.stderr.decode(errors='replace')}"
+                f"ffmpeg decoding failed: {getattr(exc, 'stderr', b'').decode(errors='replace')}"
             ) from exc
         except FileNotFoundError as exc:
             raise RuntimeError(

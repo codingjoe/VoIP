@@ -12,7 +12,7 @@ try:
     from voip.sip.lexers import SIPLexer
 except ImportError as e:
     raise ImportError(
-        "The SIP CLI requires needs to be installed via `pip install libsip[cli]`."
+        "The VoIP CLI requires extra dependencies. Install via `pip install voip[cli]`."
     ) from e
 
 
@@ -21,11 +21,11 @@ class ConsoleMessageProcessor:
 
     def request_received(self, request: messages.Request, addr: tuple[str, int]):
         self.pprint(request, addr)
-        super().request_received()
+        super().request_received(request, addr)
 
     def response_received(self, response: messages.Response, addr: tuple[str, int]):
         self.pprint(response, addr)
-        super().request_received()
+        super().response_received(response, addr)
 
     @staticmethod
     def pprint(msg, addr):
@@ -55,7 +55,7 @@ def sip():
 
 logger = logging.getLogger(__name__)
 
-main = sip
+main = voip
 
 
 def _parse_server(server: str) -> tuple[tuple[str, int], str]:
@@ -133,7 +133,7 @@ def transcribe(model, server, aor, username, password, local_port, stun_server):
             click.echo(f"Registered with {server} — waiting for calls", err=True)
 
         def create_call(self, request, addr) -> TranscribingCall:
-            return TranscribingCall(request, addr, self.send, model=model)
+            return TranscribingCall(request, addr, self.send, model=model, contact_ip=self._contact_ip)
 
         def invite_received(self, call: IncomingCall, addr) -> None:
             click.echo(f"Incoming call from {call.caller}", err=True)
@@ -157,4 +157,4 @@ def transcribe(model, server, aor, username, password, local_port, stun_server):
 
 
 if __name__ == "__main__":  # pragma: no cover
-    sip()
+    voip()

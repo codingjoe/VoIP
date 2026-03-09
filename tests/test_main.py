@@ -16,7 +16,7 @@ CliRunner = _click_testing.CliRunner
 _WHISPER_STUBS = {
     "numpy": MagicMock(),
     "whisper": MagicMock(),
-    "sip.whisper": MagicMock(WhisperCall=MagicMock),
+    "voip.whisper": MagicMock(WhisperCall=MagicMock),
 }
 
 

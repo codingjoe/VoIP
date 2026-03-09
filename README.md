@@ -21,7 +21,7 @@ Python asyncio library for SIP telephony ([RFC 3261](https://tools.ietf.org/html
 ## Setup
 
 ```console
-python3 -m pip install libsip[cli,pygments,whisper]
+python3 -m pip install voip[cli,pygments,whisper]
 ```
 
 ## Usage

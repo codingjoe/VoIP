@@ -75,7 +75,7 @@ class TestIncomingCall:
             response, _ = send.call_args[0]
             assert b"m=audio" in response.body
             assert b"RTP/AVP 111" in response.body
-            assert b"a=rtpmap:111 opus/48000/2" in response.body
+            assert b"a=rtpmap:111 opus/48000/1" in response.body
 
         asyncio.run(run())
 

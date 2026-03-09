@@ -26,10 +26,13 @@ class IncomingCall(RTPProtocol):
         request: Request,
         addr: tuple[str, int],
         send: Callable[..., None],
+        *,
+        contact_ip: str | None = None,
     ) -> None:
         self._request = request
         self._addr = addr
         self._send = send
+        self._contact_ip = contact_ip
         logger.debug(
             "Incoming call from %s via %s", request.headers.get("From", "unknown"), addr
         )
@@ -48,12 +51,13 @@ class IncomingCall(RTPProtocol):
             local_addr=("0.0.0.0", 0),  # noqa: S104
         )
         local_addr = rtp_transport.get_extra_info("sockname")
+        sdp_ip = self._contact_ip or local_addr[0]
         logger.debug("RTP listening on %s:%s", local_addr[0], local_addr[1])
         sdp = (
             f"v=0\r\n"
-            f"c=IN IP4 {local_addr[0]}\r\n"
+            f"c=IN IP4 {sdp_ip}\r\n"
             f"m=audio {local_addr[1]} RTP/AVP 111\r\n"
-            f"a=rtpmap:111 opus/48000/2\r\n"
+            f"a=rtpmap:111 opus/48000/1\r\n"
         ).encode()
         self._send(
             Response(
@@ -129,7 +133,12 @@ class IncomingCallProtocol(SessionInitiationProtocol):
 
     def create_call(self, request: Request, addr: tuple[str, int]) -> IncomingCall:
         """Create an IncomingCall for an INVITE. Override to use a custom call class."""
-        return IncomingCall(request, addr, self.send)
+        return IncomingCall(request, addr, self.send, contact_ip=self._contact_ip)
+
+    @property
+    def _contact_ip(self) -> str | None:
+        """Return the IP address to advertise in SDP (None if not available)."""
+        return None
 
     def invite_received(self, call: IncomingCall, addr: tuple[str, int]) -> None:
         """Handle an incoming call. Override in subclasses to process calls."""
@@ -158,6 +167,11 @@ class RegisterProtocol(STUNProtocol, IncomingCallProtocol):
         self.cseq = 0
         self.stun_server_address = stun_server_address
         self.public_address: tuple[str, int] | None = None
+
+    @property
+    def _contact_ip(self) -> str | None:
+        """Return the STUN-discovered public IP for use in SDP, or None if not available."""
+        return self.public_address[0] if self.public_address else None
 
     @property
     def registrar_uri(self) -> str:
