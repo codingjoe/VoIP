@@ -133,7 +133,9 @@ def transcribe(model, server, aor, username, password, local_port, stun_server):
             click.echo(f"Registered with {server} — waiting for calls", err=True)
 
         def create_call(self, request, addr) -> TranscribingCall:
-            return TranscribingCall(request, addr, self.send, model=model, contact_ip=self._contact_ip)
+            return TranscribingCall(
+                request, addr, self.send, model=model, contact_ip=self._contact_ip
+            )
 
         def invite_received(self, call: IncomingCall, addr) -> None:
             click.echo(f"Incoming call from {call.caller}", err=True)

@@ -124,7 +124,10 @@ class WhisperCall(IncomingCall):
         logger.debug("RTP audio packet received: %d bytes", len(data))
         self._opus_packets.append(data)
         # asyncio is single-threaded: this check-and-create is atomic within the event loop.
-        if len(self._opus_packets) >= self._packet_threshold and self._transcribe_task is None:
+        if (
+            len(self._opus_packets) >= self._packet_threshold
+            and self._transcribe_task is None
+        ):
             self._transcribe_task = asyncio.create_task(self._transcribe_chunk())
 
     async def _transcribe_chunk(self) -> None:
@@ -168,7 +171,9 @@ class WhisperCall(IncomingCall):
                 .run_async(pipe_stdin=True, pipe_stdout=True, pipe_stderr=True)
             )
             try:
-                out, err = proc.communicate(input=ogg_data, timeout=self.decode_timeout_secs)
+                out, err = proc.communicate(
+                    input=ogg_data, timeout=self.decode_timeout_secs
+                )
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.communicate()
