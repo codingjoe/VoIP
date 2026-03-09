@@ -283,12 +283,19 @@ class TestTranscribeCLI:
             )
         protocol = protocol_holder.get("protocol")
         if protocol:
+            from voip.sip.messages import Request
+
             call = MagicMock(spec=IncomingCall)
             call.caller = "sip:caller@example.com"
+            request = Request(
+                method="INVITE",
+                uri="sip:u@example.com",
+                headers={"From": "sip:caller@example.com"},
+            )
 
             async def run():
                 with patch("asyncio.create_task") as mock_task:
-                    protocol.invite_received(call, ("192.0.2.1", 5060))
+                    protocol.invite_received(call, request, ("192.0.2.1", 5060))
                     mock_task.assert_called_once()
 
             asyncio.run(run())

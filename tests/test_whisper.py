@@ -12,19 +12,9 @@ pytest.importorskip("ffmpeg")
 pytest.importorskip("whisper")
 
 from voip.call import IncomingCall  # noqa: E402
-from voip.sip.messages import Request  # noqa: E402
 from voip.whisper import WhisperCall, _build_ogg_opus  # noqa: E402
 
 import whisper  # noqa: E402
-
-
-def make_invite() -> Request:
-    """Return an INVITE request with default headers."""
-    return Request(
-        method="INVITE",
-        uri="sip:alice@atlanta.com",
-        headers={"From": "sip:bob@biloxi.com"},
-    )
 
 
 def packet_threshold(call_class: type[WhisperCall]) -> int:
@@ -40,7 +30,7 @@ def make_whisper_call(model_mock: MagicMock, call_class=None) -> WhisperCall:
     """Return a WhisperCall with a mocked Whisper model."""
     cls = call_class or WhisperCall
     with patch("voip.whisper.whisper.load_model", return_value=model_mock):
-        return cls(make_invite(), ("192.0.2.1", 5060), MagicMock())
+        return cls(caller="sip:bob@biloxi.com")
 
 
 class TestWhisperCall:

@@ -113,7 +113,7 @@ def _parse_stun_server(stun_server: str) -> tuple[str, int] | None:
 )
 def transcribe(model, server, aor, username, password, local_port, stun_server):
     """Register with a SIP carrier and transcribe incoming calls via Whisper."""
-    from voip.call import IncomingCall, RegisterProtocol
+    from voip.call import RegisterProtocol
 
     from .whisper import WhisperCall  # noqa: PLC0415
 
@@ -123,6 +123,9 @@ def transcribe(model, server, aor, username, password, local_port, stun_server):
     stun = _parse_stun_server(stun_server)
 
     class TranscribingCall(WhisperCall):
+        def __init__(self, caller: str = "") -> None:
+            super().__init__(caller=caller, model=model)
+
         def transcription_received(self, text: str) -> None:
             logger.info("Transcription: %s", text)
             click.echo(text)
@@ -132,20 +135,17 @@ def transcribe(model, server, aor, username, password, local_port, stun_server):
             logger.info("Registered with %s — waiting for calls", server)
             click.echo(f"Registered with {server} — waiting for calls", err=True)
 
-        def create_call(self, request, addr) -> TranscribingCall:
-            return TranscribingCall(
-                request, addr, self.send, model=model, contact_ip=self._contact_ip
-            )
-
-        def invite_received(self, call: IncomingCall, addr) -> None:
+        def invite_received(self, call, request, addr) -> None:
             click.echo(f"Incoming call from {call.caller}", err=True)
-            asyncio.create_task(call.answer())
+            asyncio.create_task(self.answer(call, request, addr))
 
     async def run():
         loop = asyncio.get_running_loop()
         await loop.create_datagram_endpoint(
             lambda: TranscribingProtocol(
-                server_addr, aor, username, password, stun_server_address=stun
+                server_addr, aor, username, password,
+                call_class=TranscribingCall,
+                stun_server_address=stun,
             ),
             local_addr=("0.0.0.0", local_port),  # noqa: S104
         )

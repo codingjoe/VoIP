@@ -6,7 +6,6 @@ import logging
 import re
 import secrets
 import uuid
-from collections.abc import Callable
 
 from voip.rtp import RealtimeTransportProtocol
 from voip.sip.messages import Request, Response
@@ -19,102 +18,47 @@ logger = logging.getLogger(__name__)
 
 
 class _RTPReceiver(RealtimeTransportProtocol):
-    """Delegate RTP audio payloads to the owning IncomingCall instance."""
+    """Delegate RTP audio payloads to the call handler."""
 
     def __init__(self, call: IncomingCall) -> None:
         self._call = call
 
     def audio_received(self, data: bytes) -> None:
-        """Forward the RTP audio payload to the associated call."""
+        """Forward the RTP audio payload to the associated call handler."""
         self._call.audio_received(data)
 
 
 class IncomingCall:
-    """An inbound SIP call: answers or rejects the INVITE and receives Opus audio via RTP."""
+    """Base class for handling an incoming RTP audio call.
 
-    def __init__(
-        self,
-        request: Request,
-        addr: tuple[str, int],
-        send: Callable[..., None],
-        *,
-        contact_ip: str | None = None,
-    ) -> None:
-        self._request = request
-        self._addr = addr
-        self._send = send
-        self._contact_ip = contact_ip
-        logger.debug(
-            "Incoming call from %s via %s", request.headers.get("From", "unknown"), addr
-        )
+    This is a pure RTP-level handler with no SIP knowledge.
+    Override :meth:`audio_received` to process the incoming Opus audio stream.
+    """
 
-    @property
-    def caller(self) -> str:
-        """Return the caller's SIP address."""
-        return self._request.headers.get("From", "")
+    def __init__(self, caller: str = "") -> None:
+        self.caller = caller
 
     def audio_received(self, data: bytes) -> None:
         """Handle a decoded RTP audio payload. Override in subclasses."""
 
-    async def answer(self) -> None:
-        """Answer the call and start receiving Opus audio via RTP (RFC 7587)."""
-        logger.info("Answering call from %s", self.caller)
-        loop = asyncio.get_running_loop()
-        rtp_transport, _ = await loop.create_datagram_endpoint(
-            lambda: _RTPReceiver(self),
-            local_addr=("0.0.0.0", 0),  # noqa: S104
-        )
-        local_addr = rtp_transport.get_extra_info("sockname")
-        sdp_ip = self._contact_ip or local_addr[0]
-        logger.debug("RTP listening on %s:%s", local_addr[0], local_addr[1])
-        sdp = (
-            f"v=0\r\n"
-            f"c=IN IP4 {sdp_ip}\r\n"
-            f"m=audio {local_addr[1]} RTP/AVP 111\r\n"
-            f"a=rtpmap:111 opus/48000/1\r\n"
-        ).encode()
-        self._send(
-            Response(
-                status_code=SIPStatus.OK.status_code,
-                reason=SIPStatus.OK.reason,
-                headers={
-                    **{
-                        key: value
-                        for key, value in self._request.headers.items()
-                        if key in ("Via", "To", "From", "Call-ID", "CSeq")
-                    },
-                    "Content-Type": "application/sdp",
-                },
-                body=sdp,
-            ),
-            self._addr,
-        )
-
-    def reject(
-        self,
-        status_code: int = SIPStatus.BUSY_HERE.status_code,
-        reason: str = SIPStatus.BUSY_HERE.reason,
-    ) -> None:
-        """Reject the call."""
-        logger.info(
-            "Rejecting call from %s with %s %s", self.caller, status_code, reason
-        )
-        self._send(
-            Response(
-                status_code=status_code,
-                reason=reason,
-                headers={
-                    key: value
-                    for key, value in self._request.headers.items()
-                    if key in ("Via", "To", "From", "Call-ID", "CSeq")
-                },
-            ),
-            self._addr,
-        )
-
 
 class IncomingCallProtocol(SessionInitiationProtocol):
-    """SIP protocol with incoming call (INVITE) support."""
+    """SIP session handler for incoming calls (INVITE).
+
+    Initialize with a *call_class* to specify which :class:`IncomingCall`
+    subclass should be instantiated for each incoming call::
+
+        class MyProtocol(IncomingCallProtocol):
+            call_class = MyCall   # or pass call_class=MyCall to __init__
+    """
+
+    #: RTP call handler class instantiated for each incoming INVITE.
+    call_class: type[IncomingCall] = IncomingCall
+
+    def __init__(self, *args, call_class: type[IncomingCall] | None = None, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        if call_class is not None:
+            self.call_class = call_class
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
         """Store the transport for sending SIP messages."""
@@ -139,27 +83,101 @@ class IncomingCallProtocol(SessionInitiationProtocol):
         match request.method:
             case "INVITE":
                 logger.info("INVITE received from %s", addr[0])
-                self.invite_received(self.create_call(request, addr), addr)
+                call = self.create_call(request, addr)
+                self.invite_received(call, request, addr)
             case _:
                 raise NotImplementedError(
                     f"Unsupported SIP request method: {request.method}"
                 )
 
     def create_call(self, request: Request, addr: tuple[str, int]) -> IncomingCall:
-        """Create an IncomingCall for an INVITE. Override to use a custom call class."""
-        return IncomingCall(request, addr, self.send, contact_ip=self._contact_ip)
+        """Instantiate the call handler for an INVITE using :attr:`call_class`."""
+        return self.call_class(caller=request.headers.get("From", ""))
 
     @property
     def _contact_ip(self) -> str | None:
         """Return the IP address to advertise in SDP (None if not available)."""
         return None
 
-    def invite_received(self, call: IncomingCall, addr: tuple[str, int]) -> None:
-        """Handle an incoming call. Override in subclasses to process calls."""
+    def invite_received(
+        self, call: IncomingCall, request: Request, addr: tuple[str, int]
+    ) -> None:
+        """Handle an incoming call. Override in subclasses to answer or reject."""
+
+    async def answer(
+        self, call: IncomingCall, request: Request, addr: tuple[str, int]
+    ) -> None:
+        """Answer the call: set up RTP and send 200 OK with SDP (RFC 7587)."""
+        logger.info("Answering call from %s", call.caller)
+        loop = asyncio.get_running_loop()
+        rtp_transport, _ = await loop.create_datagram_endpoint(
+            lambda: _RTPReceiver(call),
+            local_addr=("0.0.0.0", 0),  # noqa: S104
+        )
+        local_addr = rtp_transport.get_extra_info("sockname")
+        sdp_ip = self._contact_ip or local_addr[0]
+        logger.debug("RTP listening on %s:%s", local_addr[0], local_addr[1])
+        sdp = (
+            f"v=0\r\n"
+            f"c=IN IP4 {sdp_ip}\r\n"
+            f"m=audio {local_addr[1]} RTP/AVP 111\r\n"
+            f"a=rtpmap:111 opus/48000/1\r\n"
+        ).encode()
+        self.send(
+            Response(
+                status_code=SIPStatus.OK.status_code,
+                reason=SIPStatus.OK.reason,
+                headers={
+                    **{
+                        key: value
+                        for key, value in request.headers.items()
+                        if key in ("Via", "To", "From", "Call-ID", "CSeq")
+                    },
+                    "Content-Type": "application/sdp",
+                },
+                body=sdp,
+            ),
+            addr,
+        )
+
+    def reject(
+        self,
+        request: Request,
+        addr: tuple[str, int],
+        status_code: int = SIPStatus.BUSY_HERE.status_code,
+        reason: str = SIPStatus.BUSY_HERE.reason,
+    ) -> None:
+        """Reject an incoming call."""
+        logger.info(
+            "Rejecting call from %s with %s %s",
+            request.headers.get("From", "unknown"),
+            status_code,
+            reason,
+        )
+        self.send(
+            Response(
+                status_code=status_code,
+                reason=reason,
+                headers={
+                    key: value
+                    for key, value in request.headers.items()
+                    if key in ("Via", "To", "From", "Call-ID", "CSeq")
+                },
+            ),
+            addr,
+        )
 
 
 class RegisterProtocol(STUNProtocol, IncomingCallProtocol):
-    """SIP UAC: registers with a carrier via digest auth and handles inbound calls."""
+    """SIP UAC: registers with a carrier via digest auth and handles inbound calls.
+
+    Pass a *call_class* to control how incoming calls are handled::
+
+        protocol = RegisterProtocol(
+            server_address, aor, username, password,
+            call_class=WhisperCall,
+        )
+    """
 
     #: RFC 3261 §8.1.1.7 Via branch magic cookie (indicates RFC 3261 compliance).
     VIA_BRANCH_PREFIX = "z9hG4bK"
@@ -170,9 +188,10 @@ class RegisterProtocol(STUNProtocol, IncomingCallProtocol):
         aor: str,
         username: str,
         password: str,
+        call_class: type[IncomingCall] = IncomingCall,
         stun_server_address: tuple[str, int] | None = None,
     ) -> None:
-        super().__init__()
+        super().__init__(call_class=call_class)
         self.server_address = server_address
         self.aor = aor
         self.username = username
