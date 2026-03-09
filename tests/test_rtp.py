@@ -79,45 +79,6 @@ class TestRTPPacket:
 
 
 class TestRTPProtocol:
-    def test_rtp_header_size__is_class_attr(self):
-        """rtp_header_size is a class attribute set to the standard 12-byte header."""
-        assert RTPProtocol.rtp_header_size == 12
-
-    def test_datagram_received__forwards_audio(self):
-        """Strip RTP header and forward audio payload via audio_received."""
-        received = []
-
-        class ConcreteRTP(RTPProtocol):
-            def audio_received(self, data: bytes) -> None:
-                received.append(data)
-
-        protocol = ConcreteRTP()
-        rtp_packet = b"\x80\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00" + b"audio"
-        protocol.datagram_received(rtp_packet, ("192.0.2.1", 5004))
-        assert received == [b"audio"]
-
-    def test_datagram_received__skips_short_packet(self):
-        """Skip packets shorter than the minimum RTP header size."""
-        received = []
-
-        class ConcreteRTP(RTPProtocol):
-            def audio_received(self, data: bytes) -> None:
-                received.append(data)
-
-        ConcreteRTP().datagram_received(b"\x80\x00", ("192.0.2.1", 5004))
-        assert received == []
-
-    def test_datagram_received__skips_exact_header_size(self):
-        """Skip packets that contain only an RTP header with no audio payload."""
-        received = []
-
-        class ConcreteRTP(RTPProtocol):
-            def audio_received(self, data: bytes) -> None:
-                received.append(data)
-
-        ConcreteRTP().datagram_received(b"\x80" * 12, ("192.0.2.1", 5004))
-        assert received == []
-
     def test_rtp_header_size__class_attribute(self):
         """rtp_header_size is a class attribute set to the standard 12-byte header."""
         assert RTPProtocol.rtp_header_size == 12
