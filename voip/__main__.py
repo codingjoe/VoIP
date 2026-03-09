@@ -157,4 +157,4 @@ def transcribe(model, server, aor, username, password, local_port, stun_server):
 
 
 if __name__ == "__main__":  # pragma: no cover
-    voip()
+    main()
