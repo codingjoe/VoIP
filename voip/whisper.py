@@ -1,4 +1,4 @@
-"""Whisper-based transcription for Opus-encoded incoming SIP calls."""
+"""Whisper-based transcription for Opus-encoded RTP audio streams."""
 
 from __future__ import annotations
 
@@ -12,8 +12,7 @@ import ffmpeg
 import numpy as np
 
 import whisper
-
-from .call import IncomingCall
+from voip.rtp import RealtimeTransportProtocol
 
 __all__ = ["WhisperCall"]
 
@@ -78,7 +77,7 @@ def _build_ogg_opus(packets: list[bytes]) -> bytes:
         0,  # output gain
         0,  # channel mapping family (mono/stereo)
     )
-    vendor = b"libsip"
+    vendor = b"voip"
     opus_tags = (
         struct.pack("<8sI", b"OpusTags", len(vendor))
         + vendor
@@ -99,8 +98,16 @@ def _build_ogg_opus(packets: list[bytes]) -> bytes:
     return b"".join(pages)
 
 
-class WhisperCall(IncomingCall):
-    """Inbound SIP call that decodes Opus audio and transcribes it with OpenAI Whisper."""
+class WhisperCall(RealtimeTransportProtocol):
+    """RTP call handler that decodes Opus audio and transcribes it with OpenAI Whisper.
+
+    This is a pure RTP-level handler with no SIP knowledge. Use it as the
+    *call_class* when answering calls in a SIP session::
+
+        class MySession(SessionInitiationProtocol):
+            def call_received(self, request: Request) -> None:
+                self.answer(request=request, call_class=WhisperCall)
+    """
 
     #: Opus clock rate (Hz) as specified by RFC 7587 §4.
     opus_sample_rate = 48000
@@ -109,8 +116,8 @@ class WhisperCall(IncomingCall):
     #: Audio buffered (in seconds) before each transcription is triggered.
     chunk_duration = 30
 
-    def __init__(self, *args, model: str = "base", **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(self, caller: str = "", model: str = "base") -> None:
+        super().__init__(caller=caller)
         logger.debug("Loading Whisper model %r", model)
         self._whisper_model = whisper.load_model(model)
         self._opus_packets: list[bytes] = []

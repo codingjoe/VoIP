@@ -250,10 +250,9 @@ class TestTranscribeCLI:
         if protocol:
             protocol.registered()  # exercises TranscribingProtocol.registered
 
-    def test_transcribe__invite_received_answers_call(self):
-        """Answer the call when an INVITE is received."""
+    def test_transcribe__call_received_answers_call(self):
+        """Answer the call when call_received is invoked."""
         from voip.__main__ import sip
-        from voip.call import IncomingCall
 
         runner = make_runner()
         protocol_holder = {}
@@ -283,20 +282,28 @@ class TestTranscribeCLI:
             )
         protocol = protocol_holder.get("protocol")
         if protocol:
-            call = MagicMock(spec=IncomingCall)
-            call.caller = "sip:caller@example.com"
+            from voip.sip.messages import Request
+
+            request = Request(
+                method="INVITE",
+                uri="sip:u@example.com",
+                headers={"From": "sip:caller@example.com", "Call-ID": "test@pc"},
+            )
 
             async def run():
-                with patch("asyncio.create_task") as mock_task:
-                    protocol.invite_received(call, ("192.0.2.1", 5060))
-                    mock_task.assert_called_once()
+                with patch.object(protocol, "answer") as mock_answer:
+                    protocol._request_addrs[request.headers["Call-ID"]] = (
+                        "192.0.2.1",
+                        5060,
+                    )
+                    protocol.call_received(request)
+                    mock_answer.assert_called_once()
 
             asyncio.run(run())
 
-    def test_transcribe__create_call_returns_transcribing_call(self):
-        """create_call returns a WhisperCall subclass."""
+    def test_transcribe__call_received_uses_whisper_call_class(self):
+        """call_received answers with a WhisperCall subclass."""
         from voip.__main__ import sip
-        from voip.sip.messages import Request
 
         runner = make_runner()
         protocol_holder = {}
@@ -332,10 +339,25 @@ class TestTranscribeCLI:
             )
         protocol = protocol_holder.get("protocol")
         if protocol:
+            from voip.sip.messages import Request
+
             request = Request(
                 method="INVITE",
                 uri="sip:u@example.com",
-                headers={"From": "sip:caller@example.com"},
+                headers={"From": "sip:caller@example.com", "Call-ID": "test@pc"},
             )
-            call = protocol.create_call(request, ("192.0.2.1", 5060))
-            assert call is not None
+
+            async def run():
+                with patch.object(protocol, "answer") as mock_answer:
+                    protocol._request_addrs[request.headers["Call-ID"]] = (
+                        "192.0.2.1",
+                        5060,
+                    )
+                    protocol.call_received(request)
+                    mock_answer.assert_called_once()
+                    _, kwargs = mock_answer.call_args
+                    # call_class must be provided and be a class type
+                    assert "call_class" in kwargs
+                    assert isinstance(kwargs["call_class"], type)
+
+            asyncio.run(run())

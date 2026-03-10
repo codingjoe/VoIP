@@ -11,6 +11,7 @@ class ConcreteProtocol(SessionInitiationProtocol):
     """Concrete subclass for testing that records received messages."""
 
     def __init__(self):
+        super().__init__()
         self.requests = []
         self.responses = []
 

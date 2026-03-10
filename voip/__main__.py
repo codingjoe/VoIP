@@ -59,7 +59,7 @@ main = voip
 
 
 def _parse_server(server: str) -> tuple[tuple[str, int], str]:
-    """Parse 'HOST[:PORT]' → ((host, port), host)."""
+    """Parse 'HOST[:PORT]' -> ((host, port), host)."""
     if ":" in server:
         host, port_str = server.rsplit(":", 1)
         return (host, int(port_str)), host
@@ -113,7 +113,7 @@ def _parse_stun_server(stun_server: str) -> tuple[str, int] | None:
 )
 def transcribe(model, server, aor, username, password, local_port, stun_server):
     """Register with a SIP carrier and transcribe incoming calls via Whisper."""
-    from voip.call import IncomingCall, RegisterProtocol
+    from voip.sip import SIP
 
     from .whisper import WhisperCall  # noqa: PLC0415
 
@@ -123,29 +123,33 @@ def transcribe(model, server, aor, username, password, local_port, stun_server):
     stun = _parse_stun_server(stun_server)
 
     class TranscribingCall(WhisperCall):
+        def __init__(self, caller: str = "") -> None:
+            super().__init__(caller=caller, model=model)
+
         def transcription_received(self, text: str) -> None:
             logger.info("Transcription: %s", text)
             click.echo(text)
 
-    class TranscribingProtocol(RegisterProtocol):
+    class TranscribeSession(SIP):
         def registered(self) -> None:
             logger.info("Registered with %s — waiting for calls", server)
             click.echo(f"Registered with {server} — waiting for calls", err=True)
 
-        def create_call(self, request, addr) -> TranscribingCall:
-            return TranscribingCall(
-                request, addr, self.send, model=model, contact_ip=self._contact_ip
+        def call_received(self, request) -> None:
+            click.echo(
+                f"Incoming call from {request.headers.get('From', '')}", err=True
             )
-
-        def invite_received(self, call: IncomingCall, addr) -> None:
-            click.echo(f"Incoming call from {call.caller}", err=True)
-            asyncio.create_task(call.answer())
+            self.answer(request=request, call_class=TranscribingCall)
 
     async def run():
         loop = asyncio.get_running_loop()
         await loop.create_datagram_endpoint(
-            lambda: TranscribingProtocol(
-                server_addr, aor, username, password, stun_server_address=stun
+            lambda: TranscribeSession(
+                server_addr,
+                aor,
+                username,
+                password,
+                stun_server_address=stun,
             ),
             local_addr=("0.0.0.0", local_port),  # noqa: S104
         )

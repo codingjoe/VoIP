@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import struct
 
 import pytest
-from voip.rtp import RealtimeTransportProtocol, RTPPacket, RTPPayloadType
+from voip.rtp import RTP, RealtimeTransportProtocol, RTPPacket, RTPPayloadType
 
 
 def make_rtp_packet(
@@ -78,10 +79,18 @@ class TestRTPPacket:
         assert packet.payload_type == 111
 
 
-class TestRTPProtocol:
+class TestRealtimeTransportProtocol:
     def test_rtp_header_size__class_attribute(self):
         """rtp_header_size is a class attribute set to the standard 12-byte header."""
         assert RealtimeTransportProtocol.rtp_header_size == 12
+
+    def test_rtp__is_datagram_protocol(self):
+        """RealtimeTransportProtocol is an asyncio.DatagramProtocol subclass."""
+        assert issubclass(RealtimeTransportProtocol, asyncio.DatagramProtocol)
+
+    def test_rtp__alias(self):
+        """RTP is an alias for RealtimeTransportProtocol."""
+        assert RTP is RealtimeTransportProtocol
 
     def test_datagram_received__forwards_audio_payload(self):
         """Strip the RTP header and forward the audio payload to audio_received."""

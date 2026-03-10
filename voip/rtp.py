@@ -1,4 +1,8 @@
-"""Real-time Transport Protocol (RTP) implementation of RFC 3550."""
+"""
+Real-time Transport Protocol (RTP) implementation of RFC 3550.
+
+See also: https://datatracker.ietf.org/doc/html/rfc3550#section-5
+"""
 
 from __future__ import annotations
 
@@ -7,7 +11,7 @@ import dataclasses
 import enum
 import logging
 
-__all__ = ["RTPPacket", "RTPPayloadType", "RealtimeTransportProtocol"]
+__all__ = ["RTP", "RTPPacket", "RTPPayloadType", "RealtimeTransportProtocol"]
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +19,7 @@ logger = logging.getLogger(__name__)
 class RTPPayloadType(enum.IntEnum):
     """Common RTP payload types.
 
-    Dynamic payload types (96–127) are negotiated via SDP (RFC 3551).
+    Dynamic payload types (96-127) are negotiated via SDP (RFC 3551).
     Opus uses payload type 111 per RFC 7587.
     """
 
@@ -54,13 +58,24 @@ class RTPPacket:
 
 
 class RealtimeTransportProtocol(asyncio.DatagramProtocol):
-    """
-    Real-time Transport Protocol (RTP) handler for receiving audio streams (RFC 3550).
+    """Base class for RTP audio call handlers (RFC 3550).
 
-    See also: https://datatracker.ietf.org/doc/html/rfc3550#section-5
+    Subclass this and override :meth:`audio_received` to process incoming audio::
+
+        class MyCall(RealtimeTransportProtocol):
+            def audio_received(self, data: bytes) -> None:
+                ...  # process Opus audio payload
+
+    Instances are used directly as asyncio datagram protocols, so they handle
+    their own RTP header stripping before calling :meth:`audio_received`.
     """
 
-    rtp_header_size = 12
+    #: Fixed RTP header size in bytes (RFC 3550 §5.1).
+    rtp_header_size: int = 12
+
+    def __init__(self, caller: str = "") -> None:
+        #: The SIP address of the caller (from the From header of the INVITE).
+        self.caller = caller
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         """Strip the fixed RTP header and forward the audio payload."""
@@ -71,4 +86,5 @@ class RealtimeTransportProtocol(asyncio.DatagramProtocol):
         """Handle a decoded RTP audio payload. Override in subclasses."""
 
 
+#: Short alias for :class:`RealtimeTransportProtocol`.
 RTP = RealtimeTransportProtocol
