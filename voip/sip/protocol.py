@@ -56,6 +56,9 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
     #: RFC 3261 §8.1.1.7 Via branch magic cookie (indicates RFC 3261 compliance).
     VIA_BRANCH_PREFIX = "z9hG4bK"
 
+    #: RFC 3261 §11 – methods supported by this UA (used in Allow header).
+    ALLOW = "INVITE, ACK, BYE, CANCEL, OPTIONS"
+
     def __init__(
         self,
         server_address: tuple[str, int] | None = None,
@@ -365,6 +368,9 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
         sdp_ip = (rtp_public_addr or self.public_address or local_addr)[0]
         sdp_port = (rtp_public_addr or local_addr)[1]
         logger.debug("RTP listening on %s:%s", local_addr[0], local_addr[1])
+        sip_local_addr = self._transport.get_extra_info("sockname") or ("0.0.0.0", 5060)  # noqa: S104
+        sip_contact_addr = self.public_address or sip_local_addr
+        record_route = request.headers.get("Record-Route")
         remote_audio = next(
             (
                 m
@@ -406,6 +412,10 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
                         },
                         call_id,
                     ),
+                    **({"Record-Route": record_route} if record_route else {}),
+                    "Contact": f"<sip:{sip_contact_addr[0]}:{sip_contact_addr[1]}>",
+                    "Allow": self.ALLOW,
+                    "Supported": "replaces",
                     "Content-Type": "application/sdp",
                 },
                 body=SessionDescription(

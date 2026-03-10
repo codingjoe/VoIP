@@ -362,7 +362,11 @@ class TestAnswer:
         return FakeTransport(("127.0.0.1", 12000))
 
     def _make_invite(
-        self, call_id: str, sdp_body: SessionDescription | None = None
+        self,
+        call_id: str,
+        sdp_body: SessionDescription | None = None,
+        *,
+        record_route: str | None = None,
     ) -> Request:
         """Build a minimal INVITE request."""
         headers = {
@@ -374,6 +378,8 @@ class TestAnswer:
         }
         if sdp_body:
             headers["Content-Type"] = "application/sdp"
+        if record_route:
+            headers["Record-Route"] = record_route
         return Request(
             method="INVITE", uri="sip:bob@biloxi.com", headers=headers, body=sdp_body
         )
@@ -503,6 +509,65 @@ class TestAnswer:
             await protocol._answer(invite, asyncio.DatagramProtocol)
         assert "No address found" in caplog.text
         assert not protocol._sent_responses
+
+    @pytest.mark.asyncio
+    async def test_answer__includes_contact_header(self, fake_rtp_transport):
+        """Include a Contact header with the local SIP address in 200 OK."""
+        protocol = FakeProtocol()
+        addr = ("192.0.2.1", 5060)
+        invite = self._make_invite("answer-contact-1")
+        protocol.request_received(invite, addr)
+        await self._run_answer(protocol, invite, fake_rtp_transport)
+        response, _ = protocol._sent_responses[-1]
+        assert "Contact" in response.headers
+        assert response.headers["Contact"].startswith("<sip:")
+
+    @pytest.mark.asyncio
+    async def test_answer__includes_allow_header(self, fake_rtp_transport):
+        """Include an Allow header listing supported SIP methods in 200 OK."""
+        protocol = FakeProtocol()
+        addr = ("192.0.2.1", 5060)
+        invite = self._make_invite("answer-allow-1")
+        protocol.request_received(invite, addr)
+        await self._run_answer(protocol, invite, fake_rtp_transport)
+        response, _ = protocol._sent_responses[-1]
+        assert "Allow" in response.headers
+        assert "INVITE" in response.headers["Allow"]
+        assert "BYE" in response.headers["Allow"]
+
+    @pytest.mark.asyncio
+    async def test_answer__includes_supported_header(self, fake_rtp_transport):
+        """Include a Supported header in the 200 OK response."""
+        protocol = FakeProtocol()
+        addr = ("192.0.2.1", 5060)
+        invite = self._make_invite("answer-supported-1")
+        protocol.request_received(invite, addr)
+        await self._run_answer(protocol, invite, fake_rtp_transport)
+        response, _ = protocol._sent_responses[-1]
+        assert "Supported" in response.headers
+
+    @pytest.mark.asyncio
+    async def test_answer__echoes_record_route(self, fake_rtp_transport):
+        """Echo the Record-Route header from the INVITE in the 200 OK."""
+        protocol = FakeProtocol()
+        addr = ("192.0.2.1", 5060)
+        route = "<sip:proxy.example.com;lr>"
+        invite = self._make_invite("answer-rr-1", record_route=route)
+        protocol.request_received(invite, addr)
+        await self._run_answer(protocol, invite, fake_rtp_transport)
+        response, _ = protocol._sent_responses[-1]
+        assert response.headers.get("Record-Route") == route
+
+    @pytest.mark.asyncio
+    async def test_answer__omits_record_route_when_absent(self, fake_rtp_transport):
+        """Omit the Record-Route header when the INVITE contains none."""
+        protocol = FakeProtocol()
+        addr = ("192.0.2.1", 5060)
+        invite = self._make_invite("answer-no-rr-1")
+        protocol.request_received(invite, addr)
+        await self._run_answer(protocol, invite, fake_rtp_transport)
+        response, _ = protocol._sent_responses[-1]
+        assert "Record-Route" not in response.headers
 
 
 class TestCANCELHandler:
