@@ -7,7 +7,7 @@ import dataclasses
 import enum
 import logging
 
-__all__ = ["RTPPacket", "RTPPayloadType", "RealtimeTransportProtocol"]
+__all__ = ["RTP", "RTPPacket", "RTPPayloadType", "RealtimeTransportProtocol"]
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class RTPPayloadType(enum.IntEnum):
     """Common RTP payload types.
 
-    Dynamic payload types (96–127) are negotiated via SDP (RFC 3551).
+    Dynamic payload types (96-127) are negotiated via SDP (RFC 3551).
     Opus uses payload type 111 per RFC 7587.
     """
 
@@ -53,9 +53,30 @@ class RTPPacket:
         )
 
 
+class RTP:
+    """Base class for RTP audio call handlers (RFC 3550).
+
+    Subclass this and override :meth:`audio_received` to process incoming audio::
+
+        class MyCall(RTP):
+            def audio_received(self, data: bytes) -> None:
+                ...  # process Opus audio payload
+    """
+
+    def __init__(self, caller: str = "") -> None:
+        #: The SIP address of the caller (from the From header of the INVITE).
+        self.caller = caller
+
+    def audio_received(self, data: bytes) -> None:
+        """Handle a decoded RTP audio payload. Override in subclasses."""
+
+
 class RealtimeTransportProtocol(asyncio.DatagramProtocol):
     """
-    Real-time Transport Protocol (RTP) handler for receiving audio streams (RFC 3550).
+    Real-time Transport Protocol (RTP) asyncio protocol for receiving audio streams.
+
+    This is an internal asyncio protocol that strips the RTP header and forwards
+    the audio payload. End-users should subclass :class:`RTP` instead.
 
     See also: https://datatracker.ietf.org/doc/html/rfc3550#section-5
     """
@@ -69,6 +90,3 @@ class RealtimeTransportProtocol(asyncio.DatagramProtocol):
 
     def audio_received(self, data: bytes) -> None:
         """Handle a decoded RTP audio payload. Override in subclasses."""
-
-
-RTP = RealtimeTransportProtocol

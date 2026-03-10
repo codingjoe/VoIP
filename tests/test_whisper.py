@@ -11,7 +11,7 @@ np = pytest.importorskip("numpy")
 pytest.importorskip("ffmpeg")
 pytest.importorskip("whisper")
 
-from voip.call import IncomingCall  # noqa: E402
+from voip.rtp import RTP  # noqa: E402
 from voip.whisper import WhisperCall, _build_ogg_opus  # noqa: E402
 
 import whisper  # noqa: E402
@@ -34,9 +34,9 @@ def make_whisper_call(model_mock: MagicMock, call_class=None) -> WhisperCall:
 
 
 class TestWhisperCall:
-    def test_whisper_call__is_incoming_call(self):
-        """WhisperCall is a subclass of IncomingCall."""
-        assert issubclass(WhisperCall, IncomingCall)
+    def test_whisper_call__is_rtp(self):
+        """WhisperCall is a subclass of RTP."""
+        assert issubclass(WhisperCall, RTP)
 
     def test_class_attrs__opus_sample_rate(self):
         """opus_sample_rate is 48000 Hz as required by RFC 7587."""

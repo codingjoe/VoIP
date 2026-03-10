@@ -1,116 +1,81 @@
+"""Tests for the SIP session and RTP call handler."""
+
 import asyncio
 import socket
 import struct
 from unittest.mock import MagicMock, patch
 
 import pytest
-from voip.call import IncomingCall, IncomingCallProtocol, RegisterProtocol
+from voip.rtp import RTP
+from voip.sip import SIP, RegisterSIP
 from voip.sip.messages import Message, Request, Response
 
 
-class TestIncomingCall:
+class TestRTP:
     def test_caller__returns_caller_arg(self):
         """Return the caller string passed at construction."""
-        call = IncomingCall(caller="sip:bob@biloxi.com")
+        call = RTP(caller="sip:bob@biloxi.com")
         assert call.caller == "sip:bob@biloxi.com"
 
     def test_caller__defaults_to_empty_string(self):
         """Return an empty string when no caller is given."""
-        assert IncomingCall().caller == ""
+        assert RTP().caller == ""
 
     def test_audio_received__noop_by_default(self):
         """audio_received is a no-op in the base class."""
-        IncomingCall().audio_received(b"data")  # must not raise
+        RTP().audio_received(b"data")  # must not raise
 
 
-class TestIncomingCallProtocol:
+class TestSIP:
     def test_connection_made__stores_transport(self):
         """Store the transport when a connection is established."""
-        protocol = IncomingCallProtocol()
+        protocol = SIP()
         transport = MagicMock()
         protocol.connection_made(transport)
         assert protocol._transport is transport
 
     def test_send__serializes_and_forwards_to_transport(self):
         """Serialize the message and forward it to the underlying transport."""
-        protocol = IncomingCallProtocol()
+        protocol = SIP()
         protocol.connection_made(MagicMock())
         response = Response(status_code=200, reason="OK")
         addr = ("192.0.2.1", 5060)
         protocol.send(response, addr)
         protocol._transport.sendto.assert_called_once_with(bytes(response), addr)
 
-    def test_request_received__invite__calls_invite_received(self):
-        """Dispatch an INVITE request to invite_received with a call and the request."""
-        calls = []
+    def test_request_received__invite__stores_addr_and_calls_call_received(self):
+        """Dispatch an INVITE to call_received and store the addr by Call-ID."""
+        received = []
 
-        class ConcreteProtocol(IncomingCallProtocol):
-            def invite_received(self, call, request, addr):
-                calls.append((call, request, addr))
+        class MySIP(SIP):
+            def call_received(self, request):
+                received.append(request)
 
-        protocol = ConcreteProtocol()
-        protocol.connection_made(MagicMock())
-        request = Request(
-            method="INVITE",
-            uri="sip:alice@atlanta.com",
-            headers={"From": "sip:bob@biloxi.com"},
-        )
-        addr = ("192.0.2.1", 5060)
-        protocol.request_received(request, addr)
-        assert len(calls) == 1
-        call, req, called_addr = calls[0]
-        assert isinstance(call, IncomingCall)
-        assert call.caller == "sip:bob@biloxi.com"
-        assert req is request
-        assert called_addr == addr
-
-    def test_create_call__returns_incoming_call(self):
-        """Return an IncomingCall with caller populated from the From header."""
-        protocol = IncomingCallProtocol()
+        protocol = MySIP()
         protocol.connection_made(MagicMock())
         request = make_invite()
         addr = ("192.0.2.1", 5060)
-        call = protocol.create_call(request, addr)
-        assert isinstance(call, IncomingCall)
-        assert call.caller == "sip:bob@biloxi.com"
+        protocol.request_received(request, addr)
+        assert len(received) == 1
+        assert received[0] is request
+        assert protocol._request_addrs.get(request.headers["Call-ID"]) == addr
 
-    def test_create_call__uses_call_class(self):
-        """create_call instantiates call_class, not IncomingCall directly."""
-
-        class CustomCall(IncomingCall):
-            pass
-
-        protocol = IncomingCallProtocol(call_class=CustomCall)
+    def test_call_received__noop_by_default(self):
+        """call_received is a no-op in the base class."""
+        protocol = SIP()
         protocol.connection_made(MagicMock())
-        call = protocol.create_call(make_invite(), ("192.0.2.1", 5060))
-        assert isinstance(call, CustomCall)
-
-    def test_datagram_received__keepalive__sends_pong(self):
-        """Double-CRLF keepalive (RFC 5626 §4.4.1) is answered with a single-CRLF pong."""
-        protocol = IncomingCallProtocol()
-        transport = MagicMock()
-        protocol.connection_made(transport)
-        addr = ("192.0.2.1", 5060)
-        protocol.datagram_received(b"\r\n\r\n", addr)
-        transport.sendto.assert_called_once_with(b"\r\n", addr)
-
-    def test_request_received__unsupported_method__raises(self):
-        """Raise NotImplementedError for any non-INVITE SIP request method."""
-        protocol = IncomingCallProtocol()
-        protocol.connection_made(MagicMock())
-        request = Request(method="OPTIONS", uri="sip:alice@atlanta.com")
-        with pytest.raises(NotImplementedError, match="OPTIONS"):
-            protocol.request_received(request, ("192.0.2.1", 5060))
+        protocol.call_received(make_invite())  # must not raise
 
     def test_answer__sends_200_ok(self):
         """Send a 200 OK response with an SDP body when answering."""
 
         async def run() -> None:
-            protocol = IncomingCallProtocol()
+            protocol = SIP()
             send = MagicMock()
             protocol.send = send
-            call = IncomingCall(caller="sip:bob@biloxi.com")
-            await protocol.answer(call, make_invite(), ("192.0.2.1", 5060))
+            request = make_invite()
+            protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+            await protocol._answer(request, RTP)
             send.assert_called_once()
             response, addr = send.call_args[0]
             assert response.status_code == 200
@@ -123,11 +88,12 @@ class TestIncomingCallProtocol:
         """Include an Opus audio media line in the SDP body of the 200 OK."""
 
         async def run() -> None:
-            protocol = IncomingCallProtocol()
+            protocol = SIP()
             send = MagicMock()
             protocol.send = send
-            call = IncomingCall()
-            await protocol.answer(call, make_invite(), ("192.0.2.1", 5060))
+            request = make_invite()
+            protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+            await protocol._answer(request, RTP)
             response, _ = send.call_args[0]
             assert b"m=audio" in response.body
             assert b"RTP/AVP 111" in response.body
@@ -139,11 +105,12 @@ class TestIncomingCallProtocol:
         """Copy Via, To, From, Call-ID, and CSeq headers into the 200 OK."""
 
         async def run() -> None:
-            protocol = IncomingCallProtocol()
+            protocol = SIP()
             send = MagicMock()
             protocol.send = send
-            call = IncomingCall()
-            await protocol.answer(call, make_invite(), ("192.0.2.1", 5060))
+            request = make_invite()
+            protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+            await protocol._answer(request, RTP)
             response, _ = send.call_args[0]
             assert response.headers["Via"] == "SIP/2.0/UDP pc33.atlanta.com"
             assert response.headers["To"] == "sip:alice@atlanta.com"
@@ -153,20 +120,41 @@ class TestIncomingCallProtocol:
 
         asyncio.run(run())
 
+    def test_answer__instantiates_call_class_with_caller(self):
+        """The call_class is instantiated with the caller from the From header."""
+        created = []
+
+        class MyCall(RTP):
+            def __init__(self, caller: str = "") -> None:
+                super().__init__(caller=caller)
+                created.append(self)
+
+        async def run() -> None:
+            protocol = SIP()
+            protocol.send = MagicMock()
+            request = make_invite()
+            protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+            await protocol._answer(request, MyCall)
+
+        asyncio.run(run())
+        assert len(created) == 1
+        assert created[0].caller == "sip:bob@biloxi.com"
+
     def test_answer__rtp_receives_audio(self):
         """Deliver audio from RTP packets to the call's audio_received via the RTP socket."""
         received_audio = []
 
-        class AudioCapture(IncomingCall):
+        class AudioCapture(RTP):
             def audio_received(self, data: bytes) -> None:
                 received_audio.append(data)
 
         async def run() -> None:
-            protocol = IncomingCallProtocol()
+            protocol = SIP()
             send = MagicMock()
             protocol.send = send
-            call = AudioCapture()
-            await protocol.answer(call, make_invite(), ("192.0.2.1", 5060))
+            request = make_invite()
+            protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+            await protocol._answer(request, AudioCapture)
             response, _ = send.call_args[0]
 
             sdp_line = next(
@@ -193,16 +181,17 @@ class TestIncomingCallProtocol:
         """Call audio_received with each RTP payload when multiple packets arrive."""
         received_audio = []
 
-        class AudioCapture(IncomingCall):
+        class AudioCapture(RTP):
             def audio_received(self, data: bytes) -> None:
                 received_audio.append(data)
 
         async def run() -> None:
-            protocol = IncomingCallProtocol()
+            protocol = SIP()
             send = MagicMock()
             protocol.send = send
-            call = AudioCapture()
-            await protocol.answer(call, make_invite(), ("192.0.2.1", 5060))
+            request = make_invite()
+            protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+            await protocol._answer(request, AudioCapture)
             response, _ = send.call_args[0]
             sdp_line = next(
                 line
@@ -229,11 +218,12 @@ class TestIncomingCallProtocol:
         """Content-Length is automatically included when the response is serialized."""
 
         async def run() -> None:
-            protocol = IncomingCallProtocol()
+            protocol = SIP()
             send = MagicMock()
             protocol.send = send
-            call = IncomingCall()
-            await protocol.answer(call, make_invite(), ("192.0.2.1", 5060))
+            request = make_invite()
+            protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+            await protocol._answer(request, RTP)
             response, _ = send.call_args[0]
             serialized = bytes(response)
             parsed = Message.parse(serialized)
@@ -246,11 +236,12 @@ class TestIncomingCallProtocol:
         import logging
 
         async def run():
-            protocol = IncomingCallProtocol()
+            protocol = SIP()
             protocol.send = MagicMock()
-            call = IncomingCall(caller="sip:bob@biloxi.com")
-            with caplog.at_level(logging.INFO, logger="voip.call"):
-                await protocol.answer(call, make_invite(), ("192.0.2.1", 5060))
+            request = make_invite()
+            protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+            with caplog.at_level(logging.INFO, logger="voip.sip.protocol"):
+                await protocol._answer(request, RTP)
 
         asyncio.run(run())
         assert any("Answering" in r.message for r in caplog.records)
@@ -258,9 +249,11 @@ class TestIncomingCallProtocol:
     def test_reject__sends_busy_here_by_default(self):
         """Send a 486 Busy Here response when no status code is given."""
         send = MagicMock()
-        protocol = IncomingCallProtocol()
+        protocol = SIP()
         protocol.send = send
-        protocol.reject(make_invite(), ("192.0.2.1", 5060))
+        request = make_invite()
+        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        protocol.reject(request)
         send.assert_called_once()
         response, addr = send.call_args[0]
         assert isinstance(response, Response)
@@ -271,9 +264,11 @@ class TestIncomingCallProtocol:
     def test_reject__custom_status(self):
         """Send the specified status code and reason."""
         send = MagicMock()
-        protocol = IncomingCallProtocol()
+        protocol = SIP()
         protocol.send = send
-        protocol.reject(make_invite(), ("192.0.2.1", 5060), status_code=603, reason="Decline")
+        request = make_invite()
+        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        protocol.reject(request, status_code=603, reason="Decline")
         response, _ = send.call_args[0]
         assert response.status_code == 603
         assert response.reason == "Decline"
@@ -281,9 +276,11 @@ class TestIncomingCallProtocol:
     def test_reject__copies_dialog_headers(self):
         """Copy Via, To, From, Call-ID, and CSeq headers into the response."""
         send = MagicMock()
-        protocol = IncomingCallProtocol()
+        protocol = SIP()
         protocol.send = send
-        protocol.reject(make_invite(), ("192.0.2.1", 5060))
+        request = make_invite()
+        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        protocol.reject(request)
         response, _ = send.call_args[0]
         assert response.headers["Via"] == "SIP/2.0/UDP pc33.atlanta.com"
         assert response.headers["To"] == "sip:alice@atlanta.com"
@@ -295,10 +292,11 @@ class TestIncomingCallProtocol:
     def test_reject__excludes_extra_headers(self, extra_header):
         """Exclude non-dialog headers from the reject response."""
         send = MagicMock()
-        protocol = IncomingCallProtocol()
+        protocol = SIP()
         protocol.send = send
         request = make_invite({extra_header: "value"})
-        protocol.reject(request, ("192.0.2.1", 5060))
+        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        protocol.reject(request)
         response, _ = send.call_args[0]
         assert extra_header not in response.headers
 
@@ -306,27 +304,71 @@ class TestIncomingCallProtocol:
         """Log an info message when rejecting a call."""
         import logging
 
-        with caplog.at_level(logging.INFO, logger="voip.call"):
-            protocol = IncomingCallProtocol()
+        with caplog.at_level(logging.INFO, logger="voip.sip.protocol"):
+            protocol = SIP()
             protocol.send = MagicMock()
-            protocol.reject(make_invite(), ("192.0.2.1", 5060))
+            request = make_invite()
+            protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+            protocol.reject(request)
         assert any("Rejecting" in r.message for r in caplog.records)
 
+    def test_datagram_received__keepalive__sends_pong(self):
+        """Double-CRLF keepalive (RFC 5626 §4.4.1) is answered with a single-CRLF pong."""
+        protocol = SIP()
+        transport = MagicMock()
+        protocol.connection_made(transport)
+        addr = ("192.0.2.1", 5060)
+        protocol.datagram_received(b"\r\n\r\n", addr)
+        transport.sendto.assert_called_once_with(b"\r\n", addr)
 
-class TestRegisterProtocol:
+    def test_request_received__unsupported_method__raises(self):
+        """Raise NotImplementedError for any non-INVITE SIP request method."""
+        protocol = SIP()
+        protocol.connection_made(MagicMock())
+        request = Request(method="OPTIONS", uri="sip:alice@atlanta.com")
+        with pytest.raises(NotImplementedError, match="OPTIONS"):
+            protocol.request_received(request, ("192.0.2.1", 5060))
+
+    def test_answer__via_call_received__schedules_answer(self):
+        """answer() schedules the async _answer task when called from call_received."""
+
+        async def run():
+            answered = []
+
+            class MySIP(SIP):
+                def call_received(self, request):
+                    self.answer(request=request, call_class=RTP)
+
+                async def _answer(self, request, call_class):
+                    answered.append((request, call_class))
+
+            protocol = MySIP()
+            protocol.connection_made(MagicMock())
+            request = make_invite()
+            addr = ("192.0.2.1", 5060)
+            protocol._request_addrs[request.headers["Call-ID"]] = addr
+            protocol.call_received(request)
+            await asyncio.sleep(0.01)
+            assert len(answered) == 1
+            assert answered[0][1] is RTP
+
+        asyncio.run(run())
+
+
+class TestRegisterSIP:
     def test_registrar_uri__strips_user_from_aor(self):
         """Derive registrar URI from AOR by stripping the user part."""
-        p = make_register_protocol(aor="sip:alice@example.com")
+        p = make_register_session(aor="sip:alice@example.com")
         assert p.registrar_uri == "sip:example.com"
 
     def test_registrar_uri__preserves_port(self):
         """Preserve a non-default port in the derived registrar URI."""
-        p = make_register_protocol(aor="sip:alice@example.com:5080")
+        p = make_register_session(aor="sip:alice@example.com:5080")
         assert p.registrar_uri == "sip:example.com:5080"
 
     def test_connection_made__sends_register(self):
         """Send a REGISTER request immediately after connection is made."""
-        p = make_register_protocol()
+        p = make_register_session()
         transport = make_mock_transport()
         p.connection_made(transport)
         transport.sendto.assert_called_once()
@@ -338,7 +380,7 @@ class TestRegisterProtocol:
         """Send REGISTER after STUN discovery when a STUN server is configured."""
 
         async def run():
-            p = RegisterProtocol(
+            p = RegisterSIP(
                 ("192.0.2.2", 5060),
                 "sip:alice@example.com",
                 "alice",
@@ -361,7 +403,7 @@ class TestRegisterProtocol:
         """Send REGISTER even when STUN discovery raises an error."""
 
         async def run():
-            p = RegisterProtocol(
+            p = RegisterSIP(
                 ("192.0.2.2", 5060),
                 "sip:alice@example.com",
                 "alice",
@@ -378,7 +420,7 @@ class TestRegisterProtocol:
 
     def test_register__includes_required_headers(self):
         """REGISTER request includes From, To, Call-ID, CSeq, Contact and Expires."""
-        p = make_register_protocol()
+        p = make_register_session()
         transport = make_mock_transport()
         p.connection_made(make_mock_transport())
         p._transport = transport
@@ -392,7 +434,7 @@ class TestRegisterProtocol:
 
     def test_register__increments_cseq(self):
         """CSeq increments with each REGISTER sent."""
-        p = make_register_protocol()
+        p = make_register_session()
         p.connection_made(make_mock_transport())
         assert p.cseq == 1
         p.register()
@@ -400,7 +442,7 @@ class TestRegisterProtocol:
 
     def test_register__with_authorization(self):
         """Authorization header is included when credentials are provided."""
-        p = make_register_protocol()
+        p = make_register_session()
         p.connection_made(make_mock_transport())
         transport = p._transport
         transport.reset_mock()
@@ -410,7 +452,7 @@ class TestRegisterProtocol:
 
     def test_register__with_proxy_authorization(self):
         """Proxy-Authorization header is included for proxy challenges."""
-        p = make_register_protocol()
+        p = make_register_session()
         p.connection_made(make_mock_transport())
         transport = p._transport
         transport.reset_mock()
@@ -422,11 +464,11 @@ class TestRegisterProtocol:
         """Receiving 200 OK for REGISTER triggers registered()."""
         calls = []
 
-        class ConcreteProtocol(RegisterProtocol):
+        class ConcreteSession(RegisterSIP):
             def registered(self):
                 calls.append(True)
 
-        p = ConcreteProtocol(("192.0.2.2", 5060), "sip:alice@example.com", "a", "b")
+        p = ConcreteSession(("192.0.2.2", 5060), "sip:alice@example.com", "a", "b")
         p.connection_made(make_mock_transport())
         p.response_received(
             Response(status_code=200, reason="OK", headers={"CSeq": "1 REGISTER"}),
@@ -436,7 +478,7 @@ class TestRegisterProtocol:
 
     def test_response_received__200_non_register_raises(self):
         """Receiving 200 OK for a non-REGISTER method raises NotImplementedError."""
-        p = make_register_protocol()
+        p = make_register_session()
         p.connection_made(make_mock_transport())
         with pytest.raises(NotImplementedError):
             p.response_received(
@@ -446,7 +488,7 @@ class TestRegisterProtocol:
 
     def test_response_received__401_retries_with_authorization(self):
         """Receiving 401 triggers a re-REGISTER with an Authorization header."""
-        p = make_register_protocol(username="alice", password="test-password")  # noqa: S106
+        p = make_register_session(username="alice", password="secret")  # noqa: S106
         p.connection_made(make_mock_transport())
         transport = p._transport
         transport.reset_mock()
@@ -468,7 +510,7 @@ class TestRegisterProtocol:
 
     def test_response_received__407_retries_with_proxy_authorization(self):
         """Receiving 407 triggers a re-REGISTER with a Proxy-Authorization header."""
-        p = make_register_protocol(username="alice", password="test-password")  # noqa: S106
+        p = make_register_session(username="alice", password="secret")  # noqa: S106
         p.connection_made(make_mock_transport())
         transport = p._transport
         transport.reset_mock()
@@ -487,7 +529,7 @@ class TestRegisterProtocol:
 
     def test_response_received__401_with_qop_auth_includes_nc_cnonce(self):
         """401 with qop=auth causes the retry to include nc and cnonce fields."""
-        p = make_register_protocol()
+        p = make_register_session()
         p.connection_made(make_mock_transport())
         transport = p._transport
         transport.reset_mock()
@@ -507,7 +549,7 @@ class TestRegisterProtocol:
 
     def test_response_received__401_with_opaque_echoes_opaque(self):
         """The opaque field from the challenge is echoed back in the Authorization."""
-        p = make_register_protocol()
+        p = make_register_session()
         p.connection_made(make_mock_transport())
         transport = p._transport
         transport.reset_mock()
@@ -527,7 +569,7 @@ class TestRegisterProtocol:
         """REGISTER request includes a Via header with the rport parameter for NAT traversal."""
         import re
 
-        p = make_register_protocol()
+        p = make_register_session()
         transport = make_mock_transport("192.0.2.10", 5060)
         p.connection_made(transport)
         data, _ = transport.sendto.call_args[0]
@@ -538,7 +580,7 @@ class TestRegisterProtocol:
         """Each REGISTER generates a unique Via branch to prevent transaction conflicts."""
         import re
 
-        p = make_register_protocol()
+        p = make_register_session()
         transport = make_mock_transport()
         p.connection_made(transport)
         data1, _ = transport.sendto.call_args[0]
@@ -551,7 +593,7 @@ class TestRegisterProtocol:
 
     def test_register__contact_uses_local_addr_when_no_stun(self):
         """Contact header uses local socket address when STUN is not configured."""
-        p = make_register_protocol()
+        p = make_register_session()
         transport = make_mock_transport("10.0.0.5", 5060)
         p.connection_made(transport)
         data, _ = transport.sendto.call_args[0]
@@ -559,7 +601,7 @@ class TestRegisterProtocol:
 
     def test_register__contact_uses_public_addr_when_stun_discovered(self):
         """Contact header uses the STUN-discovered public address."""
-        p = make_register_protocol()
+        p = make_register_session()
         transport = make_mock_transport("10.0.0.5", 5060)
         p.connection_made(transport)
         p.public_address = ("203.0.113.1", 12345)
@@ -572,13 +614,11 @@ class TestRegisterProtocol:
         """handle_stun resolves the future with the XOR-MAPPED-ADDRESS."""
 
         async def run():
-            p = make_register_protocol()
+            p = make_register_session()
             p.connection_made(make_mock_transport())
             p._stun_transactions = {}
-            # Build a fake STUN Binding Success Response with XOR-MAPPED-ADDRESS
             magic_cookie = 0x2112A442
             transaction_id = b"\x01" * 12
-            # Public addr: 203.0.113.5:54321
             public_ip = (203 << 24) | (0 << 16) | (113 << 8) | 5
             xor_ip = public_ip ^ magic_cookie
             xor_port = 54321 ^ (magic_cookie >> 16)
@@ -602,12 +642,11 @@ class TestRegisterProtocol:
         """handle_stun falls back to MAPPED-ADDRESS when XOR-MAPPED-ADDRESS is absent."""
 
         async def run():
-            p = make_register_protocol()
+            p = make_register_session()
             p.connection_made(make_mock_transport())
             p._stun_transactions = {}
             magic_cookie = 0x2112A442
             transaction_id = b"\x02" * 12
-            # MAPPED-ADDRESS: 198.51.100.7:60001 (not XOR'd)
             attr_val = struct.pack(
                 ">BBH4s", 0x00, 0x01, 60001, socket.inet_aton("198.51.100.7")
             )
@@ -626,10 +665,9 @@ class TestRegisterProtocol:
         asyncio.run(run())
 
     def test_datagram_received__stun_routes_to_handle_stun(self):
-        """datagram_received routes STUN messages (first byte 0–3) to _handle_stun."""
-        p = make_register_protocol()
+        """datagram_received routes STUN messages (first byte 0-3) to handle_stun."""
+        p = make_register_session()
         p.connection_made(make_mock_transport())
-        # STUN message starts with byte 0x01 (< 4)
         stun_data = b"\x01\x01" + b"\x00" * 18
         with patch.object(p, "handle_stun") as mock_handle:
             p.datagram_received(stun_data, ("stun.l.google.com", 19302))
@@ -637,74 +675,48 @@ class TestRegisterProtocol:
 
     def test_datagram_received__sip_routes_to_super(self):
         """datagram_received routes SIP messages (first byte >= 4) to the SIP parser."""
-        p = make_register_protocol()
+        p = make_register_session()
         p.connection_made(make_mock_transport())
         sip_data = b"SIP/2.0 200 OK\r\nCSeq: 1 REGISTER\r\n\r\n"
-        with patch.object(IncomingCallProtocol, "datagram_received") as mock_super:
+        with patch.object(SIP, "datagram_received") as mock_super:
             p.datagram_received(sip_data, ("192.0.2.2", 5060))
             mock_super.assert_called_once_with(sip_data, ("192.0.2.2", 5060))
 
     def test_handle_stun__truncated_returns_early(self):
         """handle_stun silently ignores packets shorter than 20 bytes."""
-        p = make_register_protocol()
+        p = make_register_session()
         transport = make_mock_transport()
         p.connection_made(transport)
-        transport.sendto.reset_mock()  # clear the REGISTER sendto call
+        transport.sendto.reset_mock()
         p.handle_stun(b"\x00" * 19, ("stun.l.google.com", 19302))
         transport.sendto.assert_not_called()
 
     def test_invite_received_after_register(self):
-        """INVITE dispatching still works after registration (inherits IncomingCallProtocol)."""
-        calls = []
+        """INVITE dispatching still works after registration (call_received is called)."""
+        received = []
 
-        class ConcreteProtocol(RegisterProtocol):
-            def invite_received(self, call, request, addr):
-                calls.append((call, request, addr))
+        class ConcreteSession(RegisterSIP):
+            def call_received(self, request):
+                received.append(request)
 
-        p = ConcreteProtocol(("192.0.2.2", 5060), "sip:alice@example.com", "a", "b")
+        p = ConcreteSession(("192.0.2.2", 5060), "sip:alice@example.com", "a", "b")
         p.connection_made(make_mock_transport())
         request = Request(
             method="INVITE",
             uri="sip:alice@example.com",
-            headers={"From": "sip:bob@example.com"},
+            headers={"From": "sip:bob@example.com", "Call-ID": "test@pc"},
         )
         p.request_received(request, ("192.0.2.1", 5060))
-        assert len(calls) == 1
-        assert isinstance(calls[0][0], IncomingCall)
-
-    def test_invite_received__call_class_is_used(self):
-        """RegisterProtocol uses the call_class passed to __init__ for each INVITE."""
-
-        class MyCall(IncomingCall):
-            pass
-
-        calls = []
-
-        class ConcreteProtocol(RegisterProtocol):
-            def invite_received(self, call, request, addr):
-                calls.append(call)
-
-        p = ConcreteProtocol(
-            ("192.0.2.2", 5060), "sip:alice@example.com", "a", "b",
-            call_class=MyCall,
-        )
-        p.connection_made(make_mock_transport())
-        request = Request(
-            method="INVITE",
-            uri="sip:alice@example.com",
-            headers={"From": "sip:bob@example.com"},
-        )
-        p.request_received(request, ("192.0.2.1", 5060))
-        assert len(calls) == 1
-        assert isinstance(calls[0], MyCall)
+        assert len(received) == 1
+        assert received[0] is request
 
     def test_response_received__200_ok__logs_info(self, caplog):
         """Receiving 200 OK logs an info message."""
         import logging
 
-        p = make_register_protocol()
+        p = make_register_session()
         p.connection_made(make_mock_transport())
-        with caplog.at_level(logging.INFO, logger="voip.call"):
+        with caplog.at_level(logging.INFO, logger="voip.sip.session"):
             p.response_received(
                 Response(status_code=200, reason="OK", headers={"CSeq": "1 REGISTER"}),
                 ("192.0.2.2", 5060),
@@ -715,9 +727,9 @@ class TestRegisterProtocol:
         """An unhandled status code logs a warning and raises NotImplementedError."""
         import logging
 
-        p = make_register_protocol()
+        p = make_register_session()
         p.connection_made(make_mock_transport())
-        with caplog.at_level(logging.WARNING, logger="voip.call"):
+        with caplog.at_level(logging.WARNING, logger="voip.sip.session"):
             with pytest.raises(NotImplementedError):
                 p.response_received(
                     Response(
@@ -746,14 +758,14 @@ def make_invite(headers: dict | None = None) -> Request:
     )
 
 
-def make_register_protocol(
+def make_register_session(
     server_addr=("192.0.2.2", 5060),
     aor="sip:alice@example.com",
     username="alice",
-    password="test-password",  # noqa: S107
-) -> RegisterProtocol:
-    """Return a RegisterProtocol without triggering connection_made."""
-    return RegisterProtocol(server_addr, aor, username, password)
+    password="secret",  # noqa: S107
+) -> RegisterSIP:
+    """Return a RegisterSIP without triggering connection_made."""
+    return RegisterSIP(server_addr, aor, username, password)
 
 
 def make_mock_transport(host: str = "127.0.0.1", port: int = 5060):
