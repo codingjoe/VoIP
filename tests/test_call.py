@@ -101,6 +101,45 @@ class TestSIP:
 
         asyncio.run(run())
 
+    def test_answer__sdp_uses_stun_public_address_for_rtp(self):
+        """_answer advertises the STUN-discovered public IP:port in the SDP when STUN is configured."""
+
+        async def run() -> None:
+            protocol = SIP(stun_server_address=("stun.example.com", 3478))
+            send = MagicMock()
+            protocol.send = send
+            request = make_invite()
+            protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+            with patch.object(
+                RTP, "stun_discover", return_value=("203.0.113.5", 54321)
+            ):
+                await protocol._answer(request, RTP)
+            response, _ = send.call_args[0]
+            assert b"c=IN IP4 203.0.113.5" in response.body
+            assert b"m=audio 54321" in response.body
+
+        asyncio.run(run())
+
+    def test_answer__sdp_falls_back_to_local_when_rtp_stun_fails(self):
+        """_answer falls back to local address when RTP STUN discovery fails."""
+
+        async def run() -> None:
+            protocol = SIP(stun_server_address=("stun.example.com", 3478))
+            send = MagicMock()
+            protocol.send = send
+            request = make_invite()
+            protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+            with patch.object(
+                RTP, "stun_discover", side_effect=TimeoutError("timeout")
+            ):
+                await protocol._answer(request, RTP)
+            response, _ = send.call_args[0]
+            # The SDP should still be sent (just with local address)
+            assert b"m=audio" in response.body
+            assert b"RTP/AVP 111" in response.body
+
+        asyncio.run(run())
+
     def test_answer__copies_dialog_headers(self):
         """Copy Via, To, From, Call-ID, and CSeq headers into the 200 OK."""
 

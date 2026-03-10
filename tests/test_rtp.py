@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import struct
+from unittest.mock import MagicMock, patch
 
 import pytest
 from voip.rtp import RTP, RealtimeTransportProtocol, RTPPacket, RTPPayloadType
+from voip.stun import STUNProtocol
 
 
 def make_rtp_packet(
@@ -125,4 +127,36 @@ class TestRealtimeTransportProtocol:
                 received.append(data)
 
         ConcreteRTP().datagram_received(b"\x80" * 12, ("127.0.0.1", 5004))
+        assert received == []
+
+    def test_rtp__is_stun_protocol(self):
+        """RealtimeTransportProtocol mixes in STUNProtocol for NAT traversal."""
+        assert issubclass(RealtimeTransportProtocol, STUNProtocol)
+
+    def test_connection_made__stores_transport(self):
+        """connection_made stores the transport for STUN discovery and outbound sends."""
+        protocol = RealtimeTransportProtocol()
+        transport = MagicMock()
+        protocol.connection_made(transport)
+        assert protocol._transport is transport
+
+    def test_datagram_received__stun__routes_to_handle_stun(self):
+        """Packets with first byte 0–3 (STUN per RFC 7983) are forwarded to handle_stun."""
+        protocol = RealtimeTransportProtocol()
+        stun_data = b"\x01\x01" + b"\x00" * 18  # STUN binding success response header
+        with patch.object(protocol, "handle_stun") as mock_handle:
+            protocol.datagram_received(stun_data, ("stun.example.com", 3478))
+            mock_handle.assert_called_once_with(stun_data, ("stun.example.com", 3478))
+
+    def test_datagram_received__stun__does_not_call_audio_received(self):
+        """STUN packets are not passed to audio_received."""
+        received: list[bytes] = []
+
+        class ConcreteRTP(RealtimeTransportProtocol):
+            def audio_received(self, data: bytes) -> None:
+                received.append(data)
+
+        stun_data = b"\x01\x01" + b"\x00" * 18
+        with patch.object(ConcreteRTP, "handle_stun"):
+            ConcreteRTP().datagram_received(stun_data, ("stun.example.com", 3478))
         assert received == []

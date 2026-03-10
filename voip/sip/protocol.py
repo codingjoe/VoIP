@@ -239,17 +239,36 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
         caller = request.headers.get("From", "")
         logger.info("Answering call from %s", caller)
         loop = asyncio.get_running_loop()
-        rtp_transport, _ = await loop.create_datagram_endpoint(
+        rtp_transport, rtp_protocol = await loop.create_datagram_endpoint(
             lambda: call_class(caller=caller),
             local_addr=("0.0.0.0", 0),  # noqa: S104
         )
         local_addr = rtp_transport.get_extra_info("sockname")
-        sdp_ip = self.public_address[0] if self.public_address else local_addr[0]
+        # Discover the public RTP address via STUN when a STUN server is configured.
+        # Without this, the SDP advertises the local (private) port, which is
+        # unreachable by the remote peer behind a NAT (RFC 5389 / RFC 7983).
+        rtp_public_addr: tuple[str, int] | None = None
+        if self.stun_server_address and isinstance(rtp_protocol, STUNProtocol):
+            try:
+                rtp_public_addr = await rtp_protocol.stun_discover(
+                    *self.stun_server_address
+                )
+                logger.info(
+                    "RTP STUN: public address is %s:%s",
+                    rtp_public_addr[0],
+                    rtp_public_addr[1],
+                )
+            except (TimeoutError, OSError, RuntimeError) as exc:
+                logger.warning(
+                    "RTP STUN discovery failed (%s), using local address", exc
+                )
+        sdp_ip = (rtp_public_addr or self.public_address or local_addr)[0]
+        sdp_port = (rtp_public_addr or local_addr)[1]
         logger.debug("RTP listening on %s:%s", local_addr[0], local_addr[1])
         sdp = (
             f"v=0\r\n"
             f"c=IN IP4 {sdp_ip}\r\n"
-            f"m=audio {local_addr[1]} RTP/AVP 111\r\n"
+            f"m=audio {sdp_port} RTP/AVP 111\r\n"
             f"a=rtpmap:111 opus/48000/1\r\n"
         ).encode()
         self.send(

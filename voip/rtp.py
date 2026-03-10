@@ -11,6 +11,8 @@ import dataclasses
 import enum
 import logging
 
+from voip.stun import STUNProtocol
+
 __all__ = ["RTP", "RTPPacket", "RTPPayloadType", "RealtimeTransportProtocol"]
 
 logger = logging.getLogger(__name__)
@@ -57,7 +59,7 @@ class RTPPacket:
         )
 
 
-class RealtimeTransportProtocol(asyncio.DatagramProtocol):
+class RealtimeTransportProtocol(STUNProtocol, asyncio.DatagramProtocol):
     """Base class for RTP audio call handlers (RFC 3550).
 
     Subclass this and override :meth:`audio_received` to process incoming audio::
@@ -68,17 +70,33 @@ class RealtimeTransportProtocol(asyncio.DatagramProtocol):
 
     Instances are used directly as asyncio datagram protocols, so they handle
     their own RTP header stripping before calling :meth:`audio_received`.
+
+    The :class:`~voip.stun.STUNProtocol` mixin enables STUN-based NAT traversal
+    (RFC 5389) so that the session can discover the public IP:port of the RTP
+    socket and advertise it correctly in the SDP offer (RFC 7983 multiplexing).
     """
 
     #: Fixed RTP header size in bytes (RFC 3550 §5.1).
     rtp_header_size: int = 12
 
     def __init__(self, caller: str = "") -> None:
+        super().__init__()
         #: The SIP address of the caller (from the From header of the INVITE).
         self.caller = caller
 
+    def connection_made(self, transport: asyncio.DatagramTransport) -> None:
+        """Store the transport for STUN discovery and outbound sends."""
+        self._transport = transport
+
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
-        """Strip the fixed RTP header and forward the audio payload."""
+        """Multiplex STUN and RTP per RFC 7983.
+
+        STUN messages (first byte 0–3) are routed to :meth:`~voip.stun.STUNProtocol.handle_stun`.
+        RTP packets with a valid header are stripped and forwarded to :meth:`audio_received`.
+        """
+        if data and data[0] < 4:  # STUN: first byte is 0-3 (RFC 7983 multiplexing)
+            self.handle_stun(data, addr)
+            return
         if len(data) > self.rtp_header_size:
             self.audio_received(data[self.rtp_header_size :])
 
