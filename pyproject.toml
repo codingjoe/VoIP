@@ -38,10 +38,8 @@ classifiers = [
 requires-python = ">=3.13"
 
 [project.optional-dependencies]
-cli = ["click", "pygments", "openai-whisper", "numpy", "python-ffmpeg"]
+cli = ["click", "pygments", "openai-whisper", "numpy", "ffmpeg-python"]
 pygments = ["Pygments"]
-# whisper also requires the system ffmpeg binary (not a Python package).
-# Install via: apt install ffmpeg / brew install ffmpeg.
 whisper = ["openai-whisper", "numpy", "ffmpeg-python"]
 
 [project.scripts]
