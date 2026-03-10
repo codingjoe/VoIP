@@ -213,7 +213,9 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
             request: The SIP INVITE request.
         """
 
-    def answer(self, request: Request, *, call_class: type[RealtimeTransportProtocol]) -> None:
+    def answer(
+        self, request: Request, *, call_class: type[RealtimeTransportProtocol]
+    ) -> None:
         """Answer an incoming call by setting up RTP and sending 200 OK with SDP.
 
         Schedules the asynchronous RTP setup and SIP response without blocking.
@@ -225,7 +227,9 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
         """
         asyncio.get_running_loop().create_task(self._answer(request, call_class))
 
-    async def _answer(self, request: Request, call_class: type[RealtimeTransportProtocol]) -> None:
+    async def _answer(
+        self, request: Request, call_class: type[RealtimeTransportProtocol]
+    ) -> None:
         """Perform the asynchronous part of answering: set up RTP, send 200 OK."""
         call_id = request.headers.get("Call-ID", "")
         addr = self._request_addrs.pop(call_id, None)

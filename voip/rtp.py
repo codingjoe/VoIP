@@ -1,4 +1,8 @@
-"""Real-time Transport Protocol (RTP) implementation of RFC 3550."""
+"""
+Real-time Transport Protocol (RTP) implementation of RFC 3550.
+
+See also: https://datatracker.ietf.org/doc/html/rfc3550#section-5
+"""
 
 from __future__ import annotations
 
@@ -76,7 +80,7 @@ class RealtimeTransportProtocol(asyncio.DatagramProtocol):
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         """Strip the fixed RTP header and forward the audio payload."""
         if len(data) > self.rtp_header_size:
-            self.audio_received(data[self.rtp_header_size:])
+            self.audio_received(data[self.rtp_header_size :])
 
     def audio_received(self, data: bytes) -> None:
         """Handle a decoded RTP audio payload. Override in subclasses."""

@@ -3,7 +3,7 @@ from __future__ import annotations
 import enum
 
 
-class SIPStatus(str, enum.Enum):
+class SIPStatus(enum.StrEnum):
     """Common SIP response status codes and reason phrases (RFC 3261)."""
 
     OK = "200 OK"
