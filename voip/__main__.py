@@ -106,7 +106,7 @@ def _parse_stun_server(stun_server: str) -> tuple[str, int] | None:
 )
 @click.option(
     "--stun-server",
-    default="stun.l.google.com:19302",
+    default="stun.cloudflare.com",
     envvar="STUN_SERVER",
     show_default=True,
     help="STUN server for NAT traversal (HOST:PORT or 'none' to disable).",
@@ -130,14 +130,15 @@ def transcribe(model, server, aor, username, password, local_port, stun_server):
             logger.info("Transcription: %s", text)
             click.echo(text)
 
-    class TranscribeSession(SIP):
+    class TranscribeSession(ConsoleMessageProcessor, SIP):
         def registered(self) -> None:
             logger.info("Registered with %s — waiting for calls", server)
             click.echo(f"Registered with {server} — waiting for calls", err=True)
 
         def call_received(self, request) -> None:
             click.echo(
-                f"Incoming call from {request.headers.get('From', '')}", err=True
+                f"Incoming call from {request.headers.get('From', '')}: {request!r}",
+                err=True,
             )
             self.answer(request=request, call_class=TranscribingCall)
 
