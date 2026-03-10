@@ -59,6 +59,15 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
     #: RFC 3261 §11 – methods supported by this UA (used in Allow header).
     ALLOW = "INVITE, ACK, BYE, CANCEL, OPTIONS"
 
+    #: Codec preference list (fmt, rtpmap value, clock rate Hz). Highest priority first.
+    #: Opus > G.722 > PCMA (G.711 A-law) > PCMU (G.711 µ-law).
+    PREFERRED_CODECS: list[tuple[str, str, int]] = [
+        ("111", "opus/48000/2", 48000),
+        ("9", "G722/8000", 8000),
+        ("8", "PCMA/8000", 8000),
+        ("0", "PCMU/8000", 8000),
+    ]
+
     def __init__(
         self,
         server_address: tuple[str, int] | None = None,
@@ -330,7 +339,7 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
         """
         asyncio.get_running_loop().create_task(self._answer(request, call_class))
 
-    async def _answer(
+    async def _answer(  # noqa: C901
         self, request: Request, call_class: type[RealtimeTransportProtocol]
     ) -> None:
         """Perform the asynchronous part of answering: set up RTP, send 200 OK."""
@@ -342,8 +351,46 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
         caller = request.headers.get("From", "")
         logger.info("Answering call from %s", caller)
         loop = asyncio.get_running_loop()
+        remote_audio = next(
+            (
+                m
+                for m in (request.body.media if request.body else [])
+                if m.media == "audio"
+            ),
+            None,
+        )
+        remote_rtpmaps: dict[str, str] = {}
+        remote_name_to_fmt: dict[str, str] = {}
+        if remote_audio:
+            for attribute in remote_audio.attributes:
+                if attribute.name == "rtpmap" and attribute.value:
+                    pt, _, codec_str = attribute.value.partition(" ")
+                    remote_rtpmaps[pt.strip()] = codec_str.strip()
+                    remote_name_to_fmt[codec_str.strip().lower()] = pt.strip()
+        selected_fmt: str | None = None
+        selected_rtpmap: str | None = None
+        selected_pt: int = 0
+        if remote_audio:
+            remote_fmts = set(remote_audio.fmt)
+            for our_fmt, our_rtpmap, _ in self.PREFERRED_CODECS:
+                if our_fmt in remote_fmts:
+                    selected_fmt = our_fmt
+                    selected_rtpmap = f"{our_fmt} {our_rtpmap}"
+                    selected_pt = int(our_fmt)
+                    break
+                if our_rtpmap.lower() in remote_name_to_fmt:
+                    remote_fmt = remote_name_to_fmt[our_rtpmap.lower()]
+                    selected_fmt = remote_fmt
+                    selected_rtpmap = f"{remote_fmt} {our_rtpmap}"
+                    selected_pt = int(remote_fmt)
+                    break
+            if selected_fmt is None and remote_audio.fmt:
+                selected_fmt = remote_audio.fmt[0]
+                selected_pt = int(selected_fmt)
+                if selected_fmt in remote_rtpmaps:
+                    selected_rtpmap = f"{selected_fmt} {remote_rtpmaps[selected_fmt]}"
         rtp_transport, rtp_protocol = await loop.create_datagram_endpoint(
-            lambda: call_class(caller=caller),
+            lambda: call_class(caller=caller, payload_type=selected_pt),
             local_addr=("0.0.0.0", 0),  # noqa: S104
         )
         local_addr = rtp_transport.get_extra_info("sockname")
@@ -371,31 +418,6 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
         sip_local_addr = self._transport.get_extra_info("sockname") or ("0.0.0.0", 5060)  # noqa: S104
         sip_contact_addr = self.public_address or sip_local_addr
         record_route = request.headers.get("Record-Route")
-        remote_audio = next(
-            (
-                m
-                for m in (request.body.media if request.body else [])
-                if m.media == "audio"
-            ),
-            None,
-        )
-        PREFERRED_CODECS = {"8": "PCMA/8000", "0": "PCMU/8000"}
-        selected_fmt: str | None = None
-        selected_rtpmap: str | None = None
-        if remote_audio:
-            for fmt in remote_audio.fmt:
-                if fmt in PREFERRED_CODECS:
-                    selected_fmt = fmt
-                    selected_rtpmap = f"{fmt} {PREFERRED_CODECS[fmt]}"
-                    break
-            if selected_fmt is None:
-                rtpmap_attrs = {
-                    a.value.split(" ", 1)[0]: a.value
-                    for a in remote_audio.attributes
-                    if a.name == "rtpmap" and a.value
-                }
-                selected_fmt = remote_audio.fmt[0]
-                selected_rtpmap = rtpmap_attrs.get(selected_fmt)
         sess_id = str(secrets.randbelow(2**32) + 1)
         attributes = [
             Attribute(name="sendrecv"),

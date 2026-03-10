@@ -1,4 +1,4 @@
-"""Whisper-based transcription for Opus-encoded RTP audio streams."""
+"""Whisper-based transcription for RTP audio streams (Opus, G.722, PCMA, PCMU)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import ffmpeg
 import numpy as np
 
 import whisper
-from voip.rtp import RealtimeTransportProtocol
+from voip.rtp import RealtimeTransportProtocol, RTPPacket, RTPPayloadType
 
 __all__ = ["WhisperCall"]
 
@@ -99,10 +99,11 @@ def _build_ogg_opus(packets: list[bytes]) -> bytes:
 
 
 class WhisperCall(RealtimeTransportProtocol):
-    """RTP call handler that decodes Opus audio and transcribes it with OpenAI Whisper.
+    """RTP call handler that decodes audio and transcribes it with OpenAI Whisper.
 
-    This is a pure RTP-level handler with no SIP knowledge. Use it as the
-    *call_class* when answering calls in a SIP session::
+    Supports Opus, G.722, PCMA (G.711 A-law), and PCMU (G.711 µ-law) based on
+    the negotiated RTP payload type. Use it as the *call_class* when answering
+    calls in a SIP session::
 
         class MySession(SessionInitiationProtocol):
             def call_received(self, request: Request) -> None:
@@ -115,37 +116,44 @@ class WhisperCall(RealtimeTransportProtocol):
     opus_frame_size = 960
     #: Audio buffered (in seconds) before each transcription is triggered.
     chunk_duration = 30
+    #: Maximum seconds to wait for ffmpeg to decode an audio chunk.
+    decode_timeout_secs = 60
 
-    def __init__(self, caller: str = "", model: str = "base") -> None:
-        super().__init__(caller=caller)
+    def __init__(
+        self,
+        caller: str = "",
+        model: str = "base",
+        payload_type: int = RTPPayloadType.OPUS,
+    ) -> None:
+        super().__init__(caller=caller, payload_type=payload_type)
         logger.debug("Loading Whisper model %r", model)
         self._whisper_model = whisper.load_model(model)
-        self._opus_packets: list[bytes] = []
+        self._audio_packets: list[bytes] = []
         self._packet_threshold = (
             self.opus_sample_rate * self.chunk_duration // self.opus_frame_size
         )
         self._transcribe_task: asyncio.Task | None = None
 
-    def audio_received(self, data: bytes) -> None:
-        """Buffer an Opus RTP payload and transcribe when the chunk threshold is reached."""
-        logger.debug("RTP audio packet received: %d bytes", len(data))
-        self._opus_packets.append(data)
-        # asyncio is single-threaded: this check-and-create is atomic within the event loop.
+    def audio_received(self, packet: RTPPacket) -> None:
+        """Buffer an audio payload and transcribe when the chunk threshold is reached."""
+        logger.debug("RTP audio packet received: %d bytes", len(packet.payload))
+        self._audio_packets.append(packet.payload)
         if (
-            len(self._opus_packets) >= self._packet_threshold
+            len(self._audio_packets) >= self._packet_threshold
             and self._transcribe_task is None
         ):
             self._transcribe_task = asyncio.create_task(self._transcribe_chunk())
 
     async def _transcribe_chunk(self) -> None:
-        """Decode and transcribe the buffered Opus packets, draining all complete chunks."""
+        """Decode and transcribe the buffered audio packets, draining all complete chunks."""
         try:
-            while len(self._opus_packets) >= self._packet_threshold:
-                packets = self._opus_packets[: self._packet_threshold]
-                self._opus_packets = self._opus_packets[self._packet_threshold :]
-                ogg_data = _build_ogg_opus(packets)
+            while len(self._audio_packets) >= self._packet_threshold:
+                packets = self._audio_packets[: self._packet_threshold]
+                self._audio_packets = self._audio_packets[self._packet_threshold :]
                 loop = asyncio.get_running_loop()
-                audio = await loop.run_in_executor(None, self._decode_opus, ogg_data)
+                audio = await loop.run_in_executor(
+                    None, self._decode_audio, packets, self.payload_type
+                )
                 logger.info(
                     "Transcribing %d samples (%.1f s)",
                     len(audio),
@@ -156,19 +164,40 @@ class WhisperCall(RealtimeTransportProtocol):
         finally:
             self._transcribe_task = None
 
-    #: Maximum seconds to wait for ffmpeg to decode an audio chunk.
-    decode_timeout_secs = 60
+    def _decode_audio(self, packets: list[bytes], payload_type: int) -> np.ndarray:
+        """Decode audio packets to a float32 PCM array at Whisper's sample rate."""
+        match payload_type:
+            case RTPPayloadType.OPUS:
+                return self._decode_via_ffmpeg(
+                    _build_ogg_opus(packets), input_format="ogg", input_sample_rate=None
+                )
+            case RTPPayloadType.G722:
+                return self._decode_via_ffmpeg(
+                    b"".join(packets), input_format="g722", input_sample_rate=16000
+                )
+            case RTPPayloadType.PCMA:
+                return self._decode_via_ffmpeg(
+                    b"".join(packets), input_format="alaw", input_sample_rate=8000
+                )
+            case _:  # PCMU or unknown
+                return self._decode_via_ffmpeg(
+                    b"".join(packets), input_format="mulaw", input_sample_rate=8000
+                )
 
-    def _decode_opus(self, ogg_data: bytes) -> np.ndarray:
-        """Decode Ogg Opus data to a float32 PCM array at 16 kHz via ffmpeg.
-
-        Requires the ``ffmpeg-python`` package and the system ``ffmpeg`` binary.
-        """
+    def _decode_via_ffmpeg(
+        self,
+        data: bytes,
+        input_format: str,
+        input_sample_rate: int | None,
+    ) -> np.ndarray:
+        """Decode audio data via ffmpeg into float32 PCM at Whisper's sample rate."""
+        input_kwargs: dict[str, str] = {"format": input_format}
+        if input_sample_rate is not None:
+            input_kwargs["ar"] = str(input_sample_rate)
+            input_kwargs["ac"] = "1"
         try:
             proc = (
-                ffmpeg.input(
-                    "pipe:0", format="ogg"
-                )  # _build_ogg_opus always wraps in Ogg
+                ffmpeg.input("pipe:0", **input_kwargs)
                 .output(
                     "pipe:1",
                     format="f32le",
@@ -179,7 +208,7 @@ class WhisperCall(RealtimeTransportProtocol):
             )
             try:
                 out, err = proc.communicate(
-                    input=ogg_data, timeout=self.decode_timeout_secs
+                    input=data, timeout=self.decode_timeout_secs
                 )
             except subprocess.TimeoutExpired:
                 proc.kill()

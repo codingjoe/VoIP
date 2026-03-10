@@ -5,7 +5,7 @@ import struct
 from unittest.mock import MagicMock, patch
 
 import pytest
-from voip.rtp import RTP
+from voip.rtp import RTP, RTPPacket
 from voip.sip import SIP, SessionInitiationProtocol
 from voip.sip.messages import Message, Request, Response
 
@@ -22,7 +22,10 @@ class TestRTP:
 
     def test_audio_received__noop_by_default(self):
         """audio_received is a no-op in the base class."""
-        RTP().audio_received(b"data")  # must not raise
+        packet = RTPPacket(
+            payload_type=0, sequence_number=1, timestamp=0, ssrc=0, payload=b"data"
+        )
+        RTP().audio_received(packet)  # must not raise
 
 
 class TestSIP:
@@ -70,6 +73,7 @@ class TestSIP:
         protocol = SIP()
         send = MagicMock()
         protocol.send = send
+        protocol._transport = make_mock_transport()
         request = make_invite()
         protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
         await protocol._answer(request, RTP)
@@ -80,10 +84,11 @@ class TestSIP:
         assert addr == ("192.0.2.1", 5060)
 
     async def test_answer__sdp_contains_opus_audio_line(self):
-        """Include an Opus audio media line in the SDP body of the 200 OK."""
+        """Include an audio media line in the SDP body of the 200 OK."""
         protocol = SIP()
         send = MagicMock()
         protocol.send = send
+        protocol._transport = make_mock_transport()
         request = make_invite()
         protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
         await protocol._answer(request, RTP)
@@ -96,6 +101,7 @@ class TestSIP:
         protocol = SIP(stun_server_address=("stun.example.com", 3478))
         send = MagicMock()
         protocol.send = send
+        protocol._transport = make_mock_transport()
         request = make_invite()
         protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
         with patch.object(RTP, "stun_discover", return_value=("203.0.113.5", 54321)):
@@ -109,6 +115,7 @@ class TestSIP:
         protocol = SIP(stun_server_address=("stun.example.com", 3478))
         send = MagicMock()
         protocol.send = send
+        protocol._transport = make_mock_transport()
         request = make_invite()
         protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
         with patch.object(RTP, "stun_discover", side_effect=TimeoutError("timeout")):
@@ -122,6 +129,7 @@ class TestSIP:
         protocol = SIP()
         send = MagicMock()
         protocol.send = send
+        protocol._transport = make_mock_transport()
         request = make_invite()
         protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
         await protocol._answer(request, RTP)
@@ -137,12 +145,13 @@ class TestSIP:
         created = []
 
         class MyCall(RTP):
-            def __init__(self, caller: str = "") -> None:
-                super().__init__(caller=caller)
+            def __init__(self, caller: str = "", payload_type: int = 0) -> None:
+                super().__init__(caller=caller, payload_type=payload_type)
                 created.append(self)
 
         protocol = SIP()
         protocol.send = MagicMock()
+        protocol._transport = make_mock_transport()
         request = make_invite()
         protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
         await protocol._answer(request, MyCall)
@@ -154,12 +163,13 @@ class TestSIP:
         received_audio = []
 
         class AudioCapture(RTP):
-            def audio_received(self, data: bytes) -> None:
-                received_audio.append(data)
+            def audio_received(self, packet: RTPPacket) -> None:
+                received_audio.append(packet.payload)
 
         protocol = SIP()
         send = MagicMock()
         protocol.send = send
+        protocol._transport = make_mock_transport()
         request = make_invite()
         protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
         await protocol._answer(request, AudioCapture)
@@ -190,12 +200,13 @@ class TestSIP:
         received_audio = []
 
         class AudioCapture(RTP):
-            def audio_received(self, data: bytes) -> None:
-                received_audio.append(data)
+            def audio_received(self, packet: RTPPacket) -> None:
+                received_audio.append(packet.payload)
 
         protocol = SIP()
         send = MagicMock()
         protocol.send = send
+        protocol._transport = make_mock_transport()
         request = make_invite()
         protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
         await protocol._answer(request, AudioCapture)
@@ -226,6 +237,7 @@ class TestSIP:
         protocol = SIP()
         send = MagicMock()
         protocol.send = send
+        protocol._transport = make_mock_transport()
         request = make_invite()
         protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
         await protocol._answer(request, RTP)
@@ -240,6 +252,7 @@ class TestSIP:
 
         protocol = SIP()
         protocol.send = MagicMock()
+        protocol._transport = make_mock_transport()
         request = make_invite()
         protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
         with caplog.at_level(logging.INFO, logger="voip.sip.protocol"):

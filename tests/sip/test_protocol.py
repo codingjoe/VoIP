@@ -389,8 +389,9 @@ class TestAnswer:
         """Run _answer coroutine synchronously using a new event loop."""
 
         class FakeRTPProtocol(asyncio.DatagramProtocol):
-            def __init__(self, caller):
+            def __init__(self, caller, payload_type=0):
                 self.caller = caller
+                self.payload_type = payload_type
 
         async def _answer_coro():
             with unittest.mock.patch.object(
@@ -448,6 +449,80 @@ class TestAnswer:
         await self._run_answer(protocol, invite, fake_rtp_transport)
         response, _ = protocol._sent_responses[-1]
         assert response.body.media[0].fmt == ["0"]
+
+    @pytest.mark.asyncio
+    async def test_answer__selects_opus_when_offered(self, fake_rtp_transport):
+        """Select Opus (111) when the remote SDP offers Opus alongside PCMA and PCMU."""
+        protocol = FakeProtocol()
+        addr = ("192.0.2.1", 5060)
+        sdp_body = SessionDescription.parse(
+            b"v=0\r\n"
+            b"o=- 0 0 IN IP4 192.0.2.1\r\n"
+            b"s=-\r\n"
+            b"c=IN IP4 192.0.2.1\r\n"
+            b"t=0 0\r\n"
+            b"m=audio 49170 RTP/AVP 111 8 0\r\n"
+            b"a=rtpmap:111 opus/48000/2\r\n"
+        )
+        invite = self._make_invite("answer-opus-1", sdp_body)
+        protocol.request_received(invite, addr)
+        await self._run_answer(protocol, invite, fake_rtp_transport)
+        response, _ = protocol._sent_responses[-1]
+        assert response.body.media[0].fmt == ["111"]
+        assert any(
+            a.value and a.value.startswith("111 opus")
+            for a in response.body.media[0].attributes
+        )
+
+    @pytest.mark.asyncio
+    async def test_answer__selects_g722_when_no_opus(self, fake_rtp_transport):
+        """Select G.722 (9) when the remote SDP offers G.722 and PCMA but not Opus."""
+        protocol = FakeProtocol()
+        addr = ("192.0.2.1", 5060)
+        sdp_body = SessionDescription.parse(
+            b"v=0\r\n"
+            b"o=- 0 0 IN IP4 192.0.2.1\r\n"
+            b"s=-\r\n"
+            b"c=IN IP4 192.0.2.1\r\n"
+            b"t=0 0\r\n"
+            b"m=audio 49170 RTP/AVP 9 8\r\n"
+        )
+        invite = self._make_invite("answer-g722-1", sdp_body)
+        protocol.request_received(invite, addr)
+        await self._run_answer(protocol, invite, fake_rtp_transport)
+        response, _ = protocol._sent_responses[-1]
+        assert response.body.media[0].fmt == ["9"]
+
+    @pytest.mark.asyncio
+    async def test_answer__selects_opus_by_name_match_with_different_pt(
+        self, fake_rtp_transport
+    ):
+        """Select Opus by codec name match when remote uses a non-standard payload type."""
+        protocol = FakeProtocol()
+        addr = ("192.0.2.1", 5060)
+        sdp_body = SessionDescription.parse(
+            b"v=0\r\n"
+            b"o=- 0 0 IN IP4 192.0.2.1\r\n"
+            b"s=-\r\n"
+            b"c=IN IP4 192.0.2.1\r\n"
+            b"t=0 0\r\n"
+            b"m=audio 49170 RTP/AVP 100 8\r\n"
+            b"a=rtpmap:100 opus/48000/2\r\n"
+        )
+        invite = self._make_invite("answer-opus-name-1", sdp_body)
+        protocol.request_received(invite, addr)
+        await self._run_answer(protocol, invite, fake_rtp_transport)
+        response, _ = protocol._sent_responses[-1]
+        assert response.body.media[0].fmt == ["100"]
+
+    def test_preferred_codecs__class_attribute(self):
+        """PREFERRED_CODECS is a class attribute with Opus first."""
+        codecs = SessionInitiationProtocol.PREFERRED_CODECS
+        assert isinstance(codecs, list)
+        fmts = [fmt for fmt, _, _ in codecs]
+        assert fmts[0] == "111"  # Opus is highest priority
+        assert "8" in fmts  # PCMA present
+        assert "0" in fmts  # PCMU present
 
     @pytest.mark.asyncio
     async def test_answer__falls_back_to_first_offered_codec(self, fake_rtp_transport):

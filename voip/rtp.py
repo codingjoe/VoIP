@@ -21,10 +21,14 @@ logger = logging.getLogger(__name__)
 class RTPPayloadType(enum.IntEnum):
     """Common RTP payload types.
 
-    Dynamic payload types (96-127) are negotiated via SDP (RFC 3551).
+    Static payload types (0–95) are defined by RFC 3551.
+    Dynamic payload types (96–127) are negotiated via SDP.
     Opus uses payload type 111 per RFC 7587.
     """
 
+    PCMU = 0  # G.711 µ-law (RFC 3551)
+    PCMA = 8  # G.711 A-law (RFC 3551)
+    G722 = 9  # G.722 (RFC 3551)
     OPUS = 111  # RFC 7587 (dynamic)
 
 
@@ -65,11 +69,11 @@ class RealtimeTransportProtocol(STUNProtocol, asyncio.DatagramProtocol):
     Subclass this and override :meth:`audio_received` to process incoming audio::
 
         class MyCall(RealtimeTransportProtocol):
-            def audio_received(self, data: bytes) -> None:
-                ...  # process Opus audio payload
+            def audio_received(self, packet: RTPPacket) -> None:
+                ...  # process audio payload
 
     Instances are used directly as asyncio datagram protocols, so they handle
-    their own RTP header stripping before calling :meth:`audio_received`.
+    their own RTP header parsing before calling :meth:`audio_received`.
 
     The :class:`~voip.stun.STUNProtocol` mixin enables STUN-based NAT traversal
     (RFC 5389) so that the session can discover the public IP:port of the RTP
@@ -79,29 +83,36 @@ class RealtimeTransportProtocol(STUNProtocol, asyncio.DatagramProtocol):
     #: Fixed RTP header size in bytes (RFC 3550 §5.1).
     rtp_header_size: int = 12
 
-    def __init__(self, caller: str = "") -> None:
+    def __init__(self, caller: str = "", payload_type: int = 0) -> None:
         super().__init__()
         #: The SIP address of the caller (from the From header of the INVITE).
         self.caller = caller
+        #: The negotiated RTP payload type for this call.
+        self.payload_type = payload_type
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
         """Store the transport for STUN discovery and outbound sends."""
         self._transport = transport
 
-    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+    def datagram_received(self, data: bytes, address: tuple[str, int]) -> None:
         """Multiplex STUN and RTP per RFC 7983.
 
         STUN messages (first byte 0–3) are routed to :meth:`~voip.stun.STUNProtocol.handle_stun`.
-        RTP packets with a valid header are stripped and forwarded to :meth:`audio_received`.
+        Valid RTP packets are parsed and forwarded to :meth:`audio_received`.
         """
         if data and data[0] < 4:  # STUN: first byte is 0-3 (RFC 7983 multiplexing)
-            self.handle_stun(data, addr)
+            self.handle_stun(data, address)
             return
-        if len(data) > self.rtp_header_size:
-            self.audio_received(data[self.rtp_header_size :])
+        try:
+            packet = RTPPacket.parse(data)
+        except ValueError:
+            return
+        if not packet.payload:
+            return
+        self.audio_received(packet)
 
-    def audio_received(self, data: bytes) -> None:
-        """Handle a decoded RTP audio payload. Override in subclasses."""
+    def audio_received(self, packet: RTPPacket) -> None:
+        """Handle an RTP packet. Override in subclasses."""
 
 
 #: Short alias for :class:`RealtimeTransportProtocol`.

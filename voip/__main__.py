@@ -128,8 +128,8 @@ def transcribe(model, server, aor, username, password, local_port, stun_server):
     stun = _parse_stun_server(stun_server)
 
     class TranscribingCall(WhisperCall):
-        def __init__(self, caller: str = "") -> None:
-            super().__init__(caller=caller, model=model)
+        def __init__(self, caller: str = "", payload_type=None) -> None:
+            super().__init__(caller=caller, model=model, payload_type=payload_type)
 
         def transcription_received(self, text: str) -> None:
             logger.info("Transcription: %s", text)

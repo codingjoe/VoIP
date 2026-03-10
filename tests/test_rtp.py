@@ -31,6 +31,18 @@ def make_rtp_packet(
 
 
 class TestRTPPayloadType:
+    def test_pcmu__value(self):
+        """PCMU payload type is 0 per RFC 3551."""
+        assert RTPPayloadType.PCMU == 0
+
+    def test_pcma__value(self):
+        """PCMA payload type is 8 per RFC 3551."""
+        assert RTPPayloadType.PCMA == 8
+
+    def test_g722__value(self):
+        """G722 payload type is 9 per RFC 3551."""
+        assert RTPPayloadType.G722 == 9
+
     def test_opus__value(self):
         """OPUS payload type is 111 per RFC 7587."""
         assert RTPPayloadType.OPUS == 111
@@ -95,36 +107,37 @@ class TestRealtimeTransportProtocol:
         assert RTP is RealtimeTransportProtocol
 
     def test_datagram_received__forwards_audio_payload(self):
-        """Strip the RTP header and forward the audio payload to audio_received."""
-        received: list[bytes] = []
+        """Parse the RTP packet and forward it to audio_received."""
+        received: list[RTPPacket] = []
 
         class ConcreteRTP(RealtimeTransportProtocol):
-            def audio_received(self, data: bytes) -> None:
-                received.append(data)
+            def audio_received(self, packet: RTPPacket) -> None:
+                received.append(packet)
 
         ConcreteRTP().datagram_received(
             make_rtp_packet(payload=b"audio"), ("127.0.0.1", 5004)
         )
-        assert received == [b"audio"]
+        assert len(received) == 1
+        assert received[0].payload == b"audio"
 
     def test_datagram_received__skips_packet_shorter_than_header(self):
         """Skip packets shorter than the 12-byte RTP header."""
-        received: list[bytes] = []
+        received: list[RTPPacket] = []
 
         class ConcreteRTP(RealtimeTransportProtocol):
-            def audio_received(self, data: bytes) -> None:
-                received.append(data)
+            def audio_received(self, packet: RTPPacket) -> None:
+                received.append(packet)
 
         ConcreteRTP().datagram_received(b"\x80\x00", ("127.0.0.1", 5004))
         assert received == []
 
     def test_datagram_received__skips_header_only_packet(self):
         """Skip packets that contain only the 12-byte header with no audio payload."""
-        received: list[bytes] = []
+        received: list[RTPPacket] = []
 
         class ConcreteRTP(RealtimeTransportProtocol):
-            def audio_received(self, data: bytes) -> None:
-                received.append(data)
+            def audio_received(self, packet: RTPPacket) -> None:
+                received.append(packet)
 
         ConcreteRTP().datagram_received(b"\x80" * 12, ("127.0.0.1", 5004))
         assert received == []
@@ -150,11 +163,11 @@ class TestRealtimeTransportProtocol:
 
     def test_datagram_received__stun__does_not_call_audio_received(self):
         """STUN packets are not passed to audio_received."""
-        received: list[bytes] = []
+        received: list[RTPPacket] = []
 
         class ConcreteRTP(RealtimeTransportProtocol):
-            def audio_received(self, data: bytes) -> None:
-                received.append(data)
+            def audio_received(self, packet: RTPPacket) -> None:
+                received.append(packet)
 
         stun_data = b"\x01\x01" + b"\x00" * 18
         with patch.object(ConcreteRTP, "handle_stun"):
