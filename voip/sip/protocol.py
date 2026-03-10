@@ -16,7 +16,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 from voip.sdp.messages import SessionDescription
-from voip.sdp.types import Attribute, ConnectionData, MediaDescription
+from voip.sdp.types import Attribute, ConnectionData, MediaDescription, Origin, Timing
 from voip.stun import STUNProtocol
 from voip.types import DigestQoP
 
@@ -396,9 +396,15 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
                 }
                 selected_fmt = remote_audio.fmt[0]
                 selected_rtpmap = rtpmap_attrs.get(selected_fmt)
-        attributes = []
-        if selected_rtpmap:
-            attributes.append(Attribute(name="rtpmap", value=selected_rtpmap))
+        sess_id = str(secrets.randbelow(2**32) + 1)
+        attributes = [
+            Attribute(name="sendrecv"),
+            *(
+                [Attribute(name="rtpmap", value=selected_rtpmap)]
+                if selected_rtpmap
+                else []
+            ),
+        ]
         self.send(
             Response(
                 status_code=Status["OK"],
@@ -419,6 +425,15 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
                     "Content-Type": "application/sdp",
                 },
                 body=SessionDescription(
+                    origin=Origin(
+                        username="-",
+                        sess_id=sess_id,
+                        sess_version=sess_id,
+                        nettype="IN",
+                        addrtype="IP4",
+                        unicast_address=sdp_ip,
+                    ),
+                    timings=[Timing(start_time=0, stop_time=0)],
                     connection=ConnectionData(
                         nettype="IN", addrtype="IP4", connection_address=sdp_ip
                     ),

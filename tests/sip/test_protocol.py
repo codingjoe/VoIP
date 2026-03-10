@@ -6,6 +6,7 @@ import unittest.mock
 
 import pytest
 from voip.sdp.messages import SessionDescription
+from voip.sdp.types import Timing
 from voip.sip.messages import Request, Response
 from voip.sip.protocol import SessionInitiationProtocol
 
@@ -420,9 +421,13 @@ class TestAnswer:
         assert protocol._sent_responses
         response, _ = protocol._sent_responses[-1]
         assert response.status_code == 200
+        assert response.body.origin is not None
+        assert response.body.timings == [Timing(start_time=0, stop_time=0)]
         assert response.body.media[0].fmt == ["8"]
+        assert any(a.name == "sendrecv" for a in response.body.media[0].attributes)
         assert any(
-            a.value.startswith("8 PCMA") for a in response.body.media[0].attributes
+            a.value and a.value.startswith("8 PCMA")
+            for a in response.body.media[0].attributes
         )
 
     @pytest.mark.asyncio
@@ -466,6 +471,7 @@ class TestAnswer:
         assert any(
             a.value == "126 telephone-event/8000"
             for a in response.body.media[0].attributes
+            if a.value is not None
         )
 
     @pytest.mark.asyncio
