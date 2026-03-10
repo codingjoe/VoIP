@@ -63,7 +63,7 @@ class TestWhisperCall:
         call.audio_received(b"opus_packet")
         model_mock.transcribe.assert_not_called()
 
-    def test_audio_received__triggers_transcription_when_buffer_full(self):
+    async def test_audio_received__triggers_transcription_when_buffer_full(self):
         """Schedule transcription when enough Opus packets have been buffered."""
         transcriptions = []
         model_mock = MagicMock()
@@ -75,18 +75,15 @@ class TestWhisperCall:
             def transcription_received(self, text: str) -> None:
                 transcriptions.append(text)
 
-        async def run() -> None:
-            call = make_whisper_call(model_mock, SmallChunkCall)
-            call._opus_packets = [b"x"] * (packet_threshold(SmallChunkCall) - 1)
-            pcm_samples = np.zeros(whisper.audio.SAMPLE_RATE, dtype=np.float32)
-            with patch.object(call, "_decode_opus", return_value=pcm_samples):
-                call.audio_received(b"opus_packet")
-                await asyncio.sleep(0.1)
-
-        asyncio.run(run())
+        call = make_whisper_call(model_mock, SmallChunkCall)
+        call._opus_packets = [b"x"] * (packet_threshold(SmallChunkCall) - 1)
+        pcm_samples = np.zeros(whisper.audio.SAMPLE_RATE, dtype=np.float32)
+        with patch.object(call, "_decode_opus", return_value=pcm_samples):
+            call.audio_received(b"opus_packet")
+            await asyncio.sleep(0.1)
         assert transcriptions == ["hello"]
 
-    def test_audio_received__clears_transcribed_packets_from_buffer(self):
+    async def test_audio_received__clears_transcribed_packets_from_buffer(self):
         """Remove the transcribed packets from the buffer after transcription."""
         model_mock = MagicMock()
         model_mock.transcribe.return_value = {"text": ""}
@@ -94,17 +91,14 @@ class TestWhisperCall:
         class SmallChunkCall(WhisperCall):
             chunk_duration = 1
 
-        async def run() -> None:
-            call = make_whisper_call(model_mock, SmallChunkCall)
-            extra = 5
-            call._opus_packets = [b"x"] * (packet_threshold(SmallChunkCall) + extra)
-            with patch.object(
-                call, "_decode_opus", return_value=np.zeros(16000, dtype=np.float32)
-            ):
-                await call._transcribe_chunk()
-            assert len(call._opus_packets) == extra
-
-        asyncio.run(run())
+        call = make_whisper_call(model_mock, SmallChunkCall)
+        extra = 5
+        call._opus_packets = [b"x"] * (packet_threshold(SmallChunkCall) + extra)
+        with patch.object(
+            call, "_decode_opus", return_value=np.zeros(16000, dtype=np.float32)
+        ):
+            await call._transcribe_chunk()
+        assert len(call._opus_packets) == extra
 
     def test_run_transcription__passes_numpy_array_directly(self):
         """Pass a numpy float32 array to the Whisper model without file I/O."""
@@ -125,7 +119,7 @@ class TestWhisperCall:
         ):
             call._run_transcription(np.zeros(16000, dtype=np.float32))
 
-    def test_transcription_received__strips_whitespace(self):
+    async def test_transcription_received__strips_whitespace(self):
         """Strip leading and trailing whitespace from the transcription text."""
         transcriptions = []
         model_mock = MagicMock()
@@ -137,15 +131,12 @@ class TestWhisperCall:
             def transcription_received(self, text: str) -> None:
                 transcriptions.append(text)
 
-        async def run() -> None:
-            call = make_whisper_call(model_mock, Capture)
-            call._opus_packets = [b"x"] * packet_threshold(Capture)
-            with patch.object(
-                call, "_decode_opus", return_value=np.zeros(16000, dtype=np.float32)
-            ):
-                await call._transcribe_chunk()
-
-        asyncio.run(run())
+        call = make_whisper_call(model_mock, Capture)
+        call._opus_packets = [b"x"] * packet_threshold(Capture)
+        with patch.object(
+            call, "_decode_opus", return_value=np.zeros(16000, dtype=np.float32)
+        ):
+            await call._transcribe_chunk()
         assert transcriptions == ["hello world"]
 
     def test_decode_opus__calls_ffmpeg(self):

@@ -378,14 +378,14 @@ class TestAnswer:
             method="INVITE", uri="sip:bob@biloxi.com", headers=headers, body=sdp_body
         )
 
-    def _run_answer(self, protocol, invite, fake_rtp_transport):
+    async def _run_answer(self, protocol, invite, fake_rtp_transport):
         """Run _answer coroutine synchronously using a new event loop."""
 
         class FakeRTPProtocol(asyncio.DatagramProtocol):
             def __init__(self, caller):
                 self.caller = caller
 
-        async def run():
+        async def _answer_coro():
             with unittest.mock.patch.object(
                 asyncio.get_event_loop(),
                 "create_datagram_endpoint",
@@ -393,9 +393,10 @@ class TestAnswer:
             ):
                 await protocol._answer(invite, FakeRTPProtocol)
 
-        asyncio.run(run())
+        await _answer_coro()
 
-    def test_answer__selects_pcma_from_offer(self, fake_rtp_transport):
+    @pytest.mark.asyncio
+    async def test_answer__selects_pcma_from_offer(self, fake_rtp_transport):
         """Select PCMA (8) when the remote SDP offers both PCMA and PCMU."""
         protocol = FakeProtocol()
         addr = ("192.0.2.1", 5060)
@@ -409,7 +410,7 @@ class TestAnswer:
         )
         invite = self._make_invite("answer-pcma-1", sdp_body)
         protocol.request_received(invite, addr)
-        self._run_answer(protocol, invite, fake_rtp_transport)
+        await self._run_answer(protocol, invite, fake_rtp_transport)
         assert protocol._sent_responses
         response, _ = protocol._sent_responses[-1]
         assert response.status_code == 200
@@ -418,7 +419,8 @@ class TestAnswer:
             a.value.startswith("8 PCMA") for a in response.body.media[0].attributes
         )
 
-    def test_answer__selects_pcmu_when_only_option(self, fake_rtp_transport):
+    @pytest.mark.asyncio
+    async def test_answer__selects_pcmu_when_only_option(self, fake_rtp_transport):
         """Select PCMU (0) when the remote SDP offers only PCMU."""
         protocol = FakeProtocol()
         addr = ("192.0.2.1", 5060)
@@ -432,11 +434,12 @@ class TestAnswer:
         )
         invite = self._make_invite("answer-pcmu-1", sdp_body)
         protocol.request_received(invite, addr)
-        self._run_answer(protocol, invite, fake_rtp_transport)
+        await self._run_answer(protocol, invite, fake_rtp_transport)
         response, _ = protocol._sent_responses[-1]
         assert response.body.media[0].fmt == ["0"]
 
-    def test_answer__falls_back_to_first_offered_codec(self, fake_rtp_transport):
+    @pytest.mark.asyncio
+    async def test_answer__falls_back_to_first_offered_codec(self, fake_rtp_transport):
         """Fall back to the first offered payload type when no preferred codec matches."""
         protocol = FakeProtocol()
         addr = ("192.0.2.1", 5060)
@@ -451,7 +454,7 @@ class TestAnswer:
         )
         invite = self._make_invite("answer-fallback-1", sdp_body)
         protocol.request_received(invite, addr)
-        self._run_answer(protocol, invite, fake_rtp_transport)
+        await self._run_answer(protocol, invite, fake_rtp_transport)
         response, _ = protocol._sent_responses[-1]
         assert response.body.media[0].fmt == ["126"]
         assert any(
@@ -459,17 +462,19 @@ class TestAnswer:
             for a in response.body.media[0].attributes
         )
 
-    def test_answer__no_sdp_falls_back_to_default(self, fake_rtp_transport):
+    @pytest.mark.asyncio
+    async def test_answer__no_sdp_falls_back_to_default(self, fake_rtp_transport):
         """Use payload type 0 (PCMU) when the INVITE has no SDP body."""
         protocol = FakeProtocol()
         addr = ("192.0.2.1", 5060)
         invite = self._make_invite("answer-no-sdp-1")
         protocol.request_received(invite, addr)
-        self._run_answer(protocol, invite, fake_rtp_transport)
+        await self._run_answer(protocol, invite, fake_rtp_transport)
         response, _ = protocol._sent_responses[-1]
         assert response.body.media[0].fmt == ["0"]
 
-    def test_answer__includes_to_tag(self, fake_rtp_transport):
+    @pytest.mark.asyncio
+    async def test_answer__includes_to_tag(self, fake_rtp_transport):
         """Include the locally generated To tag in the 200 OK response."""
         protocol = FakeProtocol()
         addr = ("192.0.2.1", 5060)
@@ -484,20 +489,18 @@ class TestAnswer:
         invite = self._make_invite("answer-tag-1", sdp_body)
         protocol.request_received(invite, addr)
         stored_tag = protocol._to_tags["answer-tag-1"]
-        self._run_answer(protocol, invite, fake_rtp_transport)
+        await self._run_answer(protocol, invite, fake_rtp_transport)
         response, _ = protocol._sent_responses[-1]
         assert f";tag={stored_tag}" in response.headers.get("To", "")
 
-    def test_answer__no_address_logs_error(self, caplog):
+    @pytest.mark.asyncio
+    async def test_answer__no_address_logs_error(self, caplog):
         """Log an error and return early when no address is stored for the Call-ID."""
         protocol = FakeProtocol()
         invite = self._make_invite("no-addr-answer-1")
 
-        async def run():
-            await protocol._answer(invite, asyncio.DatagramProtocol)
-
         with caplog.at_level("ERROR"):
-            asyncio.run(run())
+            await protocol._answer(invite, asyncio.DatagramProtocol)
         assert "No address found" in caplog.text
         assert not protocol._sent_responses
 

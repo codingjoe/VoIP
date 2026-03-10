@@ -1,6 +1,5 @@
 """Tests for the SIP session and RTP call handler."""
 
-import asyncio
 import socket
 import struct
 from unittest.mock import MagicMock, patch
@@ -66,99 +65,74 @@ class TestSIP:
         protocol.connection_made(MagicMock())
         protocol.call_received(make_invite())  # must not raise
 
-    def test_answer__sends_200_ok(self):
+    async def test_answer__sends_200_ok(self):
         """Send a 200 OK response with an SDP body when answering."""
+        protocol = SIP()
+        send = MagicMock()
+        protocol.send = send
+        request = make_invite()
+        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        await protocol._answer(request, RTP)
+        send.assert_called_once()
+        response, addr = send.call_args[0]
+        assert response.status_code == 200
+        assert response.reason == "OK"
+        assert addr == ("192.0.2.1", 5060)
 
-        async def run() -> None:
-            protocol = SIP()
-            send = MagicMock()
-            protocol.send = send
-            request = make_invite()
-            protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
-            await protocol._answer(request, RTP)
-            send.assert_called_once()
-            response, addr = send.call_args[0]
-            assert response.status_code == 200
-            assert response.reason == "OK"
-            assert addr == ("192.0.2.1", 5060)
-
-        asyncio.run(run())
-
-    def test_answer__sdp_contains_opus_audio_line(self):
+    async def test_answer__sdp_contains_opus_audio_line(self):
         """Include an Opus audio media line in the SDP body of the 200 OK."""
+        protocol = SIP()
+        send = MagicMock()
+        protocol.send = send
+        request = make_invite()
+        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        await protocol._answer(request, RTP)
+        response, _ = send.call_args[0]
+        assert b"m=audio" in bytes(response.body)
+        assert b"RTP/AVP 0" in bytes(response.body)
 
-        async def run() -> None:
-            protocol = SIP()
-            send = MagicMock()
-            protocol.send = send
-            request = make_invite()
-            protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
-            await protocol._answer(request, RTP)
-            response, _ = send.call_args[0]
-            assert b"m=audio" in bytes(response.body)
-            assert b"RTP/AVP 0" in bytes(response.body)
-
-        asyncio.run(run())
-
-    def test_answer__sdp_uses_stun_public_address_for_rtp(self):
+    async def test_answer__sdp_uses_stun_public_address_for_rtp(self):
         """_answer advertises the STUN-discovered public IP:port in the SDP when STUN is configured."""
-
-        async def run() -> None:
-            protocol = SIP(stun_server_address=("stun.example.com", 3478))
-            send = MagicMock()
-            protocol.send = send
-            request = make_invite()
-            protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
-            with patch.object(
-                RTP, "stun_discover", return_value=("203.0.113.5", 54321)
-            ):
-                await protocol._answer(request, RTP)
-            response, _ = send.call_args[0]
-            assert b"c=IN IP4 203.0.113.5" in bytes(response.body)
-            assert b"m=audio 54321" in bytes(response.body)
-
-        asyncio.run(run())
-
-    def test_answer__sdp_falls_back_to_local_when_rtp_stun_fails(self):
-        """_answer falls back to local address when RTP STUN discovery fails."""
-
-        async def run() -> None:
-            protocol = SIP(stun_server_address=("stun.example.com", 3478))
-            send = MagicMock()
-            protocol.send = send
-            request = make_invite()
-            protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
-            with patch.object(
-                RTP, "stun_discover", side_effect=TimeoutError("timeout")
-            ):
-                await protocol._answer(request, RTP)
-            response, _ = send.call_args[0]
-            # The SDP should still be sent (just with local address)
-            assert b"m=audio" in bytes(response.body)
-            assert b"RTP/AVP 0" in bytes(response.body)
-
-        asyncio.run(run())
-
-    def test_answer__copies_dialog_headers(self):
-        """Copy Via, To, From, Call-ID, and CSeq headers into the 200 OK."""
-
-        async def run() -> None:
-            protocol = SIP()
-            send = MagicMock()
-            protocol.send = send
-            request = make_invite()
-            protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        protocol = SIP(stun_server_address=("stun.example.com", 3478))
+        send = MagicMock()
+        protocol.send = send
+        request = make_invite()
+        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        with patch.object(RTP, "stun_discover", return_value=("203.0.113.5", 54321)):
             await protocol._answer(request, RTP)
-            response, _ = send.call_args[0]
-            assert response.headers["Via"] == "SIP/2.0/UDP pc33.atlanta.com"
-            assert response.headers["To"] == "sip:alice@atlanta.com"
-            assert response.headers["From"] == "sip:bob@biloxi.com"
-            assert response.headers["Call-ID"] == "1234@pc33"
-            assert response.headers["CSeq"] == "1 INVITE"
+        response, _ = send.call_args[0]
+        assert b"c=IN IP4 203.0.113.5" in bytes(response.body)
+        assert b"m=audio 54321" in bytes(response.body)
 
-        asyncio.run(run())
+    async def test_answer__sdp_falls_back_to_local_when_rtp_stun_fails(self):
+        """_answer falls back to local address when RTP STUN discovery fails."""
+        protocol = SIP(stun_server_address=("stun.example.com", 3478))
+        send = MagicMock()
+        protocol.send = send
+        request = make_invite()
+        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        with patch.object(RTP, "stun_discover", side_effect=TimeoutError("timeout")):
+            await protocol._answer(request, RTP)
+        response, _ = send.call_args[0]
+        assert b"m=audio" in bytes(response.body)
+        assert b"RTP/AVP 0" in bytes(response.body)
 
-    def test_answer__instantiates_call_class_with_caller(self):
+    async def test_answer__copies_dialog_headers(self):
+        """Copy Via, To, From, Call-ID, and CSeq headers into the 200 OK."""
+        protocol = SIP()
+        send = MagicMock()
+        protocol.send = send
+        request = make_invite()
+        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        await protocol._answer(request, RTP)
+        response, _ = send.call_args[0]
+        assert response.headers["Via"] == "SIP/2.0/UDP pc33.atlanta.com"
+        assert response.headers["To"] == "sip:alice@atlanta.com"
+        assert response.headers["From"] == "sip:bob@biloxi.com"
+        assert response.headers["Call-ID"] == "1234@pc33"
+        assert response.headers["CSeq"] == "1 INVITE"
+
+    async def test_answer__instantiates_call_class_with_caller(self):
         """The call_class is instantiated with the caller from the From header."""
         created = []
 
@@ -167,18 +141,15 @@ class TestSIP:
                 super().__init__(caller=caller)
                 created.append(self)
 
-        async def run() -> None:
-            protocol = SIP()
-            protocol.send = MagicMock()
-            request = make_invite()
-            protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
-            await protocol._answer(request, MyCall)
-
-        asyncio.run(run())
+        protocol = SIP()
+        protocol.send = MagicMock()
+        request = make_invite()
+        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        await protocol._answer(request, MyCall)
         assert len(created) == 1
         assert created[0].caller == "sip:bob@biloxi.com"
 
-    def test_answer__rtp_receives_audio(self):
+    async def test_answer__rtp_receives_audio(self):
         """Deliver audio from RTP packets to the call's audio_received via the RTP socket."""
         received_audio = []
 
@@ -186,36 +157,35 @@ class TestSIP:
             def audio_received(self, data: bytes) -> None:
                 received_audio.append(data)
 
-        async def run() -> None:
-            protocol = SIP()
-            send = MagicMock()
-            protocol.send = send
-            request = make_invite()
-            protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
-            await protocol._answer(request, AudioCapture)
-            response, _ = send.call_args[0]
+        protocol = SIP()
+        send = MagicMock()
+        protocol.send = send
+        request = make_invite()
+        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        await protocol._answer(request, AudioCapture)
+        response, _ = send.call_args[0]
 
-            sdp_line = next(
-                line
-                for line in bytes(response.body).decode().splitlines()
-                if line.startswith("m=audio")
-            )
-            rtp_port = int(sdp_line.split()[1])
+        sdp_line = next(
+            line
+            for line in bytes(response.body).decode().splitlines()
+            if line.startswith("m=audio")
+        )
+        rtp_port = int(sdp_line.split()[1])
 
-            loop = asyncio.get_running_loop()
-            send_transport, _ = await loop.create_datagram_endpoint(
-                asyncio.DatagramProtocol,
-                remote_addr=("127.0.0.1", rtp_port),
-            )
-            rtp_packet = b"\x80\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00audio"
-            send_transport.sendto(rtp_packet)
-            await asyncio.sleep(0.05)
-            send_transport.close()
+        import asyncio
 
-        asyncio.run(run())
+        loop = asyncio.get_running_loop()
+        send_transport, _ = await loop.create_datagram_endpoint(
+            asyncio.DatagramProtocol,
+            remote_addr=("127.0.0.1", rtp_port),
+        )
+        rtp_packet = b"\x80\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00audio"
+        send_transport.sendto(rtp_packet)
+        await asyncio.sleep(0.05)
+        send_transport.close()
         assert received_audio == [b"audio"]
 
-    def test_answer__rtp_receives_multiple_packets(self):
+    async def test_answer__rtp_receives_multiple_packets(self):
         """Call audio_received with each RTP payload when multiple packets arrive."""
         received_audio = []
 
@@ -223,65 +193,57 @@ class TestSIP:
             def audio_received(self, data: bytes) -> None:
                 received_audio.append(data)
 
-        async def run() -> None:
-            protocol = SIP()
-            send = MagicMock()
-            protocol.send = send
-            request = make_invite()
-            protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
-            await protocol._answer(request, AudioCapture)
-            response, _ = send.call_args[0]
-            sdp_line = next(
-                line
-                for line in bytes(response.body).decode().splitlines()
-                if line.startswith("m=audio")
-            )
-            rtp_port = int(sdp_line.split()[1])
+        protocol = SIP()
+        send = MagicMock()
+        protocol.send = send
+        request = make_invite()
+        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        await protocol._answer(request, AudioCapture)
+        response, _ = send.call_args[0]
+        sdp_line = next(
+            line
+            for line in bytes(response.body).decode().splitlines()
+            if line.startswith("m=audio")
+        )
+        rtp_port = int(sdp_line.split()[1])
 
-            loop = asyncio.get_running_loop()
-            send_transport, _ = await loop.create_datagram_endpoint(
-                asyncio.DatagramProtocol,
-                remote_addr=("127.0.0.1", rtp_port),
-            )
-            header = b"\x80\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00"
-            send_transport.sendto(header + b"chunk1")
-            send_transport.sendto(header + b"chunk2")
-            await asyncio.sleep(0.05)
-            send_transport.close()
+        import asyncio
 
-        asyncio.run(run())
+        loop = asyncio.get_running_loop()
+        send_transport, _ = await loop.create_datagram_endpoint(
+            asyncio.DatagramProtocol,
+            remote_addr=("127.0.0.1", rtp_port),
+        )
+        header = b"\x80\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00"
+        send_transport.sendto(header + b"chunk1")
+        send_transport.sendto(header + b"chunk2")
+        await asyncio.sleep(0.05)
+        send_transport.close()
         assert received_audio == [b"chunk1", b"chunk2"]
 
-    def test_answer__content_length_serialized(self):
+    async def test_answer__content_length_serialized(self):
         """Content-Length is automatically included when the response is serialized."""
+        protocol = SIP()
+        send = MagicMock()
+        protocol.send = send
+        request = make_invite()
+        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        await protocol._answer(request, RTP)
+        response, _ = send.call_args[0]
+        serialized = bytes(response)
+        parsed = Message.parse(serialized)
+        assert "Content-Length" in parsed.headers
 
-        async def run() -> None:
-            protocol = SIP()
-            send = MagicMock()
-            protocol.send = send
-            request = make_invite()
-            protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
-            await protocol._answer(request, RTP)
-            response, _ = send.call_args[0]
-            serialized = bytes(response)
-            parsed = Message.parse(serialized)
-            assert "Content-Length" in parsed.headers
-
-        asyncio.run(run())
-
-    def test_answer__logs_info(self, caplog):
+    async def test_answer__logs_info(self, caplog):
         """Log an info message when answering a call."""
         import logging
 
-        async def run():
-            protocol = SIP()
-            protocol.send = MagicMock()
-            request = make_invite()
-            protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
-            with caplog.at_level(logging.INFO, logger="voip.sip.protocol"):
-                await protocol._answer(request, RTP)
-
-        asyncio.run(run())
+        protocol = SIP()
+        protocol.send = MagicMock()
+        request = make_invite()
+        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        with caplog.at_level(logging.INFO, logger="voip.sip.protocol"):
+            await protocol._answer(request, RTP)
         assert any("Answering" in r.message for r in caplog.records)
 
     def test_reject__sends_busy_here_by_default(self):
@@ -367,30 +329,28 @@ class TestSIP:
         with pytest.raises(NotImplementedError, match="OPTIONS"):
             protocol.request_received(request, ("192.0.2.1", 5060))
 
-    def test_answer__via_call_received__schedules_answer(self):
+    async def test_answer__via_call_received__schedules_answer(self):
         """answer() schedules the async _answer task when called from call_received."""
+        answered = []
 
-        async def run():
-            answered = []
+        class MySIP(SIP):
+            def call_received(self, request):
+                self.answer(request=request, call_class=RTP)
 
-            class MySIP(SIP):
-                def call_received(self, request):
-                    self.answer(request=request, call_class=RTP)
+            async def _answer(self, request, call_class):
+                answered.append((request, call_class))
 
-                async def _answer(self, request, call_class):
-                    answered.append((request, call_class))
+        protocol = MySIP()
+        protocol.connection_made(MagicMock())
+        request = make_invite()
+        addr = ("192.0.2.1", 5060)
+        protocol._request_addrs[request.headers["Call-ID"]] = addr
+        protocol.call_received(request)
+        import asyncio
 
-            protocol = MySIP()
-            protocol.connection_made(MagicMock())
-            request = make_invite()
-            addr = ("192.0.2.1", 5060)
-            protocol._request_addrs[request.headers["Call-ID"]] = addr
-            protocol.call_received(request)
-            await asyncio.sleep(0.01)
-            assert len(answered) == 1
-            assert answered[0][1] is RTP
-
-        asyncio.run(run())
+        await asyncio.sleep(0.01)
+        assert len(answered) == 1
+        assert answered[0][1] is RTP
 
 
 class TestSessionInitiationProtocol:
@@ -414,47 +374,43 @@ class TestSessionInitiationProtocol:
         assert b"REGISTER sip:example.com SIP/2.0" in data
         assert addr == ("192.0.2.2", 5060)
 
-    def test_connection_made__with_stun__registers_after_discovery(self):
+    async def test_connection_made__with_stun__registers_after_discovery(self):
         """Send REGISTER after STUN discovery when a STUN server is configured."""
+        import asyncio
 
-        async def run():
-            p = SessionInitiationProtocol(
-                ("192.0.2.2", 5060),
-                "sip:alice@example.com",
-                "alice",
-                "password",  # noqa: S106
-                stun_server_address=("stun.example.com", 3478),
-            )
-            transport = make_mock_transport()
-            with patch.object(
-                p, "stun_discover", return_value=("203.0.113.1", 54321)
-            ) as mock_discover:
-                p.connection_made(transport)
-                await asyncio.sleep(0.05)
-            mock_discover.assert_called_once_with("stun.example.com", 3478)
-            assert p.public_address == ("203.0.113.1", 54321)
-            transport.sendto.assert_called()
+        p = SessionInitiationProtocol(
+            ("192.0.2.2", 5060),
+            "sip:alice@example.com",
+            "alice",
+            "password",  # noqa: S106
+            stun_server_address=("stun.example.com", 3478),
+        )
+        transport = make_mock_transport()
+        with patch.object(
+            p, "stun_discover", return_value=("203.0.113.1", 54321)
+        ) as mock_discover:
+            p.connection_made(transport)
+            await asyncio.sleep(0.05)
+        mock_discover.assert_called_once_with("stun.example.com", 3478)
+        assert p.public_address == ("203.0.113.1", 54321)
+        transport.sendto.assert_called()
 
-        asyncio.run(run())
-
-    def test_connection_made__with_stun__registers_even_if_discovery_fails(self):
+    async def test_connection_made__with_stun__registers_even_if_discovery_fails(self):
         """Send REGISTER even when STUN discovery raises an error."""
+        import asyncio
 
-        async def run():
-            p = SessionInitiationProtocol(
-                ("192.0.2.2", 5060),
-                "sip:alice@example.com",
-                "alice",
-                "password",  # noqa: S106
-                stun_server_address=("stun.example.com", 3478),
-            )
-            transport = make_mock_transport()
-            with patch.object(p, "stun_discover", side_effect=TimeoutError("timeout")):
-                p.connection_made(transport)
-                await asyncio.sleep(0.05)
-            transport.sendto.assert_called()
-
-        asyncio.run(run())
+        p = SessionInitiationProtocol(
+            ("192.0.2.2", 5060),
+            "sip:alice@example.com",
+            "alice",
+            "password",  # noqa: S106
+            stun_server_address=("stun.example.com", 3478),
+        )
+        transport = make_mock_transport()
+        with patch.object(p, "stun_discover", side_effect=TimeoutError("timeout")):
+            p.connection_made(transport)
+            await asyncio.sleep(0.05)
+        transport.sendto.assert_called()
 
     def test_register__includes_required_headers(self):
         """REGISTER request includes From, To, Call-ID, CSeq, Contact and Expires."""
@@ -648,59 +604,53 @@ class TestSessionInitiationProtocol:
         data, _ = transport.sendto.call_args[0]
         assert b"Contact: <sip:alice@203.0.113.1:12345>" in data
 
-    def test_handle_stun__parses_xor_mapped_address(self):
+    async def test_handle_stun__parses_xor_mapped_address(self):
         """handle_stun resolves the future with the XOR-MAPPED-ADDRESS."""
+        import asyncio
 
-        async def run():
-            p = make_register_session()
-            p.connection_made(make_mock_transport())
-            p._stun_transactions = {}
-            magic_cookie = 0x2112A442
-            transaction_id = b"\x01" * 12
-            public_ip = (203 << 24) | (0 << 16) | (113 << 8) | 5
-            xor_ip = public_ip ^ magic_cookie
-            xor_port = 54321 ^ (magic_cookie >> 16)
-            attr_val = struct.pack(">BBH I", 0x00, 0x01, xor_port, xor_ip)
-            attr = struct.pack(">HH", 0x0020, len(attr_val)) + attr_val
-            msg_len = len(attr)
-            response = (
-                struct.pack(">HHI12s", 0x0101, msg_len, magic_cookie, transaction_id)
-                + attr
-            )
-            loop = asyncio.get_running_loop()
-            future = loop.create_future()
-            p._stun_transactions[transaction_id] = future
-            p.handle_stun(response, ("stun.l.google.com", 19302))
-            result = future.result()
-            assert result == ("203.0.113.5", 54321)
+        p = make_register_session()
+        p.connection_made(make_mock_transport())
+        p._stun_transactions = {}
+        magic_cookie = 0x2112A442
+        transaction_id = b"\x01" * 12
+        public_ip = (203 << 24) | (0 << 16) | (113 << 8) | 5
+        xor_ip = public_ip ^ magic_cookie
+        xor_port = 54321 ^ (magic_cookie >> 16)
+        attr_val = struct.pack(">BBH I", 0x00, 0x01, xor_port, xor_ip)
+        attr = struct.pack(">HH", 0x0020, len(attr_val)) + attr_val
+        msg_len = len(attr)
+        response = (
+            struct.pack(">HHI12s", 0x0101, msg_len, magic_cookie, transaction_id) + attr
+        )
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        p._stun_transactions[transaction_id] = future
+        p.handle_stun(response, ("stun.l.google.com", 19302))
+        result = future.result()
+        assert result == ("203.0.113.5", 54321)
 
-        asyncio.run(run())
-
-    def test_handle_stun__falls_back_to_mapped_address(self):
+    async def test_handle_stun__falls_back_to_mapped_address(self):
         """handle_stun falls back to MAPPED-ADDRESS when XOR-MAPPED-ADDRESS is absent."""
+        import asyncio
 
-        async def run():
-            p = make_register_session()
-            p.connection_made(make_mock_transport())
-            p._stun_transactions = {}
-            magic_cookie = 0x2112A442
-            transaction_id = b"\x02" * 12
-            attr_val = struct.pack(
-                ">BBH4s", 0x00, 0x01, 60001, socket.inet_aton("198.51.100.7")
-            )
-            attr = struct.pack(">HH", 0x0001, len(attr_val)) + attr_val
-            msg_len = len(attr)
-            response = (
-                struct.pack(">HHI12s", 0x0101, msg_len, magic_cookie, transaction_id)
-                + attr
-            )
-            loop = asyncio.get_running_loop()
-            future = loop.create_future()
-            p._stun_transactions[transaction_id] = future
-            p.handle_stun(response, ("stun.example.com", 3478))
-            assert future.result() == ("198.51.100.7", 60001)
-
-        asyncio.run(run())
+        p = make_register_session()
+        p.connection_made(make_mock_transport())
+        p._stun_transactions = {}
+        magic_cookie = 0x2112A442
+        transaction_id = b"\x02" * 12
+        attr_val = struct.pack(
+            ">BBH4s", 0x00, 0x01, 60001, socket.inet_aton("198.51.100.7")
+        )
+        attr = struct.pack(">HH", 0x0001, len(attr_val)) + attr_val
+        msg_len = len(attr)
+        response = (
+            struct.pack(">HHI12s", 0x0101, msg_len, magic_cookie, transaction_id) + attr
+        )
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        p._stun_transactions[transaction_id] = future
+        p.handle_stun(response, ("stun.example.com", 3478))
+        assert future.result() == ("198.51.100.7", 60001)
 
     def test_datagram_received__stun_routes_to_handle_stun(self):
         """datagram_received routes STUN messages (first byte 0-3) to handle_stun."""

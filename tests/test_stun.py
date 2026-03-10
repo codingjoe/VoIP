@@ -69,66 +69,54 @@ class TestSTUNAttributeType:
 
 
 class TestSTUNProtocol:
-    def test_handle_stun__xor_mapped_address(self):
+    async def test_handle_stun__xor_mapped_address(self):
         """Resolve the future with the XOR-MAPPED-ADDRESS when present."""
+        protocol = ConcreteSTUN()
+        transaction_id = b"\x01" * 12
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        protocol._stun_transactions[transaction_id] = future
+        protocol.handle_stun(
+            make_success_response(
+                transaction_id,
+                make_xor_mapped_address_attribute("203.0.113.5", 54321),
+            ),
+            ("stun.example.com", 3478),
+        )
+        assert future.result() == ("203.0.113.5", 54321)
 
-        async def run():
-            protocol = ConcreteSTUN()
-            transaction_id = b"\x01" * 12
-            loop = asyncio.get_running_loop()
-            future = loop.create_future()
-            protocol._stun_transactions[transaction_id] = future
-            protocol.handle_stun(
-                make_success_response(
-                    transaction_id,
-                    make_xor_mapped_address_attribute("203.0.113.5", 54321),
-                ),
-                ("stun.example.com", 3478),
-            )
-            assert future.result() == ("203.0.113.5", 54321)
-
-        asyncio.run(run())
-
-    def test_handle_stun__mapped_address_fallback(self):
+    async def test_handle_stun__mapped_address_fallback(self):
         """Fall back to MAPPED-ADDRESS when XOR-MAPPED-ADDRESS is absent."""
+        protocol = ConcreteSTUN()
+        transaction_id = b"\x02" * 12
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        protocol._stun_transactions[transaction_id] = future
+        protocol.handle_stun(
+            make_success_response(
+                transaction_id,
+                make_mapped_address_attribute("198.51.100.7", 60001),
+            ),
+            ("stun.example.com", 3478),
+        )
+        assert future.result() == ("198.51.100.7", 60001)
 
-        async def run():
-            protocol = ConcreteSTUN()
-            transaction_id = b"\x02" * 12
-            loop = asyncio.get_running_loop()
-            future = loop.create_future()
-            protocol._stun_transactions[transaction_id] = future
-            protocol.handle_stun(
-                make_success_response(
-                    transaction_id,
-                    make_mapped_address_attribute("198.51.100.7", 60001),
-                ),
-                ("stun.example.com", 3478),
-            )
-            assert future.result() == ("198.51.100.7", 60001)
-
-        asyncio.run(run())
-
-    def test_handle_stun__xor_mapped_address_preferred_over_mapped(self):
+    async def test_handle_stun__xor_mapped_address_preferred_over_mapped(self):
         """Prefer XOR-MAPPED-ADDRESS over MAPPED-ADDRESS when both are present."""
-
-        async def run():
-            protocol = ConcreteSTUN()
-            transaction_id = b"\x03" * 12
-            loop = asyncio.get_running_loop()
-            future = loop.create_future()
-            protocol._stun_transactions[transaction_id] = future
-            protocol.handle_stun(
-                make_success_response(
-                    transaction_id,
-                    make_xor_mapped_address_attribute("203.0.113.1", 12345),
-                    make_mapped_address_attribute("198.51.100.1", 9999),
-                ),
-                ("stun.example.com", 3478),
-            )
-            assert future.result() == ("203.0.113.1", 12345)
-
-        asyncio.run(run())
+        protocol = ConcreteSTUN()
+        transaction_id = b"\x03" * 12
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        protocol._stun_transactions[transaction_id] = future
+        protocol.handle_stun(
+            make_success_response(
+                transaction_id,
+                make_xor_mapped_address_attribute("203.0.113.1", 12345),
+                make_mapped_address_attribute("198.51.100.1", 9999),
+            ),
+            ("stun.example.com", 3478),
+        )
+        assert future.result() == ("203.0.113.1", 12345)
 
     def test_handle_stun__truncated_packet__returns_early(self):
         """Silently ignore packets shorter than the minimum 20-byte STUN header."""
@@ -136,48 +124,39 @@ class TestSTUNProtocol:
         protocol.handle_stun(b"\x00" * 19, ("stun.example.com", 3478))
         # No exception raised, no future resolved
 
-    def test_handle_stun__wrong_magic_cookie__returns_early(self):
+    async def test_handle_stun__wrong_magic_cookie__returns_early(self):
         """Ignore responses with an incorrect magic cookie."""
+        protocol = ConcreteSTUN()
+        transaction_id = b"\x04" * 12
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        protocol._stun_transactions[transaction_id] = future
+        data = struct.pack(
+            ">HHI12s",
+            STUNMessageType.BINDING_SUCCESS_RESPONSE,
+            0,
+            0xDEADBEEF,  # wrong magic cookie
+            transaction_id,
+        )
+        protocol.handle_stun(data, ("stun.example.com", 3478))
+        assert not future.done()
 
-        async def run():
-            protocol = ConcreteSTUN()
-            transaction_id = b"\x04" * 12
-            loop = asyncio.get_running_loop()
-            future = loop.create_future()
-            protocol._stun_transactions[transaction_id] = future
-            # Build a response with the wrong magic cookie
-            data = struct.pack(
-                ">HHI12s",
-                STUNMessageType.BINDING_SUCCESS_RESPONSE,
-                0,
-                0xDEADBEEF,  # wrong magic cookie
-                transaction_id,
-            )
-            protocol.handle_stun(data, ("stun.example.com", 3478))
-            assert not future.done()
-
-        asyncio.run(run())
-
-    def test_handle_stun__wrong_message_type__returns_early(self):
+    async def test_handle_stun__wrong_message_type__returns_early(self):
         """Ignore non-success-response STUN messages."""
-
-        async def run():
-            protocol = ConcreteSTUN()
-            transaction_id = b"\x05" * 12
-            loop = asyncio.get_running_loop()
-            future = loop.create_future()
-            protocol._stun_transactions[transaction_id] = future
-            data = struct.pack(
-                ">HHI12s",
-                STUNMessageType.BINDING_REQUEST,  # not a success response
-                0,
-                MAGIC_COOKIE,
-                transaction_id,
-            )
-            protocol.handle_stun(data, ("stun.example.com", 3478))
-            assert not future.done()
-
-        asyncio.run(run())
+        protocol = ConcreteSTUN()
+        transaction_id = b"\x05" * 12
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        protocol._stun_transactions[transaction_id] = future
+        data = struct.pack(
+            ">HHI12s",
+            STUNMessageType.BINDING_REQUEST,  # not a success response
+            0,
+            MAGIC_COOKIE,
+            transaction_id,
+        )
+        protocol.handle_stun(data, ("stun.example.com", 3478))
+        assert not future.done()
 
     def test_handle_stun__unknown_transaction__returns_early(self):
         """Ignore responses whose transaction ID has no pending future."""
@@ -191,59 +170,42 @@ class TestSTUNProtocol:
         )
         # No exception raised
 
-    def test_handle_stun__no_address_attribute__sets_exception(self):
+    async def test_handle_stun__no_address_attribute__sets_exception(self):
         """Set a RuntimeError on the future when no address attribute is present."""
+        protocol = ConcreteSTUN()
+        transaction_id = b"\x06" * 12
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        protocol._stun_transactions[transaction_id] = future
+        protocol.handle_stun(
+            make_success_response(transaction_id),
+            ("stun.example.com", 3478),
+        )
+        assert future.done()
+        with pytest.raises(RuntimeError, match="No address attribute"):
+            future.result()
 
-        async def run():
-            protocol = ConcreteSTUN()
-            transaction_id = b"\x06" * 12
-            loop = asyncio.get_running_loop()
-            future = loop.create_future()
-            protocol._stun_transactions[transaction_id] = future
-            # Response with no attributes
-            protocol.handle_stun(
-                make_success_response(transaction_id),
-                ("stun.example.com", 3478),
-            )
-            assert future.done()
-            with pytest.raises(RuntimeError, match="No address attribute"):
-                future.result()
-
-        asyncio.run(run())
-
-    def test_stun_discover__sends_binding_request(self):
+    async def test_stun_discover__sends_binding_request(self):
         """Send a STUN Binding Request datagram to the specified server."""
+        protocol = ConcreteSTUN()
+        transaction_id_holder: list[bytes] = []
 
-        async def run():
-            protocol = ConcreteSTUN()
-            transaction_id_holder: list[bytes] = []
+        def capture_sendto(data, address):
+            transaction_id_holder.append(data[8:20])
+            future = protocol._stun_transactions.get(data[8:20])
+            if future:
+                future.set_result(("1.2.3.4", 4321))
 
-            def capture_sendto(data, address):
-                # Extract the 12-byte transaction ID from the request
-                transaction_id_holder.append(data[8:20])
-                # Immediately resolve the future to avoid timeout
-                future = protocol._stun_transactions.get(data[8:20])
-                if future:
-                    future.set_result(("1.2.3.4", 4321))
+        protocol._transport.sendto.side_effect = capture_sendto
+        result = await protocol.stun_discover("stun.example.com", 3478)
+        protocol._transport.sendto.assert_called_once()
+        _, called_address = protocol._transport.sendto.call_args[0]
+        assert called_address == ("stun.example.com", 3478)
+        assert result == ("1.2.3.4", 4321)
 
-            protocol._transport.sendto.side_effect = capture_sendto
-            result = await protocol.stun_discover("stun.example.com", 3478)
-            protocol._transport.sendto.assert_called_once()
-            _, called_address = protocol._transport.sendto.call_args[0]
-            assert called_address == ("stun.example.com", 3478)
-            assert result == ("1.2.3.4", 4321)
-
-        asyncio.run(run())
-
-    def test_stun_discover__cleans_up_transaction_on_timeout(self):
+    async def test_stun_discover__cleans_up_transaction_on_timeout(self):
         """Remove the pending transaction from the dict when the request times out."""
-
-        async def run():
-            protocol = ConcreteSTUN()
-            with pytest.raises((TimeoutError, asyncio.TimeoutError)):
-                await protocol.stun_discover(
-                    "stun.example.com", 3478, timeout_secs=0.01
-                )
-            assert len(protocol._stun_transactions) == 0
-
-        asyncio.run(run())
+        protocol = ConcreteSTUN()
+        with pytest.raises((TimeoutError, asyncio.TimeoutError)):
+            await protocol.stun_discover("stun.example.com", 3478, timeout_secs=0.01)
+        assert len(protocol._stun_transactions) == 0

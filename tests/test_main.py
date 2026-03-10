@@ -348,7 +348,7 @@ class TestTranscribeCLI:
                 headers={"From": "sip:caller@example.com", "Call-ID": "test@pc"},
             )
 
-            async def run():
+            async def _run_whisper():
                 with patch.object(protocol, "answer") as mock_answer:
                     protocol.connection_made(MagicMock())
                     protocol._request_addrs[request.headers["Call-ID"]] = (
@@ -358,8 +358,7 @@ class TestTranscribeCLI:
                     protocol.call_received(request)
                     mock_answer.assert_called_once()
                     _, kwargs = mock_answer.call_args
-                    # call_class must be provided and be a class type
                     assert "call_class" in kwargs
                     assert isinstance(kwargs["call_class"], type)
 
-            asyncio.run(run())
+            asyncio.run(_run_whisper())

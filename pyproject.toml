@@ -59,6 +59,7 @@ dev = [
 test = [
   "pytest",
   "pytest-cov",
+  "pytest-asyncio>=1.3.0",
 ]
 
 [project.urls]
@@ -71,6 +72,7 @@ write_to = "voip/_version.py"
 [tool.pytest.ini_options]
 minversion = "6.0"
 addopts = "--cov --strict-markers --cov-report=xml --cov-report=term"
+asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "integration: marks tests as integration tests requiring network access (deselect with '-m \"not integration\"')",
