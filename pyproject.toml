@@ -49,6 +49,7 @@ voip = "voip.__main__:main"
 
 [project.entry-points."pygments.lexers"]
 sip = "voip.sip.lexers:SIPLexer"
+sdp = "voip.sdp.lexers:SDPLexer"
 
 [tool.flit.module]
 name = "voip"

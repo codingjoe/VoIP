@@ -27,6 +27,11 @@ class ConsoleMessageProcessor:
         self.pprint(response, addr)
         super().response_received(response, addr)
 
+    def send(self, message, addr: tuple[str, int]) -> None:
+        """Send a message and print it to stdout."""
+        self.pprint(message, addr)
+        super().send(message, addr)
+
     @staticmethod
     def pprint(msg, addr):
         """Pretty print the message."""
@@ -137,7 +142,7 @@ def transcribe(model, server, aor, username, password, local_port, stun_server):
 
         def call_received(self, request) -> None:
             click.echo(
-                f"Incoming call from {request.headers.get('From', '')}: {request!r}",
+                f"Incoming call from {request.headers.get('From', '')}",
                 err=True,
             )
             self.answer(request=request, call_class=TranscribingCall)

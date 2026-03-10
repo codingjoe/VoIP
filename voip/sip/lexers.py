@@ -6,8 +6,8 @@ from pygments import lexer, lexers, token
 class SIPLexer(lexers.HttpLexer):
     """Lexer for Session Initiation Protocol (SIP) messages."""
 
-    name = "SIP"
-    aliases = ["sip"]
+    name = "Session Initiation Protocol"
+    aliases = ["SIP", "sip"]
 
     tokens = {
         "root": [

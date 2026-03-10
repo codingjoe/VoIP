@@ -65,6 +65,8 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
         super().__init__()
         #: Pending INVITE addresses keyed by Call-ID.
         self._request_addrs: dict[str, tuple[str, int]] = {}
+        #: Call-IDs for which a 200 OK has already been sent.
+        self._answered_calls: set[str] = set()
         self.server_address = server_address
         self.aor = aor
         self.username = username
@@ -121,12 +123,38 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
 
     def request_received(self, request: Request, addr: tuple[str, int]) -> None:
         """Dispatch a received SIP request to the appropriate handler."""
+        call_id = request.headers.get("Call-ID", "")
         match request.method:
             case "INVITE":
                 logger.info("INVITE received from %s", addr[0])
-                call_id = request.headers.get("Call-ID", "")
+                if call_id in self._answered_calls:
+                    logger.debug(
+                        "Ignoring INVITE retransmission for Call-ID %r", call_id
+                    )
+                    return
+                # Mark immediately (before async answering) so retransmissions
+                # that arrive while STUN/RTP setup is in progress are suppressed.
+                self._answered_calls.add(call_id)
                 self._request_addrs[call_id] = addr
                 self.call_received(request)
+            case "ACK":
+                self._answered_calls.discard(call_id)
+                self.ack_received(request)
+            case "BYE":
+                self._answered_calls.discard(call_id)
+                self.send(
+                    Response(
+                        status_code=SIPStatus.OK.status_code,
+                        reason=SIPStatus.OK.reason,
+                        headers={
+                            key: value
+                            for key, value in request.headers.items()
+                            if key in ("Via", "To", "From", "Call-ID", "CSeq")
+                        },
+                    ),
+                    addr,
+                )
+                self.bye_received(request)
             case _:
                 raise NotImplementedError(
                     f"Unsupported SIP request method: {request.method}"
@@ -217,6 +245,24 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
             request: The SIP INVITE request.
         """
 
+    def ack_received(self, request: Request) -> None:
+        """Handle an ACK confirming dialog establishment.
+
+        Override in subclasses to react to the ACK.
+
+        Args:
+            request: The SIP ACK request.
+        """
+
+    def bye_received(self, request: Request) -> None:
+        """Handle a BYE terminating a dialog.
+
+        Override in subclasses to tear down the call.
+
+        Args:
+            request: The SIP BYE request.
+        """
+
     def answer(
         self, request: Request, *, call_class: type[RealtimeTransportProtocol]
     ) -> None:
@@ -291,6 +337,7 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
             ),
             addr,
         )
+        self._answered_calls.add(call_id)
 
     def reject(
         self,

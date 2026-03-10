@@ -9,7 +9,7 @@ from voip.sip.lexers import SIPLexer  # noqa: E402
 class TestSIPLexer:
     def test_sip_lexer__name(self):
         """Expose 'SIP' as the lexer name."""
-        assert SIPLexer.name == "SIP"
+        assert SIPLexer.name == "Session Initiation Protocol"
 
     def test_sip_lexer__aliases(self):
         """Expose 'sip' as the lexer alias."""
@@ -68,6 +68,15 @@ class TestSIPLexer:
         tokens = list(lexer.get_tokens(data))
         token_types = [t for t, _ in tokens]
         assert token.Name.Function in token_types
+
+    def test_sip_lexer__sdp_body(self):
+        """Tokenize a SIP request with an SDP body using the SDPLexer."""
+        lexer = SIPLexer()
+        data = "INVITE sip:bob@biloxi.com SIP/2.0\r\nContent-Length: 13\r\n\r\nv=0\r\na=recvonly\r\n"
+        tokens = list(lexer.get_tokens(data))
+        token_types = [t for t, _ in tokens]
+        assert token.Name.Tag in token_types
+        assert token.Name.Attribute in token_types
 
     def test_sip_lexer__text_token(self):
         """Include Text tokens in tokenized output."""
