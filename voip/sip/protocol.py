@@ -21,7 +21,7 @@ from voip.stun import STUNProtocol
 from voip.types import DigestQoP
 
 from .messages import Message, Request, Response
-from .types import SIPStatus, SIPStatusCode
+from .types import Status
 
 if TYPE_CHECKING:
     from voip.rtp import RealtimeTransportProtocol
@@ -149,8 +149,8 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
                 self._answered_calls.discard(call_id)
                 self.send(
                     Response(
-                        status_code=SIPStatus.OK.status_code,
-                        reason=SIPStatus.OK.reason,
+                        status_code=Status["OK"],
+                        reason=Status["OK"].name,
                         headers=self._with_to_tag(
                             {
                                 key: value
@@ -164,6 +164,40 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
                 )
                 self._to_tags.pop(call_id, None)
                 self.bye_received(request)
+            case "CANCEL":
+                logger.info("CANCEL received for Call-ID %r", call_id)
+                self.send(
+                    Response(
+                        status_code=Status["OK"],
+                        reason=Status["OK"].name,
+                        headers={
+                            key: value
+                            for key, value in request.headers.items()
+                            if key in ("Via", "To", "From", "Call-ID", "CSeq")
+                        },
+                    ),
+                    addr,
+                )
+                invite_addr = self._request_addrs.pop(call_id, None)
+                if invite_addr is not None:
+                    self.send(
+                        Response(
+                            status_code=Status["Request Terminated"],
+                            reason=Status["Request Terminated"].name,
+                            headers=self._with_to_tag(
+                                {
+                                    key: value
+                                    for key, value in request.headers.items()
+                                    if key in ("Via", "To", "From", "Call-ID", "CSeq")
+                                },
+                                call_id,
+                            ),
+                        ),
+                        invite_addr,
+                    )
+                self._answered_calls.discard(call_id)
+                self._to_tags.pop(call_id, None)
+                self.cancel_received(request)
             case _:
                 raise NotImplementedError(
                     f"Unsupported SIP request method: {request.method}"
@@ -176,16 +210,15 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
         """
         if self.server_address is None:
             return  # no registration active; ignore unsolicited responses
-        if (
-            response.status_code == SIPStatusCode.OK
-            and "REGISTER" in response.headers.get("CSeq", "")
+        if response.status_code == Status["OK"] and "REGISTER" in response.headers.get(
+            "CSeq", ""
         ):
             logger.info("Registration successful")
             self.registered()
             return
         if response.status_code in (
-            SIPStatusCode.UNAUTHORIZED,
-            SIPStatusCode.PROXY_AUTHENTICATION_REQUIRED,
+            Status["Unauthorized"],
+            Status["Proxy Authentication Required"],
         ):
             if not self.username or not self.password:
                 logger.error(
@@ -196,9 +229,7 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
                 "Auth challenge received (%s), retrying with credentials",
                 response.status_code,
             )
-            is_proxy = (
-                response.status_code == SIPStatusCode.PROXY_AUTHENTICATION_REQUIRED
-            )
+            is_proxy = response.status_code == Status["Proxy Authentication Required"]
             challenge_key = "Proxy-Authenticate" if is_proxy else "WWW-Authenticate"
             params = self.parse_auth_challenge(response.headers.get(challenge_key, ""))
             realm = params.get("realm", "")
@@ -270,6 +301,16 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
 
         Args:
             request: The SIP BYE request.
+        """
+
+    def cancel_received(self, request: Request) -> None:
+        """Handle a CANCEL request for a pending INVITE.
+
+        Override in subclasses to react to caller cancellation before the call
+        is answered.
+
+        Args:
+            request: The SIP CANCEL request.
         """
 
     def answer(
@@ -354,8 +395,8 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
             attributes.append(Attribute(name="rtpmap", value=selected_rtpmap))
         self.send(
             Response(
-                status_code=SIPStatus.OK.status_code,
-                reason=SIPStatus.OK.reason,
+                status_code=Status["OK"],
+                reason=Status["OK"].name,
                 headers={
                     **self._with_to_tag(
                         {
@@ -415,8 +456,8 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
         )
         self.send(
             Response(
-                status_code=SIPStatus.RINGING.status_code,
-                reason=SIPStatus.RINGING.reason,
+                status_code=Status["Ringing"],
+                reason=Status["Ringing"].name,
                 headers=self._with_to_tag(
                     {
                         key: value
@@ -432,8 +473,8 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
     def reject(
         self,
         request: Request,
-        status_code: int = SIPStatus.BUSY_HERE.status_code,
-        reason: str = SIPStatus.BUSY_HERE.reason,
+        status_code: int = Status["Busy Here"],
+        reason: str = Status["Busy Here"].name,
     ) -> None:
         """Reject an incoming call.
 

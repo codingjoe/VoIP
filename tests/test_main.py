@@ -292,6 +292,7 @@ class TestTranscribeCLI:
 
             async def run():
                 with patch.object(protocol, "answer") as mock_answer:
+                    protocol.connection_made(MagicMock())
                     protocol._request_addrs[request.headers["Call-ID"]] = (
                         "192.0.2.1",
                         5060,
@@ -349,6 +350,7 @@ class TestTranscribeCLI:
 
             async def run():
                 with patch.object(protocol, "answer") as mock_answer:
+                    protocol.connection_made(MagicMock())
                     protocol._request_addrs[request.headers["Call-ID"]] = (
                         "192.0.2.1",
                         5060,

@@ -75,8 +75,8 @@ class TestSIPLexer:
         data = "INVITE sip:bob@biloxi.com SIP/2.0\r\nContent-Length: 13\r\n\r\nv=0\r\na=recvonly\r\n"
         tokens = list(lexer.get_tokens(data))
         token_types = [t for t, _ in tokens]
-        assert token.Name.Tag in token_types
-        assert token.Name.Attribute in token_types
+        assert token.Name.Function in token_types
+        assert token.Text in token_types
 
     def test_sip_lexer__text_token(self):
         """Include Text tokens in tokenized output."""

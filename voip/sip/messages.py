@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import dataclasses
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from voip.sdp.messages import SessionDescription
+from voip.sdp.messages import SessionDescription
 
 __all__ = ["Request", "Response", "Message"]
 
@@ -16,7 +14,7 @@ class Message:
     """A SIP message (RFC 3261 §7)."""
 
     headers: dict[str, str] = dataclasses.field(default_factory=dict)
-    body: bytes | SessionDescription = dataclasses.field(default=b"", repr=False)
+    body: SessionDescription | None = dataclasses.field(default=None, repr=False)
     version: str = "SIP/2.0"
 
     @classmethod
@@ -27,8 +25,6 @@ class Message:
         first_line, *header_lines = lines
         headers = {}
         for line in header_lines:
-            if not line:
-                continue
             name, sep, value = line.partition(":")
             if not sep:
                 continue
@@ -56,18 +52,16 @@ class Message:
         )
 
     @staticmethod
-    def _parse_body(headers: dict[str, str], body: bytes) -> bytes | SessionDescription:
+    def _parse_body(headers: dict[str, str], body: bytes) -> SessionDescription | None:
         """Parse the body according to the Content-Type header."""
         if headers.get("Content-Type") == "application/sdp" and body:
-            from voip.sdp.messages import SessionDescription
-
             return SessionDescription.parse(body)
-        return body
+        return None
 
     def __bytes__(self) -> bytes:
         """Serialize to bytes."""
         headers = dict(self.headers)
-        raw_body = bytes(self.body) if self.body else b""
+        raw_body = bytes(self.body) if self.body is not None else b""
         if raw_body:
             headers.setdefault("Content-Length", str(len(raw_body)))
         header_lines = "".join(

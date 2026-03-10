@@ -95,9 +95,8 @@ class TestSIP:
             protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
             await protocol._answer(request, RTP)
             response, _ = send.call_args[0]
-            assert b"m=audio" in response.body
-            assert b"RTP/AVP 111" in response.body
-            assert b"a=rtpmap:111 opus/48000/1" in response.body
+            assert b"m=audio" in bytes(response.body)
+            assert b"RTP/AVP 0" in bytes(response.body)
 
         asyncio.run(run())
 
@@ -115,8 +114,8 @@ class TestSIP:
             ):
                 await protocol._answer(request, RTP)
             response, _ = send.call_args[0]
-            assert b"c=IN IP4 203.0.113.5" in response.body
-            assert b"m=audio 54321" in response.body
+            assert b"c=IN IP4 203.0.113.5" in bytes(response.body)
+            assert b"m=audio 54321" in bytes(response.body)
 
         asyncio.run(run())
 
@@ -135,8 +134,8 @@ class TestSIP:
                 await protocol._answer(request, RTP)
             response, _ = send.call_args[0]
             # The SDP should still be sent (just with local address)
-            assert b"m=audio" in response.body
-            assert b"RTP/AVP 111" in response.body
+            assert b"m=audio" in bytes(response.body)
+            assert b"RTP/AVP 0" in bytes(response.body)
 
         asyncio.run(run())
 
@@ -198,7 +197,7 @@ class TestSIP:
 
             sdp_line = next(
                 line
-                for line in response.body.decode().splitlines()
+                for line in bytes(response.body).decode().splitlines()
                 if line.startswith("m=audio")
             )
             rtp_port = int(sdp_line.split()[1])
@@ -234,7 +233,7 @@ class TestSIP:
             response, _ = send.call_args[0]
             sdp_line = next(
                 line
-                for line in response.body.decode().splitlines()
+                for line in bytes(response.body).decode().splitlines()
                 if line.startswith("m=audio")
             )
             rtp_port = int(sdp_line.split()[1])

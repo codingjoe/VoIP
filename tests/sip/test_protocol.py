@@ -5,6 +5,7 @@ import errno
 import unittest.mock
 
 import pytest
+from voip.sdp.messages import SessionDescription
 from voip.sip.messages import Request, Response
 from voip.sip.protocol import SessionInitiationProtocol
 
@@ -360,7 +361,9 @@ class TestAnswer:
         """Provide a fake RTP transport with a fixed local address."""
         return FakeTransport(("127.0.0.1", 12000))
 
-    def _make_invite(self, call_id: str, sdp_body: bytes = b"") -> Request:
+    def _make_invite(
+        self, call_id: str, sdp_body: SessionDescription | None = None
+    ) -> Request:
         """Build a minimal INVITE request."""
         headers = {
             "Via": "SIP/2.0/UDP pc33.atlanta.com",
@@ -396,7 +399,7 @@ class TestAnswer:
         """Select PCMA (8) when the remote SDP offers both PCMA and PCMU."""
         protocol = FakeProtocol()
         addr = ("192.0.2.1", 5060)
-        sdp_body = (
+        sdp_body = SessionDescription.parse(
             b"v=0\r\n"
             b"o=- 0 0 IN IP4 192.0.2.1\r\n"
             b"s=-\r\n"
@@ -419,7 +422,7 @@ class TestAnswer:
         """Select PCMU (0) when the remote SDP offers only PCMU."""
         protocol = FakeProtocol()
         addr = ("192.0.2.1", 5060)
-        sdp_body = (
+        sdp_body = SessionDescription.parse(
             b"v=0\r\n"
             b"o=- 0 0 IN IP4 192.0.2.1\r\n"
             b"s=-\r\n"
@@ -437,7 +440,7 @@ class TestAnswer:
         """Fall back to the first offered payload type when no preferred codec matches."""
         protocol = FakeProtocol()
         addr = ("192.0.2.1", 5060)
-        sdp_body = (
+        sdp_body = SessionDescription.parse(
             b"v=0\r\n"
             b"o=- 0 0 IN IP4 192.0.2.1\r\n"
             b"s=-\r\n"
@@ -470,7 +473,7 @@ class TestAnswer:
         """Include the locally generated To tag in the 200 OK response."""
         protocol = FakeProtocol()
         addr = ("192.0.2.1", 5060)
-        sdp_body = (
+        sdp_body = SessionDescription.parse(
             b"v=0\r\n"
             b"o=- 0 0 IN IP4 192.0.2.1\r\n"
             b"s=-\r\n"
@@ -497,3 +500,182 @@ class TestAnswer:
             asyncio.run(run())
         assert "No address found" in caplog.text
         assert not protocol._sent_responses
+
+
+class TestCANCELHandler:
+    def test_cancel__sends_200_ok_for_cancel(self):
+        """Send a 200 OK response to the CANCEL request (RFC 3261 §9.2)."""
+        protocol = FakeProtocol()
+        addr = ("192.0.2.1", 5060)
+        invite = Request(
+            method="INVITE",
+            uri="sip:bob@biloxi.com",
+            headers={
+                "Via": "SIP/2.0/UDP pc33.atlanta.com",
+                "From": "sip:alice@atlanta.com",
+                "To": "sip:bob@biloxi.com",
+                "Call-ID": "cancel-test-1",
+                "CSeq": "1 INVITE",
+            },
+        )
+        protocol.request_received(invite, addr)
+        cancel = Request(
+            method="CANCEL",
+            uri="sip:bob@biloxi.com",
+            headers={
+                "Via": "SIP/2.0/UDP pc33.atlanta.com",
+                "From": "sip:alice@atlanta.com",
+                "To": "sip:bob@biloxi.com",
+                "Call-ID": "cancel-test-1",
+                "CSeq": "1 CANCEL",
+            },
+        )
+        protocol.request_received(cancel, addr)
+        ok_response = next(
+            (r for r, _ in protocol._sent_responses if r.status_code == 200), None
+        )
+        assert ok_response is not None
+
+    def test_cancel__sends_487_request_terminated_for_invite(self):
+        """Send a 487 Request Terminated for the pending INVITE (RFC 3261 §9.2)."""
+        protocol = FakeProtocol()
+        addr = ("192.0.2.1", 5060)
+        invite = Request(
+            method="INVITE",
+            uri="sip:bob@biloxi.com",
+            headers={
+                "Via": "SIP/2.0/UDP pc33.atlanta.com",
+                "From": "sip:alice@atlanta.com",
+                "To": "sip:bob@biloxi.com",
+                "Call-ID": "cancel-test-2",
+                "CSeq": "1 INVITE",
+            },
+        )
+        protocol.request_received(invite, addr)
+        cancel = Request(
+            method="CANCEL",
+            uri="sip:bob@biloxi.com",
+            headers={
+                "Via": "SIP/2.0/UDP pc33.atlanta.com",
+                "From": "sip:alice@atlanta.com",
+                "To": "sip:bob@biloxi.com",
+                "Call-ID": "cancel-test-2",
+                "CSeq": "1 CANCEL",
+            },
+        )
+        protocol.request_received(cancel, addr)
+        terminated = next(
+            (r for r, _ in protocol._sent_responses if r.status_code == 487), None
+        )
+        assert terminated is not None
+        assert terminated.reason == "Request Terminated"
+
+    def test_cancel__487_includes_to_tag(self):
+        """Include the stored To tag in the 487 Request Terminated response."""
+        protocol = FakeProtocol()
+        addr = ("192.0.2.1", 5060)
+        invite = Request(
+            method="INVITE",
+            uri="sip:bob@biloxi.com",
+            headers={
+                "Via": "SIP/2.0/UDP pc33.atlanta.com",
+                "From": "sip:alice@atlanta.com",
+                "To": "sip:bob@biloxi.com",
+                "Call-ID": "cancel-tag-1",
+                "CSeq": "1 INVITE",
+            },
+        )
+        protocol.request_received(invite, addr)
+        tag = protocol._to_tags["cancel-tag-1"]
+        cancel = Request(
+            method="CANCEL",
+            uri="sip:bob@biloxi.com",
+            headers={
+                "Via": "SIP/2.0/UDP pc33.atlanta.com",
+                "From": "sip:alice@atlanta.com",
+                "To": "sip:bob@biloxi.com",
+                "Call-ID": "cancel-tag-1",
+                "CSeq": "1 CANCEL",
+            },
+        )
+        protocol.request_received(cancel, addr)
+        terminated = next(
+            (r for r, _ in protocol._sent_responses if r.status_code == 487), None
+        )
+        assert terminated is not None
+        assert f";tag={tag}" in terminated.headers.get("To", "")
+
+    def test_cancel__cleans_up_state(self):
+        """Remove Call-ID from _answered_calls, _request_addrs, and _to_tags."""
+        protocol = FakeProtocol()
+        addr = ("192.0.2.1", 5060)
+        invite = Request(
+            method="INVITE",
+            uri="sip:bob@biloxi.com",
+            headers={
+                "Via": "SIP/2.0/UDP pc33.atlanta.com",
+                "From": "sip:alice@atlanta.com",
+                "To": "sip:bob@biloxi.com",
+                "Call-ID": "cancel-cleanup-1",
+                "CSeq": "1 INVITE",
+            },
+        )
+        protocol.request_received(invite, addr)
+        assert "cancel-cleanup-1" in protocol._answered_calls
+        assert "cancel-cleanup-1" in protocol._to_tags
+        cancel = Request(
+            method="CANCEL",
+            uri="sip:bob@biloxi.com",
+            headers={
+                "Via": "SIP/2.0/UDP pc33.atlanta.com",
+                "From": "sip:alice@atlanta.com",
+                "To": "sip:bob@biloxi.com",
+                "Call-ID": "cancel-cleanup-1",
+                "CSeq": "1 CANCEL",
+            },
+        )
+        protocol.request_received(cancel, addr)
+        assert "cancel-cleanup-1" not in protocol._answered_calls
+        assert "cancel-cleanup-1" not in protocol._request_addrs
+        assert "cancel-cleanup-1" not in protocol._to_tags
+
+    def test_cancel__no_pending_invite_skips_487(self):
+        """Skip sending 487 when no pending INVITE address is found."""
+        protocol = FakeProtocol()
+        addr = ("192.0.2.1", 5060)
+        cancel = Request(
+            method="CANCEL",
+            uri="sip:bob@biloxi.com",
+            headers={
+                "Via": "SIP/2.0/UDP pc33.atlanta.com",
+                "From": "sip:alice@atlanta.com",
+                "To": "sip:bob@biloxi.com",
+                "Call-ID": "cancel-no-invite-1",
+                "CSeq": "1 CANCEL",
+            },
+        )
+        protocol.request_received(cancel, addr)
+        assert all(r.status_code != 487 for r, _ in protocol._sent_responses)
+        ok_responses = [r for r, _ in protocol._sent_responses if r.status_code == 200]
+        assert len(ok_responses) == 1
+
+    def test_cancel__calls_cancel_received_hook(self):
+        """Invoke cancel_received hook after handling a CANCEL request."""
+        protocol = FakeProtocol()
+        addr = ("192.0.2.1", 5060)
+        received = []
+        protocol.cancel_received = lambda req: received.append(req)
+        cancel = Request(
+            method="CANCEL",
+            uri="sip:bob@biloxi.com",
+            headers={
+                "Via": "SIP/2.0/UDP pc33.atlanta.com",
+                "From": "sip:alice@atlanta.com",
+                "To": "sip:bob@biloxi.com",
+                "Call-ID": "cancel-hook-1",
+                "CSeq": "1 CANCEL",
+            },
+        )
+        protocol.request_received(cancel, addr)
+        assert len(received) == 1
+        assert received[0].method == "CANCEL"
