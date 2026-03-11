@@ -123,6 +123,32 @@ class TestSessionDescriptionParse:
             audio.attributes == []
         )  # rtpmap is folded into fmt, not kept as raw attribute
 
+    def test_parse__media_fmtp(self):
+        """Parse a=fmtp into the matching RTPPayloadFormat.fmtp field."""
+        data = (
+            b"v=0\r\n"
+            b"o=- 0 0 IN IP4 0.0.0.0\r\n"
+            b"s=-\r\n"
+            b"t=0 0\r\n"
+            b"m=audio 49170 RTP/AVP 111\r\n"
+            b"a=rtpmap:111 opus/48000/2\r\n"
+            b"a=fmtp:111 minptime=10;useinbandfec=1\r\n"
+        )
+        sdp = SessionDescription.parse(data)
+        audio = sdp.media[0]
+        assert audio.fmt == [
+            RTPPayloadFormat(
+                payload_type=111,
+                encoding_name="opus",
+                sample_rate=48000,
+                channels=2,
+                fmtp="minptime=10;useinbandfec=1",
+            )
+        ]
+        assert (
+            audio.attributes == []
+        )  # fmtp is folded into fmt, not kept as raw attribute
+
     def test_parse__title(self):
         """Parse the session title field (i=) at session level."""
         sdp = SessionDescription.parse(FULL_SDP)
@@ -548,6 +574,28 @@ class TestMediaDescription:
             ],
         )
         assert str(media) == "m=audio 49170 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000"
+
+    def test_str__with_fmtp_in_fmt(self):
+        """Serialize a MediaDescription; a=fmtp is emitted after a=rtpmap when fmtp is set."""
+        media = MediaDescription(
+            media="audio",
+            port=49170,
+            proto="RTP/AVP",
+            fmt=[
+                RTPPayloadFormat(
+                    payload_type=111,
+                    encoding_name="opus",
+                    sample_rate=48000,
+                    channels=2,
+                    fmtp="minptime=10;useinbandfec=1",
+                )
+            ],
+        )
+        assert str(media) == (
+            "m=audio 49170 RTP/AVP 111\r\n"
+            "a=rtpmap:111 opus/48000/2\r\n"
+            "a=fmtp:111 minptime=10;useinbandfec=1"
+        )
 
 
 class TestRTPPayloadFormat:
