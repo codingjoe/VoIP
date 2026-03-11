@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import enum
 from typing import ClassVar, Protocol, runtime_checkable
 
 __all__ = [
@@ -15,6 +16,7 @@ __all__ = [
     "Timing",
     "Attribute",
     "RtpMap",
+    "StaticPayloadType",
     "MediaDescription",
 ]
 
@@ -249,6 +251,32 @@ class RtpMap:
         )
 
 
+class StaticPayloadType(enum.Enum):
+    """Static RTP payload types and their clock rates (Hz) as defined by RFC 3551 §6."""
+
+    def __new__(cls, pt: int, clock_rate: int) -> StaticPayloadType:
+        obj = object.__new__(cls)
+        obj._value_ = pt
+        obj.clock_rate = clock_rate
+        return obj
+
+    PCMU = (0, 8000)  # G.711 µ-law
+    GSM = (3, 8000)
+    G723 = (4, 8000)
+    DVI4_8K = (5, 8000)
+    DVI4_16K = (6, 16000)  # 16 kHz variant
+    LPC = (7, 8000)
+    PCMA = (8, 8000)  # G.711 A-law
+    G722 = (9, 8000)  # RTP clock rate is 8000 per RFC 3551 even though wideband
+    L16_STEREO = (10, 44100)
+    L16_MONO = (11, 44100)
+    QCELP = (12, 8000)
+    CN = (13, 8000)
+    MPA = (14, 90000)
+    G728 = (15, 8000)
+    G729 = (18, 8000)
+
+
 @dataclasses.dataclass(slots=True)
 class MediaDescription:
     """Media description section (m=) as defined by RFC 4566 §5.14."""
@@ -257,25 +285,6 @@ class MediaDescription:
     session_attr: ClassVar[str] = "media"
     is_list: ClassVar[bool] = True
     media_attr: ClassVar[str | None] = None
-
-    #: Clock rates (Hz) for static RTP payload types as defined by RFC 3551 §6.
-    _STATIC_CLOCK_RATES: ClassVar[dict[int, int]] = {
-        0: 8000,    # PCMU  – G.711 µ-law
-        3: 8000,    # GSM
-        4: 8000,    # G723
-        5: 8000,    # DVI4
-        6: 16000,   # DVI4 (16 kHz variant)
-        7: 8000,    # LPC
-        8: 8000,    # PCMA  – G.711 A-law
-        9: 8000,    # G722  – RTP clock rate is 8000 per RFC 3551 even though wideband
-        10: 44100,  # L16 stereo
-        11: 44100,  # L16 mono
-        12: 8000,   # QCELP
-        13: 8000,   # CN
-        14: 90000,  # MPA
-        15: 8000,   # G728
-        18: 8000,   # G729
-    }
 
     media: str
     port: int
@@ -300,7 +309,11 @@ class MediaDescription:
             otherwise ``None``.
         """
         for attr in self.attributes:
-            if attr.name == "rtpmap" and attr.value and attr.value.startswith(f"{fmt} "):
+            if (
+                attr.name == "rtpmap"
+                and attr.value
+                and attr.value.startswith(f"{fmt} ")
+            ):
                 return RtpMap.parse(attr.value)
         return None
 
@@ -327,8 +340,10 @@ class MediaDescription:
             raise ValueError(
                 f"Cannot determine sample rate for format {fmt!r}"
             ) from exc
-        if pt in self._STATIC_CLOCK_RATES:
-            return self._STATIC_CLOCK_RATES[pt]
+        try:
+            return StaticPayloadType(pt).clock_rate
+        except ValueError:
+            pass
         raise ValueError(
             f"No a=rtpmap attribute for dynamic payload type {fmt!r} "
             f"and no RFC 3551 static rate defined"
