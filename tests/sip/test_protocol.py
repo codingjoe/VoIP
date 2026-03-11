@@ -390,16 +390,23 @@ class TestAnswer:
         """Run _answer coroutine synchronously using a new event loop."""
 
         class FakeRTPProtocol(RealtimeTransportProtocol):
-            def __init__(self, caller="", payload_type=0, sample_rate=8000):
+            def __init__(self, caller="", media=None):
                 self.caller = caller
-                self.payload_type = payload_type
-                self.sample_rate = sample_rate
+                self.media = media
+                self.payload_type = int(media.fmt[0]) if (media and media.fmt) else 0
+                self.sample_rate = 8000
 
         async def _answer_coro():
-            with unittest.mock.patch.object(
-                asyncio.get_event_loop(),
-                "create_datagram_endpoint",
-                return_value=(fake_rtp_transport, FakeRTPProtocol(caller="")),
+            with (
+                unittest.mock.patch.object(
+                    asyncio.get_event_loop(),
+                    "create_datagram_endpoint",
+                    return_value=(fake_rtp_transport, FakeRTPProtocol(caller="")),
+                ),
+                unittest.mock.patch(
+                    "voip.sip.protocol.stun_discover",
+                    return_value=("127.0.0.1", 0),
+                ),
             ):
                 await protocol._answer(invite, FakeRTPProtocol)
 

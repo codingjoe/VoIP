@@ -18,6 +18,28 @@ __all__ = ["RTP", "RTPPacket", "RTPPayloadType", "RealtimeTransportProtocol"]
 logger = logging.getLogger(__name__)
 
 
+def _sample_rate_from_media(media: MediaDescription | None) -> int:
+    """Extract the clock rate (Hz) from a MediaDescription's rtpmap attribute.
+
+    Falls back to 8000 Hz (the default for static audio codecs, RFC 3551) when
+    no rtpmap attribute is present or when the clock rate cannot be parsed.
+    """
+    if media is None or not media.fmt:
+        return 8000
+    fmt = media.fmt[0]
+    for attr in media.attributes:
+        if attr.name == "rtpmap" and attr.value:
+            pt, _, codec_str = attr.value.partition(" ")
+            if pt.strip() == fmt:
+                parts = codec_str.strip().split("/")
+                if len(parts) >= 2:
+                    try:
+                        return int(parts[1])
+                    except ValueError:
+                        pass
+    return 8000
+
+
 class RTPPayloadType(enum.IntEnum):
     """Common RTP payload types, aligned with SDP media format identifiers.
 
@@ -92,15 +114,19 @@ class RealtimeTransportProtocol(asyncio.DatagramProtocol):
     ]
 
     def __init__(
-        self, caller: str = "", payload_type: int = 0, sample_rate: int = 8000
+        self, caller: str = "", media: MediaDescription | None = None
     ) -> None:
         super().__init__()
         #: The SIP address of the caller (from the From header of the INVITE).
         self.caller = caller
-        #: The negotiated RTP payload type for this call.
-        self.payload_type = payload_type
-        #: The clock rate (Hz) of the negotiated codec, as declared in the SDP rtpmap.
-        self.sample_rate = sample_rate
+        #: The negotiated :class:`~voip.sdp.types.MediaDescription` for this call.
+        self.media = media
+        # Derive convenience attributes from the MediaDescription when provided.
+        if media and media.fmt:
+            self.payload_type: int = int(media.fmt[0])
+        else:
+            self.payload_type: int = 0
+        self.sample_rate: int = _sample_rate_from_media(media)
 
     @classmethod
     def negotiate_codec(

@@ -65,7 +65,7 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
         aor: str | None = None,
         username: str | None = None,
         password: str | None = None,
-        stun_server_address: tuple[str, int] | None = None,
+        stun_server_address: tuple[str, int] = ("stun.cloudflare.com", 3478),
     ) -> None:
         super().__init__()
         #: Pending INVITE addresses keyed by Call-ID.
@@ -84,14 +84,11 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
         self.public_address: tuple[str, int] | None = None
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
-        """Store the transport; if registration params are set, send REGISTER."""
+        """Store the transport; if registration params are set, send REGISTER after STUN."""
         logger.debug("SIP transport connected")
         self._transport = transport
         if self.server_address is not None:
-            if self.stun_server_address:
-                asyncio.ensure_future(self._stun_then_register())
-            else:
-                self.register()
+            asyncio.ensure_future(self._stun_then_register())
 
     async def _stun_then_register(self) -> None:
         """Discover the public address via STUN, then send REGISTER."""
@@ -354,32 +351,39 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
             selected = call_class.negotiate_codec(remote_audio)
         selected_fmt = selected[0] if selected else None
         selected_rtpmap = selected[1] if selected else None
-        selected_pt = int(selected[0]) if selected else 0
-        selected_sample_rate = selected[2] if selected else 8000
+        # Build the negotiated MediaDescription to pass to the call class so that
+        # it has full codec context (format, rtpmap, sample rate) in one object.
+        negotiated_media = MediaDescription(
+            media="audio",
+            port=0,
+            proto="RTP/AVP",
+            fmt=[selected_fmt] if selected_fmt else ["0"],
+            attributes=[Attribute(name="rtpmap", value=selected_rtpmap)] if selected_rtpmap else [],
+        )
         rtp_transport, rtp_protocol = await loop.create_datagram_endpoint(
             lambda: call_class(
                 caller=caller,
-                payload_type=selected_pt,
-                sample_rate=selected_sample_rate,
+                media=negotiated_media,
             ),
             local_addr=("0.0.0.0", 0),  # noqa: S104
         )
         local_addr = rtp_transport.get_extra_info("sockname")
-        # Discover the public RTP IP via a dedicated STUN socket when a STUN
-        # server is configured. The RTP port comes from the locally bound socket.
+        # Always discover the public RTP IP via STUN so that the SDP advertises a
+        # reachable address even when the server is behind NAT (RFC 5389).
+        # The RTP port comes from the locally bound socket and is not NAT-translated
+        # because we bind the RTP socket on a fixed ephemeral port.
         sdp_ip = local_addr[0]
         sdp_port = local_addr[1]
-        if self.stun_server_address:
-            try:
-                public_ip, _ = await stun_discover(*self.stun_server_address)
-                sdp_ip = public_ip
-                logger.info("RTP STUN: public IP is %s, port %s", sdp_ip, sdp_port)
-            except (TimeoutError, OSError, RuntimeError) as exc:
-                logger.warning(
-                    "RTP STUN discovery failed (%s), using local address", exc
-                )
-        elif self.public_address:
-            sdp_ip = self.public_address[0]
+        try:
+            public_ip, _ = await stun_discover(*self.stun_server_address)
+            sdp_ip = public_ip
+            logger.info("RTP STUN: public IP is %s, port %s", sdp_ip, sdp_port)
+        except (TimeoutError, OSError, RuntimeError) as exc:
+            logger.warning(
+                "RTP STUN discovery failed (%s), using local address", exc
+            )
+            if self.public_address:
+                sdp_ip = self.public_address[0]
         logger.debug("RTP listening on %s:%s", local_addr[0], local_addr[1])
         sip_local_addr = self._transport.get_extra_info("sockname") or ("0.0.0.0", 5060)  # noqa: S104
         sip_contact_addr = self.public_address or sip_local_addr

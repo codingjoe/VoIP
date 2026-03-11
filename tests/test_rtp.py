@@ -141,15 +141,40 @@ class TestRealtimeTransportProtocol:
         ConcreteRTP().datagram_received(b"\x80" * 12, ("127.0.0.1", 5004))
         assert received == []
 
-    def test_init__stores_sample_rate(self):
-        """sample_rate parameter is stored on the protocol instance."""
-        protocol = RealtimeTransportProtocol(sample_rate=16000)
-        assert protocol.sample_rate == 16000
+    def test_init__stores_media(self):
+        """Media parameter is stored on the protocol instance."""
+        media = MediaDescription(
+            media="audio", port=49170, proto="RTP/AVP", fmt=["8"],
+            attributes=[Attribute(name="rtpmap", value="8 PCMA/8000")]
+        )
+        protocol = RealtimeTransportProtocol(media=media)
+        assert protocol.media is media
 
-    def test_init__default_sample_rate(self):
-        """Default sample_rate is 8000 Hz."""
+    def test_init__derives_sample_rate_from_media(self):
+        """sample_rate is derived from the rtpmap attribute of the MediaDescription."""
+        media = MediaDescription(
+            media="audio", port=49170, proto="RTP/AVP", fmt=["9"],
+            attributes=[Attribute(name="rtpmap", value="9 G722/8000")]
+        )
+        protocol = RealtimeTransportProtocol(media=media)
+        assert protocol.sample_rate == 8000
+
+    def test_init__default_sample_rate_without_media(self):
+        """Default sample_rate is 8000 Hz when no MediaDescription is given."""
         protocol = RealtimeTransportProtocol()
         assert protocol.sample_rate == 8000
+
+    def test_init__derives_payload_type_from_media(self):
+        """payload_type is derived from the first fmt entry of the MediaDescription."""
+        media = MediaDescription(
+            media="audio", port=49170, proto="RTP/AVP", fmt=["8"], attributes=[]
+        )
+        protocol = RealtimeTransportProtocol(media=media)
+        assert protocol.payload_type == 8
+
+    def test_init__default_payload_type_without_media(self):
+        """Default payload_type is 0 when no MediaDescription is given."""
+        assert RealtimeTransportProtocol().payload_type == 0
 
 
 class TestNegotiateCodec:

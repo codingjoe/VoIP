@@ -27,6 +27,14 @@ class TestRTP:
 
 
 class TestSIP:
+    @pytest.fixture(autouse=True)
+    def _stun_patch(self):
+        """Patch stun_discover so _answer tests don't make real network calls."""
+        with patch(
+            "voip.sip.protocol.stun_discover", return_value=("127.0.0.1", 0)
+        ):
+            yield
+
     def test_connection_made__stores_transport(self):
         """Store the transport when a connection is established."""
         protocol = SIP()
@@ -142,8 +150,8 @@ class TestSIP:
         created = []
 
         class MyCall(RTP):
-            def __init__(self, caller: str = "", payload_type: int = 0, sample_rate: int = 8000) -> None:
-                super().__init__(caller=caller, payload_type=payload_type, sample_rate=sample_rate)
+            def __init__(self, caller: str = "", media=None) -> None:
+                super().__init__(caller=caller, media=media)
                 created.append(self)
 
         protocol = SIP()
@@ -374,12 +382,18 @@ class TestSessionInitiationProtocol:
         p = make_register_session(aor="sip:alice@example.com:5080")
         assert p.registrar_uri == "sip:example.com:5080"
 
-    def test_connection_made__sends_register(self):
-        """Send a REGISTER request immediately after connection is made."""
+    async def test_connection_made__sends_register(self):
+        """Send a REGISTER request after STUN discovery when connection is established."""
+        import asyncio
+
         p = make_register_session()
         transport = make_mock_transport()
-        p.connection_made(transport)
-        transport.sendto.assert_called_once()
+        with patch(
+            "voip.sip.protocol.stun_discover", return_value=("1.2.3.4", 0)
+        ):
+            p.connection_made(transport)
+            await asyncio.sleep(0.05)
+        transport.sendto.assert_called()
         data, addr = transport.sendto.call_args[0]
         assert b"REGISTER sip:example.com SIP/2.0" in data
         assert addr == ("192.0.2.2", 5060)
@@ -441,7 +455,8 @@ class TestSessionInitiationProtocol:
     def test_register__increments_cseq(self):
         """CSeq increments with each REGISTER sent."""
         p = make_register_session()
-        p.connection_made(make_mock_transport())
+        p._transport = make_mock_transport()
+        p.register()
         assert p.cseq == 1
         p.register()
         assert p.cseq == 2
@@ -577,7 +592,8 @@ class TestSessionInitiationProtocol:
 
         p = make_register_session()
         transport = make_mock_transport("192.0.2.10", 5060)
-        p.connection_made(transport)
+        p._transport = transport
+        p.register()
         data, _ = transport.sendto.call_args[0]
         assert b"Via: SIP/2.0/UDP 192.0.2.10:5060;rport;branch=z9hG4bK" in data
         assert re.search(rb"branch=z9hG4bK[0-9a-f]{32}", data)
@@ -588,7 +604,8 @@ class TestSessionInitiationProtocol:
 
         p = make_register_session()
         transport = make_mock_transport()
-        p.connection_made(transport)
+        p._transport = transport
+        p.register()
         data1, _ = transport.sendto.call_args[0]
         transport.reset_mock()
         p.register()
@@ -597,11 +614,12 @@ class TestSessionInitiationProtocol:
         branch2 = re.search(rb"branch=(z9hG4bK[0-9a-f]{32})", data2).group(1)
         assert branch1 != branch2
 
-    def test_register__contact_uses_local_addr_when_no_stun(self):
-        """Contact header uses local socket address when STUN is not configured."""
+    def test_register__contact_uses_local_addr_before_stun_completes(self):
+        """Contact header uses local socket address when public_address is not yet set."""
         p = make_register_session()
         transport = make_mock_transport("10.0.0.5", 5060)
-        p.connection_made(transport)
+        p._transport = transport
+        p.register()
         data, _ = transport.sendto.call_args[0]
         assert b"Contact: <sip:alice@10.0.0.5:5060>" in data
 
