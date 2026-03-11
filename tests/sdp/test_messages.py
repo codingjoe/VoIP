@@ -7,6 +7,7 @@ from voip.sdp.types import (
     ConnectionData,
     MediaDescription,
     Origin,
+    RtpMap,
     Timing,
 )
 
@@ -535,3 +536,103 @@ class TestMediaDescription:
             attributes=[Attribute(name="rtpmap", value="0 PCMU/8000")],
         )
         assert str(media) == "m=audio 49170 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000"
+
+
+class TestRtpMap:
+    def test_parse__opus(self):
+        """Parse a full Opus rtpmap attribute value."""
+        rm = RtpMap.parse("111 opus/48000/2")
+        assert rm.payload_type == 111
+        assert rm.encoding_name == "opus"
+        assert rm.clock_rate == 48000
+        assert rm.channels == 2
+
+    def test_parse__pcma(self):
+        """Parse a PCMA rtpmap attribute value (no channel count)."""
+        rm = RtpMap.parse("8 PCMA/8000")
+        assert rm.payload_type == 8
+        assert rm.encoding_name == "PCMA"
+        assert rm.clock_rate == 8000
+        assert rm.channels == 1
+
+    def test_parse__invalid__raises(self):
+        """Raise ValueError for a malformed rtpmap value."""
+        import pytest
+        with pytest.raises(ValueError):
+            RtpMap.parse("111 opus")
+
+    def test_str__with_channels(self):
+        """Serialize an RtpMap with channel count > 1."""
+        rm = RtpMap(payload_type=111, encoding_name="opus", clock_rate=48000, channels=2)
+        assert str(rm) == "111 opus/48000/2"
+
+    def test_str__without_channels(self):
+        """Serialize an RtpMap with a single channel (omit channel suffix)."""
+        rm = RtpMap(payload_type=8, encoding_name="PCMA", clock_rate=8000)
+        assert str(rm) == "8 PCMA/8000"
+
+
+class TestMediaDescriptionGetRtpmap:
+    def test_get_rtpmap__found(self):
+        """Return the parsed RtpMap for a known format."""
+        media = MediaDescription(
+            media="audio", port=0, proto="RTP/AVP", fmt=["111"],
+            attributes=[Attribute(name="rtpmap", value="111 opus/48000/2")],
+        )
+        rm = media.get_rtpmap("111")
+        assert rm is not None
+        assert rm.encoding_name == "opus"
+
+    def test_get_rtpmap__not_found(self):
+        """Return None when no rtpmap attribute matches the format."""
+        media = MediaDescription(
+            media="audio", port=0, proto="RTP/AVP", fmt=["8"], attributes=[]
+        )
+        assert media.get_rtpmap("8") is None
+
+    def test_get_rtpmap__wrong_pt__not_found(self):
+        """Return None when the rtpmap belongs to a different payload type."""
+        media = MediaDescription(
+            media="audio", port=0, proto="RTP/AVP", fmt=["111"],
+            attributes=[Attribute(name="rtpmap", value="8 PCMA/8000")],
+        )
+        assert media.get_rtpmap("111") is None
+
+
+class TestMediaDescriptionSampleRate:
+    def test_sample_rate__from_rtpmap(self):
+        """Return the clock rate from the a=rtpmap attribute."""
+        media = MediaDescription(
+            media="audio", port=0, proto="RTP/AVP", fmt=["111"],
+            attributes=[Attribute(name="rtpmap", value="111 opus/48000/2")],
+        )
+        assert media.sample_rate == 48000
+
+    def test_sample_rate__static_pcmu(self):
+        """Return 8000 Hz for PCMU (PT 0) without an rtpmap attribute."""
+        media = MediaDescription(media="audio", port=0, proto="RTP/AVP", fmt=["0"])
+        assert media.sample_rate == 8000
+
+    def test_sample_rate__static_pcma(self):
+        """Return 8000 Hz for PCMA (PT 8) without an rtpmap attribute."""
+        media = MediaDescription(media="audio", port=0, proto="RTP/AVP", fmt=["8"])
+        assert media.sample_rate == 8000
+
+    def test_sample_rate__static_g722(self):
+        """Return 8000 Hz for G.722 (PT 9) without an rtpmap attribute."""
+        media = MediaDescription(media="audio", port=0, proto="RTP/AVP", fmt=["9"])
+        assert media.sample_rate == 8000
+
+    def test_sample_rate__no_fmt__raises(self):
+        """Raise ValueError when the format list is empty."""
+        import pytest
+        media = MediaDescription(media="audio", port=0, proto="RTP/AVP", fmt=[])
+        with pytest.raises(ValueError, match="No audio format"):
+            _ = media.sample_rate
+
+    def test_sample_rate__unknown_dynamic_pt__raises(self):
+        """Raise ValueError for a dynamic PT with no rtpmap attribute."""
+        import pytest
+        media = MediaDescription(media="audio", port=0, proto="RTP/AVP", fmt=["99"])
+        with pytest.raises(ValueError, match="No a=rtpmap"):
+            _ = media.sample_rate

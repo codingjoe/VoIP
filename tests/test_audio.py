@@ -12,12 +12,8 @@ av = pytest.importorskip("av")
 pytest.importorskip("whisper")
 
 import whisper  # noqa: E402
-from voip.audio import (  # noqa: E402
-    WhisperCall,
-    _build_ogg_opus,
-    _codec_name_from_media,
-)
-from voip.rtp import RTP, RTPPacket  # noqa: E402
+from voip.audio import WhisperCall, _build_ogg_opus  # noqa: E402
+from voip.rtp import RTP, RTPPacket, RTPPayloadType  # noqa: E402
 from voip.sdp.types import Attribute, MediaDescription  # noqa: E402
 
 
@@ -58,7 +54,7 @@ def make_whisper_call(
 
 def make_rtp_packet(
     payload: bytes = b"audio",
-    payload_type: int = 111,
+    payload_type: int = RTPPayloadType.OPUS,
 ) -> RTPPacket:
     """Return an RTPPacket with the given payload and payload type."""
     return RTPPacket(
@@ -68,38 +64,6 @@ def make_rtp_packet(
         ssrc=0,
         payload=payload,
     )
-
-
-class TestCodecNameFromMedia:
-    def test_opus__returns_opus(self):
-        """Return 'opus' for an Opus rtpmap."""
-        assert _codec_name_from_media(OPUS_MEDIA) == "opus"
-
-    def test_pcma__returns_pcma(self):
-        """Return 'pcma' for a PCMA rtpmap."""
-        assert _codec_name_from_media(PCMA_MEDIA) == "pcma"
-
-    def test_pcmu__static_no_rtpmap(self):
-        """Return 'pcmu' for PCMU payload type 0 (no rtpmap needed, RFC 3551)."""
-        assert _codec_name_from_media(PCMU_MEDIA) == "pcmu"
-
-    def test_g722__returns_g722(self):
-        """Return 'g722' for G722."""
-        assert _codec_name_from_media(G722_MEDIA) == "g722"
-
-    def test_none__defaults_to_opus(self):
-        """Default to 'opus' when no MediaDescription is given."""
-        assert _codec_name_from_media(None) == "opus"
-
-    def test_empty_fmt__defaults_to_opus(self):
-        """Default to 'opus' when the format list is empty."""
-        media = MediaDescription(media="audio", port=0, proto="RTP/AVP", fmt=[], attributes=[])
-        assert _codec_name_from_media(media) == "opus"
-
-    def test_unknown_dynamic_pt__defaults_to_opus(self):
-        """Return 'opus' for an unrecognised dynamic payload type."""
-        media = _make_media("126", "126 telephone-event/8000")
-        assert _codec_name_from_media(media) == "telephone-event"
 
 
 class TestWhisperCall:
@@ -123,6 +87,16 @@ class TestWhisperCall:
         """Media is stored and accessible as self.media."""
         call = make_whisper_call(MagicMock())
         assert call.media is OPUS_MEDIA
+
+    def test_init__derives_payload_type_from_opus_media(self):
+        """payload_type is 111 (Opus) when given OPUS_MEDIA."""
+        call = make_whisper_call(MagicMock())
+        assert call.payload_type == RTPPayloadType.OPUS
+
+    def test_init__derives_payload_type_from_pcma_media(self):
+        """payload_type is 8 (PCMA) when given PCMA_MEDIA."""
+        call = make_whisper_call(MagicMock(), media=PCMA_MEDIA)
+        assert call.payload_type == RTPPayloadType.PCMA
 
     def test_audio_received__buffers_opus_packet(self):
         """Append each RTP payload to the internal packet buffer."""
@@ -252,17 +226,18 @@ class TestWhisperCall:
     def test_decode_audio__opus__wraps_in_ogg(self):
         """Decode Opus packets by wrapping them in an Ogg container before calling PyAV."""
         call = make_whisper_call(MagicMock(), media=OPUS_MEDIA)
+        assert call.payload_type == RTPPayloadType.OPUS
         with patch.object(
             call, "_decode_via_av", return_value=np.zeros(16000, dtype=np.float32)
         ) as mock_decode:
             call._decode_audio([b"pkt"])
-        mock_decode.assert_called_once()
         kwargs = mock_decode.call_args[1]
         assert kwargs.get("input_format") == "ogg"
 
     def test_decode_audio__pcma__uses_alaw_format(self):
         """Decode PCMA packets using the alaw PyAV input format."""
         call = make_whisper_call(MagicMock(), media=PCMA_MEDIA)
+        assert call.payload_type == RTPPayloadType.PCMA
         with patch.object(
             call, "_decode_via_av", return_value=np.zeros(16000, dtype=np.float32)
         ) as mock_decode:
@@ -273,6 +248,7 @@ class TestWhisperCall:
     def test_decode_audio__pcmu__uses_mulaw_format(self):
         """Decode PCMU packets using the mulaw PyAV input format."""
         call = make_whisper_call(MagicMock(), media=PCMU_MEDIA)
+        assert call.payload_type == RTPPayloadType.PCMU
         with patch.object(
             call, "_decode_via_av", return_value=np.zeros(16000, dtype=np.float32)
         ) as mock_decode:
@@ -283,6 +259,7 @@ class TestWhisperCall:
     def test_decode_audio__g722__uses_g722_format(self):
         """Decode G.722 packets using the g722 PyAV input format."""
         call = make_whisper_call(MagicMock(), media=G722_MEDIA)
+        assert call.payload_type == RTPPayloadType.G722
         with patch.object(
             call, "_decode_via_av", return_value=np.zeros(16000, dtype=np.float32)
         ) as mock_decode:
@@ -291,17 +268,17 @@ class TestWhisperCall:
         assert kwargs.get("input_format") == "g722"
 
     def test_decode_audio__unknown__raises(self):
-        """Raise NotImplementedError for unsupported codec names."""
-        unknown_media = _make_media("126", "126 telephone-event/8000")
+        """Raise NotImplementedError for unsupported payload types."""
+        unknown_media = _make_media("99")  # static PT 99 doesn't exist in RTPPayloadType
         call = make_whisper_call(MagicMock(), media=unknown_media)
         with pytest.raises(NotImplementedError, match="Unsupported"):
             call._decode_audio([b"pkt"])
 
     def test_decode_audio__uses_sample_rate_from_media(self):
         """Pass the sample rate from the MediaDescription to _decode_via_av."""
-        # PCMA/16000 is a wideband variant.
         wideband_pcma = _make_media("8", "8 PCMA/16000")
         call = make_whisper_call(MagicMock(), media=wideband_pcma)
+        assert call.sample_rate == 16000
         with patch.object(
             call, "_decode_via_av", return_value=np.zeros(16000, dtype=np.float32)
         ) as mock_decode:

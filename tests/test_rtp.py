@@ -7,7 +7,7 @@ import struct
 
 import pytest
 from voip.rtp import RTP, RealtimeTransportProtocol, RTPPacket, RTPPayloadType
-from voip.sdp.types import Attribute, MediaDescription
+from voip.sdp.types import Attribute, MediaDescription, RtpMap
 
 
 def make_rtp_packet(
@@ -192,46 +192,58 @@ class TestNegotiateCodec:
             ["111 opus/48000/2", "8 PCMA/8000"],
         )
         result = RealtimeTransportProtocol.negotiate_codec(media)
-        assert result is not None
-        fmt, rtpmap, sample_rate = result
-        assert fmt == "111"
-        assert sample_rate == 48000
+        assert result.fmt == ["111"]
+        assert result.sample_rate == 48000
 
     def test_negotiate_codec__falls_back_to_pcma(self):
         """Select PCMA when Opus and G.722 are not offered."""
         media = self._make_media(["0", "8"])
         result = RealtimeTransportProtocol.negotiate_codec(media)
-        assert result is not None
-        assert result[0] == "8"
-        assert result[2] == 8000
+        assert result.fmt == ["8"]
+        assert result.sample_rate == 8000
 
     def test_negotiate_codec__falls_back_to_pcmu(self):
         """Select PCMU when only PCMU is offered."""
         media = self._make_media(["0"])
         result = RealtimeTransportProtocol.negotiate_codec(media)
-        assert result is not None
-        assert result[0] == "0"
+        assert result.fmt == ["0"]
 
-    def test_negotiate_codec__empty_fmt__returns_none(self):
-        """Return None when the remote side offers no audio formats."""
+    def test_negotiate_codec__empty_fmt__raises(self):
+        """Raise NotImplementedError when the remote side offers no audio formats."""
         media = self._make_media([])
-        assert RealtimeTransportProtocol.negotiate_codec(media) is None
+        with pytest.raises(NotImplementedError):
+            RealtimeTransportProtocol.negotiate_codec(media)
 
-    def test_negotiate_codec__unknown_codec__returns_first(self):
-        """Fall back to the first offered format for an unrecognised codec."""
+    def test_negotiate_codec__unknown_codec__raises(self):
+        """Raise NotImplementedError when no offered codec matches PREFERRED_CODECS."""
         media = self._make_media(
             ["126"], ["126 telephone-event/8000"]
         )
+        with pytest.raises(NotImplementedError):
+            RealtimeTransportProtocol.negotiate_codec(media)
+
+    def test_negotiate_codec__returns_media_description(self):
+        """negotiate_codec returns a MediaDescription object."""
+        media = self._make_media(["0", "8", "111"], ["111 opus/48000/2"])
         result = RealtimeTransportProtocol.negotiate_codec(media)
-        assert result is not None
-        assert result[0] == "126"
+        assert isinstance(result, MediaDescription)
+        assert result.media == "audio"
+        assert result.proto == "RTP/AVP"
+
+    def test_negotiate_codec__includes_rtpmap_attribute(self):
+        """The returned MediaDescription includes an a=rtpmap attribute."""
+        media = self._make_media(["111"], ["111 opus/48000/2"])
+        result = RealtimeTransportProtocol.negotiate_codec(media)
+        rtpmap = result.get_rtpmap("111")
+        assert rtpmap is not None
+        assert rtpmap.encoding_name.lower() == "opus"
+        assert rtpmap.clock_rate == 48000
 
     def test_negotiate_codec__subclass_can_override_preferences(self):
         """A subclass with a different PREFERRED_CODECS list uses its own preferences."""
         class PCMAOnlyCall(RealtimeTransportProtocol):
-            PREFERRED_CODECS = [("8", "PCMA/8000", 8000)]
+            PREFERRED_CODECS = [RtpMap(payload_type=8, encoding_name="PCMA", clock_rate=8000)]
 
         media = self._make_media(["0", "8", "111"])
         result = PCMAOnlyCall.negotiate_codec(media)
-        assert result is not None
-        assert result[0] == "8"
+        assert result.fmt == ["8"]

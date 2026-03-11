@@ -10,37 +10,13 @@ import asyncio
 import dataclasses
 import enum
 import logging
+from typing import ClassVar
 
-from voip.sdp.types import MediaDescription
+from voip.sdp.types import Attribute, MediaDescription, RtpMap
 
 __all__ = ["RTP", "RTPPacket", "RTPPayloadType", "RealtimeTransportProtocol"]
 
 logger = logging.getLogger(__name__)
-
-
-def _sample_rate_from_media(media: MediaDescription | None) -> int:
-    """Extract the clock rate (Hz) from a MediaDescription's rtpmap attribute.
-
-    Falls back to 8000 Hz (the default for static audio codecs, RFC 3551) when
-    no rtpmap attribute is present or when the clock rate cannot be parsed.
-    """
-    if media is None or not media.fmt:
-        return 8000
-    fmt = media.fmt[0]
-    for attr in media.attributes:
-        if attr.name == "rtpmap" and attr.value:
-            pt, _, codec_str = attr.value.partition(" ")
-            if pt.strip() == fmt:
-                parts = codec_str.strip().split("/")
-                if len(parts) >= 2:
-                    try:
-                        return int(parts[1])
-                    except ValueError:
-                        logger.warning(
-                            "Malformed rtpmap clock rate in %r, falling back to 8000 Hz",
-                            attr.value,
-                        )
-    return 8000
 
 
 class RTPPayloadType(enum.IntEnum):
@@ -107,13 +83,13 @@ class RealtimeTransportProtocol(asyncio.DatagramProtocol):
     #: Fixed RTP header size in bytes (RFC 3550 §5.1).
     rtp_header_size: int = 12
 
-    #: Codec preference list (fmt, rtpmap value, clock rate Hz). Highest priority first.
+    #: Codec preference list ordered from highest to lowest priority.
     #: Opus > G.722 > PCMA (G.711 A-law) > PCMU (G.711 µ-law).
-    PREFERRED_CODECS: list[tuple[str, str, int]] = [
-        ("111", "opus/48000/2", 48000),
-        ("9", "G722/8000", 8000),
-        ("8", "PCMA/8000", 8000),
-        ("0", "PCMU/8000", 8000),
+    PREFERRED_CODECS: ClassVar[list[RtpMap]] = [
+        RtpMap(payload_type=RTPPayloadType.OPUS, encoding_name="opus", clock_rate=48000, channels=2),
+        RtpMap(payload_type=RTPPayloadType.G722, encoding_name="G722", clock_rate=8000),
+        RtpMap(payload_type=RTPPayloadType.PCMA, encoding_name="PCMA", clock_rate=8000),
+        RtpMap(payload_type=RTPPayloadType.PCMU, encoding_name="PCMU", clock_rate=8000),
     ]
 
     def __init__(
@@ -124,66 +100,73 @@ class RealtimeTransportProtocol(asyncio.DatagramProtocol):
         self.caller = caller
         #: The negotiated :class:`~voip.sdp.types.MediaDescription` for this call.
         self.media = media
-        # Derive convenience attributes from the MediaDescription when provided.
-        if media and media.fmt:
+        if media is not None and media.fmt:
             self.payload_type: int = int(media.fmt[0])
+            self.sample_rate: int = media.sample_rate
         else:
             self.payload_type: int = 0
-        self.sample_rate: int = _sample_rate_from_media(media)
+            self.sample_rate: int = 8000
 
     @classmethod
-    def negotiate_codec(
-        cls, remote_media: MediaDescription
-    ) -> tuple[str, str | None, int] | None:
+    def negotiate_codec(cls, remote_media: MediaDescription) -> MediaDescription:
         """Select the best codec from the offered SDP MediaDescription.
 
-        Iterates :attr:`PREFERRED_CODECS` in priority order and returns the
-        first match found in the remote offer.
+        Iterates :attr:`PREFERRED_CODECS` in priority order and returns a
+        :class:`~voip.sdp.types.MediaDescription` configured with the first
+        codec found in the remote offer.  All SDP codec information is accessed
+        through the :class:`~voip.sdp.types.MediaDescription` and
+        :class:`~voip.sdp.types.RtpMap` APIs — no raw attribute string parsing
+        is performed here.
 
         Args:
             remote_media: The ``m=audio`` :class:`~voip.sdp.types.MediaDescription`
                 from the INVITE SDP body.
 
         Returns:
-            A ``(fmt, rtpmap_value, sample_rate)`` tuple for the selected codec,
-            or ``None`` if the remote offer contains no audio formats.
-            *rtpmap_value* may be ``None`` for static payload types that carry no
-            ``a=rtpmap`` attribute.
+            A :class:`~voip.sdp.types.MediaDescription` configured with the
+            negotiated codec (port is set to ``0``; the SIP layer assigns the
+            real RTP port when building the 200 OK SDP).
+
+        Raises:
+            NotImplementedError: If the remote offer contains no audio formats
+                or none of the offered codecs are in :attr:`PREFERRED_CODECS`.
         """
+        if not remote_media.fmt:
+            raise NotImplementedError("Remote SDP offer contains no audio formats")
+
         remote_fmts = set(remote_media.fmt)
-        remote_rtpmaps: dict[str, str] = {}
-        remote_name_to_fmt: dict[str, str] = {}
-        for attribute in remote_media.attributes:
-            if attribute.name == "rtpmap" and attribute.value:
-                pt, _, codec_str = attribute.value.partition(" ")
-                remote_rtpmaps[pt.strip()] = codec_str.strip()
-                remote_name_to_fmt[codec_str.strip().lower()] = pt.strip()
+        for preferred in cls.PREFERRED_CODECS:
+            fmt = str(preferred.payload_type)
+            # Match by payload type number.
+            if fmt in remote_fmts:
+                rtpmap = remote_media.get_rtpmap(fmt) or preferred
+                return MediaDescription(
+                    media="audio",
+                    port=0,
+                    proto="RTP/AVP",
+                    fmt=[fmt],
+                    attributes=[Attribute(name="rtpmap", value=str(rtpmap))],
+                )
+            # Match by encoding name for dynamic payload types.
+            for remote_fmt in remote_media.fmt:
+                remote_rtpmap = remote_media.get_rtpmap(remote_fmt)
+                if (
+                    remote_rtpmap is not None
+                    and remote_rtpmap.encoding_name.lower()
+                    == preferred.encoding_name.lower()
+                ):
+                    return MediaDescription(
+                        media="audio",
+                        port=0,
+                        proto="RTP/AVP",
+                        fmt=[remote_fmt],
+                        attributes=[Attribute(name="rtpmap", value=str(remote_rtpmap))],
+                    )
 
-        for our_fmt, our_rtpmap, sample_rate in cls.PREFERRED_CODECS:
-            if our_fmt in remote_fmts:
-                return (our_fmt, f"{our_fmt} {our_rtpmap}", sample_rate)
-            if our_rtpmap.lower() in remote_name_to_fmt:
-                remote_fmt = remote_name_to_fmt[our_rtpmap.lower()]
-                return (remote_fmt, f"{remote_fmt} {our_rtpmap}", sample_rate)
-
-        # Fallback: accept the first format the remote side offered.
-        if remote_media.fmt:
-            fmt = remote_media.fmt[0]
-            sample_rate = 8000  # default for unknown/static codecs
-            rtpmap = None
-            if fmt in remote_rtpmaps:
-                rtpmap_str = remote_rtpmaps[fmt]
-                rtpmap = f"{fmt} {rtpmap_str}"
-                # Parse the clock rate from "codec/clockrate[/channels]"
-                parts = rtpmap_str.split("/")
-                if len(parts) >= 2:
-                    try:
-                        sample_rate = int(parts[1])
-                    except ValueError:
-                        pass
-            return (fmt, rtpmap, sample_rate)
-
-        return None
+        raise NotImplementedError(
+            f"No supported codec found in remote offer {list(remote_media.fmt)!r}. "
+            f"Supported: {[c.encoding_name for c in cls.PREFERRED_CODECS]!r}"
+        )
 
     def datagram_received(self, data: bytes, address: tuple[str, int]) -> None:
         """Parse and forward incoming RTP packets to :meth:`audio_received`."""

@@ -393,8 +393,12 @@ class TestAnswer:
             def __init__(self, caller="", media=None):
                 self.caller = caller
                 self.media = media
-                self.payload_type = int(media.fmt[0]) if (media and media.fmt) else 0
-                self.sample_rate = 8000
+                if media is not None and media.fmt:
+                    self.payload_type = int(media.fmt[0])
+                    self.sample_rate = media.sample_rate
+                else:
+                    self.payload_type = 0
+                    self.sample_rate = 8000
 
         async def _answer_coro():
             with (
@@ -526,16 +530,18 @@ class TestAnswer:
 
     def test_preferred_codecs__class_attribute(self):
         """PREFERRED_CODECS is a class attribute on RTP with Opus first."""
+        from voip.sdp.types import RtpMap
         codecs = RealtimeTransportProtocol.PREFERRED_CODECS
         assert isinstance(codecs, list)
-        fmts = [fmt for fmt, _, _ in codecs]
+        assert all(isinstance(c, RtpMap) for c in codecs)
+        fmts = [str(c.payload_type) for c in codecs]
         assert fmts[0] == "111"  # Opus is highest priority
         assert "8" in fmts  # PCMA present
         assert "0" in fmts  # PCMU present
 
     @pytest.mark.asyncio
-    async def test_answer__falls_back_to_first_offered_codec(self, fake_rtp_transport):
-        """Fall back to the first offered payload type when no preferred codec matches."""
+    async def test_answer__unsupported_codec__raises(self, fake_rtp_transport):
+        """Raise NotImplementedError when the INVITE offers only unsupported codecs."""
         protocol = FakeProtocol()
         addr = ("192.0.2.1", 5060)
         sdp_body = SessionDescription.parse(
@@ -549,14 +555,8 @@ class TestAnswer:
         )
         invite = self._make_invite("answer-fallback-1", sdp_body)
         protocol.request_received(invite, addr)
-        await self._run_answer(protocol, invite, fake_rtp_transport)
-        response, _ = protocol._sent_responses[-1]
-        assert response.body.media[0].fmt == ["126"]
-        assert any(
-            a.value == "126 telephone-event/8000"
-            for a in response.body.media[0].attributes
-            if a.value is not None
-        )
+        with pytest.raises(NotImplementedError):
+            await self._run_answer(protocol, invite, fake_rtp_transport)
 
     @pytest.mark.asyncio
     async def test_answer__no_sdp_falls_back_to_default(self, fake_rtp_transport):

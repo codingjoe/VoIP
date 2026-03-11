@@ -12,35 +12,12 @@ import av
 import numpy as np
 import whisper
 
-from voip.rtp import RealtimeTransportProtocol, RTPPacket
+from voip.rtp import RealtimeTransportProtocol, RTPPacket, RTPPayloadType
 from voip.sdp.types import MediaDescription
 
 __all__ = ["WhisperCall"]
 
 logger = logging.getLogger(__name__)
-
-
-def _codec_name_from_media(media: MediaDescription | None) -> str:
-    """Return the lower-case codec name for a negotiated MediaDescription.
-
-    Looks for an ``a=rtpmap`` attribute matching the first format in ``m=`` to
-    find the codec name.  For static payload types that carry no rtpmap (PCMU,
-    PCMA, G.722) the codec is looked up from the RFC 3551 static table.
-
-    Defaults to ``"opus"`` when no codec can be determined.
-    """
-    if media is None or not media.fmt:
-        return "opus"
-    fmt = media.fmt[0]
-    for attr in media.attributes:
-        if attr.name == "rtpmap" and attr.value:
-            pt, _, codec_str = attr.value.partition(" ")
-            if pt.strip() == fmt:
-                codec_name = codec_str.strip().split("/")[0]
-                return codec_name.lower()
-    # RFC 3551 static payload type table (no rtpmap needed).
-    static_codecs = {"0": "pcmu", "8": "pcma", "9": "g722"}
-    return static_codecs.get(fmt, "opus")
 
 
 def _ogg_crc32(data: bytes) -> int:
@@ -191,31 +168,30 @@ class WhisperCall(RealtimeTransportProtocol):
     def _decode_audio(self, packets: list[bytes]) -> np.ndarray:
         """Decode audio packets to a float32 PCM array at Whisper's sample rate.
 
-        The codec and sample rate are derived from :attr:`media` so that the
-        correct PyAV input format is selected without hard-coding numeric
-        payload-type constants.
+        The codec is identified by :attr:`payload_type` matched against
+        :class:`~voip.rtp.RTPPayloadType` enum values, and the clock rate is
+        taken from :attr:`sample_rate` (both derived from :attr:`media`).
         """
-        codec = _codec_name_from_media(self.media)
-        match codec:
-            case "opus":
+        match self.payload_type:
+            case RTPPayloadType.OPUS:
                 return self._decode_via_av(
                     _build_ogg_opus(packets),
                     input_format="ogg",
                     input_sample_rate=None,
                 )
-            case "g722":
+            case RTPPayloadType.G722:
                 return self._decode_via_av(
                     b"".join(packets),
                     input_format="g722",
                     input_sample_rate=self.sample_rate,
                 )
-            case "pcma":
+            case RTPPayloadType.PCMA:
                 return self._decode_via_av(
                     b"".join(packets),
                     input_format="alaw",
                     input_sample_rate=self.sample_rate,
                 )
-            case "pcmu":
+            case RTPPayloadType.PCMU:
                 return self._decode_via_av(
                     b"".join(packets),
                     input_format="mulaw",
@@ -223,8 +199,8 @@ class WhisperCall(RealtimeTransportProtocol):
                 )
             case _:
                 raise NotImplementedError(
-                    f"Unsupported codec: {codec!r}. "
-                    f"Supported codecs: opus, g722, pcma, pcmu"
+                    f"Unsupported RTP payload type: {self.payload_type}. "
+                    f"Supported types: {list(RTPPayloadType)!r}"
                 )
 
     def _decode_via_av(
