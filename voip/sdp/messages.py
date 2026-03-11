@@ -131,7 +131,6 @@ class SessionDescription:
         return str(self).encode()
 
     def __str__(self) -> str:
-        """Serialize to SDP text."""
         return "\r\n".join(self._lines()) + "\r\n"
 
     def _lines(self) -> Generator[str]:
