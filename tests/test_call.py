@@ -705,7 +705,7 @@ class TestSessionInitiationProtocol:
 
         p = make_register_session()
         p.connection_made(make_mock_transport())
-        with caplog.at_level(logging.WARNING, logger="voip.sip.protocol"):
+        with caplog.at_level(logging.WARNING, logger="voip.sip"):
             with pytest.raises(NotImplementedError):
                 p.response_received(
                     Response(

@@ -138,14 +138,20 @@ class WhisperCall(RealtimeTransportProtocol):
     async def _transcribe_chunk(self, packets: list[bytes]) -> None:
         """Decode and transcribe one audio chunk."""
         loop = asyncio.get_running_loop()
-        audio = await loop.run_in_executor(None, self._decode_audio, packets)
-        logger.debug(
-            "Transcribing %d samples (%.1f s)",
-            len(audio),
-            len(audio) / SAMPLE_RATE,
-        )
-        text = await loop.run_in_executor(None, self._run_transcription, audio)
-        self.transcription_received(text.strip())
+        try:
+            audio = await loop.run_in_executor(None, self._decode_audio, packets)
+            logger.debug(
+                "Transcribing %d samples (%.1f s)",
+                len(audio),
+                len(audio) / SAMPLE_RATE,
+            )
+            text = await loop.run_in_executor(None, self._run_transcription, audio)
+            self.transcription_received(text.strip())
+        except asyncio.CancelledError:
+            logger.debug("Transcription task was cancelled")
+            raise
+        except Exception:
+            logger.exception("Error while decoding or transcribing audio chunk")
 
     def _decode_audio(self, packets: list[bytes]) -> np.ndarray:
         """Decode audio packets to a float32 PCM array at Whisper's sample rate.

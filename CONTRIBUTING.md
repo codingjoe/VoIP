@@ -22,5 +22,5 @@ uv pre-commit install
 ## Testing with Extra Dependencies
 
 ```bash
-uv run --extra=cli --extra=pygments --extra=whisper pytest
+uv run --extra=cli --extra=pygments --extra=audio pytest
 ```
