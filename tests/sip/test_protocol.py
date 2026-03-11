@@ -523,11 +523,11 @@ class TestAnswer:
 
     def test_preferred_codecs__class_attribute(self):
         """PREFERRED_CODECS is a class attribute on RTP with Opus first."""
-        from voip.sdp.types import RtpPayloadFormat
+        from voip.sdp.types import RTPPayloadFormat
 
         codecs = RealtimeTransportProtocol.PREFERRED_CODECS
         assert isinstance(codecs, list)
-        assert all(isinstance(c, RtpPayloadFormat) for c in codecs)
+        assert all(isinstance(c, RTPPayloadFormat) for c in codecs)
         pts = [c.payload_type for c in codecs]
         assert pts[0] == 111  # Opus is highest priority
         assert 8 in pts  # PCMA present

@@ -8,7 +8,7 @@ from voip.sdp.types import (
     ConnectionData,
     MediaDescription,
     Origin,
-    RtpPayloadFormat,
+    RTPPayloadFormat,
     Timing,
 )
 
@@ -102,7 +102,7 @@ class TestSessionDescriptionParse:
         assert audio.port == 49170
         assert audio.proto == "RTP/AVP"
         assert audio.fmt == [
-            RtpPayloadFormat(payload_type=0, encoding_name="PCMU", clock_rate=8000)
+            RTPPayloadFormat(payload_type=0, encoding_name="PCMU", clock_rate=8000)
         ]
 
     def test_parse__media_video(self):
@@ -117,7 +117,7 @@ class TestSessionDescriptionParse:
         sdp = SessionDescription.parse(TYPICAL_SDP)
         audio = sdp.media[0]
         assert audio.fmt == [
-            RtpPayloadFormat(payload_type=0, encoding_name="PCMU", clock_rate=8000)
+            RTPPayloadFormat(payload_type=0, encoding_name="PCMU", clock_rate=8000)
         ]
         assert (
             audio.attributes == []
@@ -336,7 +336,7 @@ class TestSessionDescriptionStr:
                     port=49170,
                     proto="RTP/AVP",
                     fmt=[
-                        RtpPayloadFormat(
+                        RTPPayloadFormat(
                             payload_type=0, encoding_name="PCMU", clock_rate=8000
                         )
                     ],
@@ -355,7 +355,7 @@ class TestSessionDescriptionStr:
                     media="audio",
                     port=49170,
                     proto="RTP/AVP",
-                    fmt=[RtpPayloadFormat(payload_type=0)],
+                    fmt=[RTPPayloadFormat(payload_type=0)],
                     connection=ConnectionData(
                         nettype="IN", addrtype="IP4", connection_address="192.168.1.1"
                     ),
@@ -372,7 +372,7 @@ class TestSessionDescriptionStr:
                     media="audio",
                     port=49170,
                     proto="RTP/AVP",
-                    fmt=[RtpPayloadFormat(payload_type=0)],
+                    fmt=[RTPPayloadFormat(payload_type=0)],
                     title="My Audio",
                 )
             ]
@@ -524,7 +524,7 @@ class TestMediaDescription:
             media="audio",
             port=49170,
             proto="RTP/AVP",
-            fmt=[RtpPayloadFormat(payload_type=0), RtpPayloadFormat(payload_type=8)],
+            fmt=[RTPPayloadFormat(payload_type=0), RTPPayloadFormat(payload_type=8)],
         )
 
     def test_str(self):
@@ -533,7 +533,7 @@ class TestMediaDescription:
             media="audio",
             port=49170,
             proto="RTP/AVP",
-            fmt=[RtpPayloadFormat(payload_type=0)],
+            fmt=[RTPPayloadFormat(payload_type=0)],
         )
         assert str(media) == "m=audio 49170 RTP/AVP 0"
 
@@ -544,7 +544,7 @@ class TestMediaDescription:
             port=49170,
             proto="RTP/AVP",
             fmt=[
-                RtpPayloadFormat(payload_type=0, encoding_name="PCMU", clock_rate=8000)
+                RTPPayloadFormat(payload_type=0, encoding_name="PCMU", clock_rate=8000)
             ],
         )
         assert str(media) == "m=audio 49170 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000"
@@ -553,7 +553,7 @@ class TestMediaDescription:
 class TestRtpPayloadFormat:
     def test_parse__opus(self):
         """Parse a full Opus rtpmap attribute value."""
-        rm = RtpPayloadFormat.parse("111 opus/48000/2")
+        rm = RTPPayloadFormat.parse("111 opus/48000/2")
         assert rm.payload_type == 111
         assert rm.encoding_name == "opus"
         assert rm.clock_rate == 48000
@@ -561,7 +561,7 @@ class TestRtpPayloadFormat:
 
     def test_parse__pcma(self):
         """Parse a PCMA rtpmap attribute value (no channel count)."""
-        rm = RtpPayloadFormat.parse("8 PCMA/8000")
+        rm = RTPPayloadFormat.parse("8 PCMA/8000")
         assert rm.payload_type == 8
         assert rm.encoding_name == "PCMA"
         assert rm.clock_rate == 8000
@@ -570,24 +570,24 @@ class TestRtpPayloadFormat:
     def test_parse__invalid__raises(self):
         """Raise ValueError for a malformed rtpmap value."""
         with pytest.raises(ValueError):
-            RtpPayloadFormat.parse("111 opus")
+            RTPPayloadFormat.parse("111 opus")
 
     def test_str__with_channels(self):
         """Serialize an RtpPayloadFormat with channel count > 1."""
-        rm = RtpPayloadFormat(
+        rm = RTPPayloadFormat(
             payload_type=111, encoding_name="opus", clock_rate=48000, channels=2
         )
         assert str(rm) == "111 opus/48000/2"
 
     def test_str__without_channels(self):
         """Serialize an RtpPayloadFormat with a single channel (omit channel suffix)."""
-        rm = RtpPayloadFormat(payload_type=8, encoding_name="PCMA", clock_rate=8000)
+        rm = RTPPayloadFormat(payload_type=8, encoding_name="PCMA", clock_rate=8000)
         assert str(rm) == "8 PCMA/8000"
 
     def test_str__missing_codec_info__raises(self):
         """Raise ValueError when encoding_name or clock_rate is absent."""
         with pytest.raises(ValueError):
-            str(RtpPayloadFormat(payload_type=0))
+            str(RTPPayloadFormat(payload_type=0))
 
 
 class TestMediaDescriptionGetFormat:
@@ -598,7 +598,7 @@ class TestMediaDescriptionGetFormat:
             port=0,
             proto="RTP/AVP",
             fmt=[
-                RtpPayloadFormat(
+                RTPPayloadFormat(
                     payload_type=111, encoding_name="opus", clock_rate=48000, channels=2
                 )
             ],
@@ -614,7 +614,7 @@ class TestMediaDescriptionGetFormat:
             port=0,
             proto="RTP/AVP",
             fmt=[
-                RtpPayloadFormat(payload_type=8, encoding_name="PCMA", clock_rate=8000)
+                RTPPayloadFormat(payload_type=8, encoding_name="PCMA", clock_rate=8000)
             ],
         )
         assert media.get_format("8") is not None
@@ -625,7 +625,7 @@ class TestMediaDescriptionGetFormat:
             media="audio",
             port=0,
             proto="RTP/AVP",
-            fmt=[RtpPayloadFormat(payload_type=8)],
+            fmt=[RTPPayloadFormat(payload_type=8)],
         )
         assert media.get_format(111) is None
 
@@ -636,7 +636,7 @@ class TestMediaDescriptionGetFormat:
             port=0,
             proto="RTP/AVP",
             fmt=[
-                RtpPayloadFormat(
+                RTPPayloadFormat(
                     payload_type=111, encoding_name="opus", clock_rate=48000, channels=2
                 )
             ],
@@ -652,7 +652,7 @@ class TestMediaDescriptionSampleRate:
             port=0,
             proto="RTP/AVP",
             fmt=[
-                RtpPayloadFormat(
+                RTPPayloadFormat(
                     payload_type=111, encoding_name="opus", clock_rate=48000, channels=2
                 )
             ],
@@ -665,7 +665,7 @@ class TestMediaDescriptionSampleRate:
             media="audio",
             port=0,
             proto="RTP/AVP",
-            fmt=[RtpPayloadFormat(payload_type=0)],
+            fmt=[RTPPayloadFormat(payload_type=0)],
         )
         assert media.sample_rate == 8000
 
@@ -675,7 +675,7 @@ class TestMediaDescriptionSampleRate:
             media="audio",
             port=0,
             proto="RTP/AVP",
-            fmt=[RtpPayloadFormat(payload_type=8)],
+            fmt=[RTPPayloadFormat(payload_type=8)],
         )
         assert media.sample_rate == 8000
 
@@ -685,7 +685,7 @@ class TestMediaDescriptionSampleRate:
             media="audio",
             port=0,
             proto="RTP/AVP",
-            fmt=[RtpPayloadFormat(payload_type=9)],
+            fmt=[RTPPayloadFormat(payload_type=9)],
         )
         assert media.sample_rate == 8000
 
@@ -701,7 +701,7 @@ class TestMediaDescriptionSampleRate:
             media="audio",
             port=0,
             proto="RTP/AVP",
-            fmt=[RtpPayloadFormat(payload_type=99)],
+            fmt=[RTPPayloadFormat(payload_type=99)],
         )
         with pytest.raises(ValueError, match="No clock rate"):
             _ = media.sample_rate

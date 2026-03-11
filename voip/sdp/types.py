@@ -15,7 +15,7 @@ __all__ = [
     "Bandwidth",
     "Timing",
     "Attribute",
-    "RtpPayloadFormat",
+    "RTPPayloadFormat",
     "StaticPayloadType",
     "MediaDescription",
 ]
@@ -204,7 +204,7 @@ class Attribute:
 
 
 @dataclasses.dataclass(slots=True)
-class RtpPayloadFormat:
+class RTPPayloadFormat:
     """RTP payload format descriptor (RFC 3551 §6 / RFC 4566 §6).
 
     Carries the numeric payload type together with the optional codec
@@ -217,7 +217,7 @@ class RtpPayloadFormat:
     RFC 3551 and may be absent from the SDP; for dynamic payload types
     (PT ≥ 96) they are always required.
 
-    Instances serialise to the ``a=rtpmap`` attribute *value* (without the
+    Instances serialize to the ``a=rtpmap`` attribute *value* (without the
     leading ``a=rtpmap:`` prefix) when all codec fields are present, so they
     can be embedded directly as :attr:`Attribute.value`.
     """
@@ -244,7 +244,7 @@ class RtpPayloadFormat:
         return f"{base}/{self.channels}" if self.channels != 1 else base
 
     @classmethod
-    def parse(cls, value: str) -> RtpPayloadFormat:
+    def parse(cls, value: str) -> RTPPayloadFormat:
         """Parse an ``a=rtpmap`` attribute value into an :class:`RtpPayloadFormat`.
 
         Args:
@@ -265,7 +265,7 @@ class RtpPayloadFormat:
         )
 
     @classmethod
-    def from_pt(cls, pt: int) -> RtpPayloadFormat:
+    def from_pt(cls, pt: int) -> RTPPayloadFormat:
         """Create a stub :class:`RtpPayloadFormat` from a payload type number.
 
         Only the *payload_type* is set.  Codec parameters (*encoding_name*,
@@ -279,10 +279,6 @@ class RtpPayloadFormat:
             pt: RTP payload type number (0–127).
         """
         return cls(payload_type=pt)
-
-
-#: Backwards-compatible alias.
-RtpMap = RtpPayloadFormat
 
 
 class StaticPayloadType(enum.Enum):
@@ -327,13 +323,13 @@ class MediaDescription:
     media: str
     port: int
     proto: str
-    fmt: list[RtpPayloadFormat]
+    fmt: list[RTPPayloadFormat]
     title: str | None = None
     connection: ConnectionData | None = None
     bandwidths: list[Bandwidth] = dataclasses.field(default_factory=list)
     attributes: list[Attribute] = dataclasses.field(default_factory=list)
 
-    def get_format(self, pt: int | str) -> RtpPayloadFormat | None:
+    def get_format(self, pt: int | str) -> RTPPayloadFormat | None:
         """Return the :class:`RtpPayloadFormat` for the given payload type, or ``None``.
 
         Args:
@@ -347,7 +343,7 @@ class MediaDescription:
         target = int(pt)
         return next((f for f in self.fmt if f.payload_type == target), None)
 
-    def get_rtpmap(self, pt: int | str) -> RtpPayloadFormat | None:
+    def get_rtpmap(self, pt: int | str) -> RTPPayloadFormat | None:
         """Alias for :meth:`get_format` (backwards compatibility)."""
         return self.get_format(pt)
 
@@ -398,5 +394,5 @@ class MediaDescription:
     def parse(cls, value: str) -> MediaDescription:
         """Parse an m= line value into a MediaDescription."""
         media, port_str, proto, *fmts = value.split(" ")
-        fmt = [RtpPayloadFormat.from_pt(int(pt)) for pt in " ".join(fmts).split(" ")]
+        fmt = [RTPPayloadFormat.from_pt(int(pt)) for pt in " ".join(fmts).split(" ")]
         return cls(media=media, port=int(port_str), proto=proto, fmt=fmt)

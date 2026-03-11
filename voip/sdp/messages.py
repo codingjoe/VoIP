@@ -13,7 +13,7 @@ from .types import (
     IntField,
     MediaDescription,
     Origin,
-    RtpPayloadFormat,
+    RTPPayloadFormat,
     StrField,
     Timing,
 )
@@ -97,7 +97,7 @@ class SessionDescription:
             and parsed.value is not None
             and current_media is not None
         ):
-            rtpfmt = RtpPayloadFormat.parse(parsed.value)
+            rtpfmt = RTPPayloadFormat.parse(parsed.value)
             for i, f in enumerate(current_media.fmt):
                 if f.payload_type == rtpfmt.payload_type:
                     current_media.fmt[i] = rtpfmt

@@ -7,7 +7,7 @@ import struct
 
 import pytest
 from voip.rtp import RTP, RealtimeTransportProtocol, RTPPacket, RTPPayloadType
-from voip.sdp.types import MediaDescription, RtpPayloadFormat
+from voip.sdp.types import MediaDescription, RTPPayloadFormat
 
 
 def make_rtp_packet(
@@ -148,7 +148,7 @@ class TestRealtimeTransportProtocol:
             port=49170,
             proto="RTP/AVP",
             fmt=[
-                RtpPayloadFormat(payload_type=8, encoding_name="PCMA", clock_rate=8000)
+                RTPPayloadFormat(payload_type=8, encoding_name="PCMA", clock_rate=8000)
             ],
         )
         protocol = RealtimeTransportProtocol(media=media)
@@ -161,7 +161,7 @@ class TestRealtimeTransportProtocol:
             port=49170,
             proto="RTP/AVP",
             fmt=[
-                RtpPayloadFormat(payload_type=9, encoding_name="G722", clock_rate=8000)
+                RTPPayloadFormat(payload_type=9, encoding_name="G722", clock_rate=8000)
             ],
         )
         protocol = RealtimeTransportProtocol(media=media)
@@ -178,7 +178,7 @@ class TestRealtimeTransportProtocol:
             media="audio",
             port=49170,
             proto="RTP/AVP",
-            fmt=[RtpPayloadFormat(payload_type=8)],
+            fmt=[RTPPayloadFormat(payload_type=8)],
         )
         protocol = RealtimeTransportProtocol(media=media)
         assert protocol.payload_type == 8
@@ -193,12 +193,12 @@ class TestNegotiateCodec:
         self, fmts: list[str], rtpmaps: list[str] | None = None
     ) -> MediaDescription:
         """Build a MediaDescription with given format list and optional rtpmap attributes."""
-        rtpmap_by_pt: dict[int, RtpPayloadFormat] = {}
+        rtpmap_by_pt: dict[int, RTPPayloadFormat] = {}
         for rtpmap in rtpmaps or []:
-            f = RtpPayloadFormat.parse(rtpmap)
+            f = RTPPayloadFormat.parse(rtpmap)
             rtpmap_by_pt[f.payload_type] = f
         formats = [
-            rtpmap_by_pt.get(int(pt)) or RtpPayloadFormat(payload_type=int(pt))
+            rtpmap_by_pt.get(int(pt)) or RTPPayloadFormat(payload_type=int(pt))
             for pt in fmts
         ]
         return MediaDescription(media="audio", port=49170, proto="RTP/AVP", fmt=formats)
@@ -260,7 +260,7 @@ class TestNegotiateCodec:
 
         class PCMAOnlyCall(RealtimeTransportProtocol):
             PREFERRED_CODECS = [
-                RtpPayloadFormat(payload_type=8, encoding_name="PCMA", clock_rate=8000)
+                RTPPayloadFormat(payload_type=8, encoding_name="PCMA", clock_rate=8000)
             ]
 
         media = self._make_media(["0", "8", "111"])

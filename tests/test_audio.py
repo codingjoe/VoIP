@@ -14,7 +14,7 @@ pytest.importorskip("whisper")
 import whisper  # noqa: E402
 from voip.audio import WhisperCall, _build_ogg_opus  # noqa: E402
 from voip.rtp import RTP, RTPPacket, RTPPayloadType  # noqa: E402
-from voip.sdp.types import MediaDescription, RtpPayloadFormat  # noqa: E402
+from voip.sdp.types import MediaDescription, RTPPayloadFormat  # noqa: E402
 
 
 def packet_threshold(call_class: type[WhisperCall]) -> int:
@@ -29,9 +29,9 @@ def packet_threshold(call_class: type[WhisperCall]) -> int:
 def _make_media(fmt: str, rtpmap: str | None = None) -> MediaDescription:
     """Build a single-codec MediaDescription for use in tests."""
     if rtpmap:
-        payload_format = RtpPayloadFormat.parse(rtpmap)
+        payload_format = RTPPayloadFormat.parse(rtpmap)
     else:
-        payload_format = RtpPayloadFormat(payload_type=int(fmt))
+        payload_format = RTPPayloadFormat(payload_type=int(fmt))
     return MediaDescription(
         media="audio", port=0, proto="RTP/AVP", fmt=[payload_format]
     )

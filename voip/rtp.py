@@ -12,7 +12,7 @@ import enum
 import logging
 from typing import ClassVar
 
-from voip.sdp.types import MediaDescription, RtpPayloadFormat
+from voip.sdp.types import MediaDescription, RTPPayloadFormat
 
 __all__ = ["RTP", "RTPPacket", "RTPPayloadType", "RealtimeTransportProtocol"]
 
@@ -85,20 +85,20 @@ class RealtimeTransportProtocol(asyncio.DatagramProtocol):
 
     #: Codec preference list ordered from highest to lowest priority.
     #: Opus > G.722 > PCMA (G.711 A-law) > PCMU (G.711 µ-law).
-    PREFERRED_CODECS: ClassVar[list[RtpPayloadFormat]] = [
-        RtpPayloadFormat(
+    PREFERRED_CODECS: ClassVar[list[RTPPayloadFormat]] = [
+        RTPPayloadFormat(
             payload_type=RTPPayloadType.OPUS,
             encoding_name="opus",
             clock_rate=48000,
             channels=2,
         ),
-        RtpPayloadFormat(
+        RTPPayloadFormat(
             payload_type=RTPPayloadType.G722, encoding_name="G722", clock_rate=8000
         ),
-        RtpPayloadFormat(
+        RTPPayloadFormat(
             payload_type=RTPPayloadType.PCMA, encoding_name="PCMA", clock_rate=8000
         ),
-        RtpPayloadFormat(
+        RTPPayloadFormat(
             payload_type=RTPPayloadType.PCMU, encoding_name="PCMU", clock_rate=8000
         ),
     ]
