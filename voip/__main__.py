@@ -50,10 +50,11 @@ def voip(ctx, verbose):
     ctx.ensure_object(dict)
     ctx.obj["verbose"] = verbose
     logging.basicConfig(
-        level=max(10, 10 * (2 - verbose)),
-        format="%(levelname)s: [%(asctime)s] %(message)s",
+        level=max(10, 10 * (3 - verbose)),
+        format="%(levelname)s: [%(asctime)s] (%(name)s) %(message)s",
         handlers=[logging.StreamHandler()],
     )
+    logging.getLogger("voip").setLevel(max(10, 10 * (2 - verbose)))
 
 
 @voip.group()
