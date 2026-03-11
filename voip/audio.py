@@ -200,7 +200,7 @@ class WhisperCall(RealtimeTransportProtocol):
             case _:
                 raise NotImplementedError(
                     f"Unsupported RTP payload type: {self.payload_type}. "
-                    f"Supported types: {list(RTPPayloadType)!r}"
+                    f"Supported types: {[pt.value for pt in RTPPayloadType]!r}"
                 )
 
     def _decode_via_av(

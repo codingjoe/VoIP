@@ -1,5 +1,6 @@
 """Tests for SDP message parsing and serialization."""
 
+import pytest
 from voip.sdp.messages import SessionDescription
 from voip.sdp.types import (
     Attribute,
@@ -557,7 +558,6 @@ class TestRtpMap:
 
     def test_parse__invalid__raises(self):
         """Raise ValueError for a malformed rtpmap value."""
-        import pytest
         with pytest.raises(ValueError):
             RtpMap.parse("111 opus")
 
@@ -625,14 +625,12 @@ class TestMediaDescriptionSampleRate:
 
     def test_sample_rate__no_fmt__raises(self):
         """Raise ValueError when the format list is empty."""
-        import pytest
         media = MediaDescription(media="audio", port=0, proto="RTP/AVP", fmt=[])
         with pytest.raises(ValueError, match="No audio format"):
             _ = media.sample_rate
 
     def test_sample_rate__unknown_dynamic_pt__raises(self):
         """Raise ValueError for a dynamic PT with no rtpmap attribute."""
-        import pytest
         media = MediaDescription(media="audio", port=0, proto="RTP/AVP", fmt=["99"])
         with pytest.raises(ValueError, match="No a=rtpmap"):
             _ = media.sample_rate
