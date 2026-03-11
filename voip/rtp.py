@@ -36,7 +36,10 @@ def _sample_rate_from_media(media: MediaDescription | None) -> int:
                     try:
                         return int(parts[1])
                     except ValueError:
-                        pass
+                        logger.warning(
+                            "Malformed rtpmap clock rate in %r, falling back to 8000 Hz",
+                            attr.value,
+                        )
     return 8000
 
 
