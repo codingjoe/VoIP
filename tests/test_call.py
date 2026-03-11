@@ -219,6 +219,7 @@ class TestSIP:
     async def test_answer__reuses_shared_rtp_socket_for_second_call(self):
         """A second _answer() reuses the same shared RTP socket (one port for all calls)."""
         from voip.sdp.messages import SessionDescription  # noqa: PLC0415
+        from voip.sip.messages import Request as SIPRequest  # noqa: PLC0415
 
         protocol = SIP()
         protocol.send = MagicMock()
@@ -227,10 +228,6 @@ class TestSIP:
         sdp_body1 = SessionDescription.parse(
             b"v=0\r\no=- 0 0 IN IP4 1.2.3.4\r\ns=-\r\nc=IN IP4 1.2.3.4\r\nt=0 0\r\nm=audio 5000 RTP/AVP 0\r\n"
         )
-        invite1 = make_invite({"Call-ID": "call-1@test", "Content-Type": "application/sdp"})
-        object.__setattr__(invite1, "body", sdp_body1) if hasattr(invite1, "__dataclass_fields__") else None
-        # Use lower-level: directly set body via Request construction
-        from voip.sip.messages import Request as SIPRequest  # noqa: PLC0415
         invite1 = SIPRequest(
             method="INVITE",
             uri="sip:alice@atlanta.com",

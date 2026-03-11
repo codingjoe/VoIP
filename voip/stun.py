@@ -172,7 +172,12 @@ class STUNProtocol(asyncio.DatagramProtocol):
         self.packet_received(data, addr)
 
     def packet_received(self, data: bytes, addr: tuple[str, int]) -> None:
-        """Override in subclasses to handle non-STUN datagrams."""
+        """Override in subclasses to handle non-STUN datagrams.
+
+        Args:
+            data: Raw datagram payload (first byte ≥ 4, not a STUN packet).
+            addr: Source ``(host, port)`` of the datagram.
+        """
 
     async def stun_discover(
         self, host: str, port: int = 3478, timeout_secs: float = 3.0

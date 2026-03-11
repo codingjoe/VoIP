@@ -14,8 +14,8 @@ import logging
 import re
 import secrets
 import uuid
-from typing import TYPE_CHECKING
 
+from voip.rtp import RealtimeTransportProtocol
 from voip.sdp.messages import SessionDescription
 from voip.sdp.types import (
     Attribute,
@@ -29,9 +29,6 @@ from voip.types import DigestQoP
 
 from .messages import Message, Request, Response
 from .types import CallerID, Status
-
-if TYPE_CHECKING:
-    from voip.rtp import RealtimeTransportProtocol
 
 logger = logging.getLogger("voip.sip")
 
@@ -391,8 +388,6 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
         self, request: Request, call_class: type[RealtimeTransportProtocol]
     ) -> None:
         """Perform the asynchronous part of answering: set up RTP, send 200 OK."""
-        from voip.rtp import RealtimeTransportProtocol  # noqa: PLC0415
-
         call_id = request.headers.get("Call-ID", "")
         addr = self._request_addrs.pop(call_id, None)
         if addr is None:

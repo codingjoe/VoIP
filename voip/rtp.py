@@ -231,7 +231,9 @@ class RealtimeTransportProtocol(STUNProtocol):
         ``None`` handler when no exact match exists.  If neither is found the
         packet is processed by this instance (stand-alone / mux-level mode).
         """
-        handler = self._calls.get(addr) or self._calls.get(None)
+        handler = self._calls.get(addr)
+        if handler is None:
+            handler = self._calls.get(None)
         if handler is not None:
             handler._process_rtp(data)
         else:
