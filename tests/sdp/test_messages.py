@@ -45,6 +45,7 @@ FULL_SDP = (
     b"r=7d 1h 0 25h\r\n"
     b"a=recvonly\r\n"
     b"m=audio 49170 RTP/AVP 0\r\n"
+    b"a=rtpmap:0 PCMU/8000\r\n"
     b"m=video 51372 RTP/AVP 99\r\n"
     b"a=rtpmap:99 h263-1998/90000\r\n"
 )
@@ -554,14 +555,14 @@ class TestMediaDescription:
         )
 
     def test_str(self):
-        """Serialize a MediaDescription to string (no a=rtpmap when codec info is absent)."""
+        """Serialize a MediaDescription; static PTs include a=rtpmap with RFC 3551 defaults."""
         media = MediaDescription(
             media="audio",
             port=49170,
             proto="RTP/AVP",
             fmt=[RTPPayloadFormat(payload_type=0)],
         )
-        assert str(media) == "m=audio 49170 RTP/AVP 0"
+        assert str(media) == "m=audio 49170 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000"
 
     def test_str__with_rtpmap_in_fmt(self):
         """Serialize a MediaDescription; a=rtpmap is derived from fmt entries with codec info."""
@@ -754,8 +755,7 @@ class TestMediaDescriptionSampleRate:
         f = RTPPayloadFormat(payload_type=9)
         assert f.sample_rate == 8000
 
-    def test_sample_rate__unknown_dynamic_pt__raises(self):
-        """Raise ValueError for a dynamic PT with no rtpmap attribute."""
+    def test_sample_rate__unknown_dynamic_pt__returns_none(self):
+        """Dynamic PTs without an a=rtpmap have sample_rate=None (no RFC 3551 default)."""
         f = RTPPayloadFormat(payload_type=99)
-        with pytest.raises(ValueError, match="No sample rate"):
-            _ = f.sample_rate
+        assert f.sample_rate is None

@@ -16,7 +16,14 @@ import uuid
 from typing import TYPE_CHECKING
 
 from voip.sdp.messages import SessionDescription
-from voip.sdp.types import Attribute, ConnectionData, MediaDescription, Origin, Timing
+from voip.sdp.types import (
+    Attribute,
+    ConnectionData,
+    MediaDescription,
+    Origin,
+    RTPPayloadFormat,
+    Timing,
+)
 from voip.stun import stun_discover
 from voip.types import DigestQoP
 
@@ -352,7 +359,7 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
             negotiated_media = call_class.negotiate_codec(remote_audio)
         else:
             negotiated_media = MediaDescription(
-                media="audio", port=0, proto="RTP/AVP", fmt=["0"], attributes=[]
+                media="audio", port=0, proto="RTP/AVP", fmt=[RTPPayloadFormat.from_pt(0)]
             )
         rtp_transport, rtp_protocol = await loop.create_datagram_endpoint(
             lambda: call_class(

@@ -67,24 +67,14 @@ class RTPPacket:
 class RealtimeTransportProtocol(asyncio.DatagramProtocol):
     """Base class for RTP audio call handlers (RFC 3550).
 
-    Subclass this and override :meth:`audio_received` to process incoming audio::
-
-        class MyCall(RealtimeTransportProtocol):
-            def audio_received(self, packet: RTPPacket) -> None:
-                ...  # process audio payload
-
-    Instances are used directly as asyncio datagram protocols, so they handle
-    their own RTP header parsing before calling :meth:`audio_received`.
-
-    Override :meth:`negotiate_codec` to customise codec selection when answering
-    incoming calls.
+    Subclass and override :meth:`audio_received` to process incoming audio.
+    Override :meth:`negotiate_codec` to customise codec selection.
     """
 
     #: Fixed RTP header size in bytes (RFC 3550 §5.1).
     rtp_header_size: int = 12
 
-    #: Codec preference list ordered from highest to lowest priority.
-    #: Opus > G.722 > PCMA (G.711 A-law) > PCMU (G.711 µ-law).
+    #: Preferred codecs, highest to lowest priority.
     PREFERRED_CODECS: ClassVar[list[RTPPayloadFormat]] = [
         RTPPayloadFormat(
             payload_type=RTPPayloadType.OPUS,
@@ -105,9 +95,7 @@ class RealtimeTransportProtocol(asyncio.DatagramProtocol):
 
     def __init__(self, caller: str = "", media: MediaDescription | None = None) -> None:
         super().__init__()
-        #: The SIP address of the caller (from the From header of the INVITE).
         self.caller = caller
-        #: The negotiated :class:`~voip.sdp.types.MediaDescription` for this call.
         self.media = media
         if media is not None and media.fmt:
             self.payload_type: int = media.fmt[0].payload_type
@@ -118,27 +106,11 @@ class RealtimeTransportProtocol(asyncio.DatagramProtocol):
 
     @classmethod
     def negotiate_codec(cls, remote_media: MediaDescription) -> MediaDescription:
-        """Select the best codec from the offered SDP MediaDescription.
+        """Select the best codec from the offered SDP and return a negotiated MediaDescription.
 
-        Iterates :attr:`PREFERRED_CODECS` in priority order and returns a
-        :class:`~voip.sdp.types.MediaDescription` configured with the first
-        codec found in the remote offer.  All SDP codec information is accessed
-        through the :class:`~voip.sdp.types.MediaDescription` and
-        :class:`~voip.sdp.types.RtpMap` APIs — no raw attribute string parsing
-        is performed here.
-
-        Args:
-            remote_media: The ``m=audio`` :class:`~voip.sdp.types.MediaDescription`
-                from the INVITE SDP body.
-
-        Returns:
-            A :class:`~voip.sdp.types.MediaDescription` configured with the
-            negotiated codec (port is set to ``0``; the SIP layer assigns the
-            real RTP port when building the 200 OK SDP).
-
-        Raises:
-            NotImplementedError: If the remote offer contains no audio formats
-                or none of the offered codecs are in :attr:`PREFERRED_CODECS`.
+        Iterates :attr:`PREFERRED_CODECS` in priority order, matching by payload
+        type or encoding name.  Raises :exc:`NotImplementedError` when no codec
+        matches.
         """
         if not remote_media.fmt:
             raise NotImplementedError("Remote SDP offer contains no audio formats")

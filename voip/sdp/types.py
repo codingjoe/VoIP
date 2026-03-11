@@ -260,27 +260,18 @@ class StaticPayloadType(PayloadTypeSpec, enum.Enum):
 class RTPPayloadFormat:
     """RTP payload format descriptor (RFC 3551 §6 / RFC 4566 §6).
 
-    Carries the numeric payload type together with the optional codec
-    parameters that are conveyed by an ``a=rtpmap`` attribute::
+    Codec parameters from ``a=rtpmap`` are merged in by the SDP parser.
+    Static payload types fall back to the :class:`StaticPayloadType` table.
+    Dynamic payload types (PT ≥ 96) require an explicit ``a=rtpmap``.
 
-        a=rtpmap:111 opus/48000/2
-        a=rtpmap:8 PCMA/8000
-
-    For static payload types the codec parameters are pre-defined by
-    RFC 3551 and may be absent from the SDP; :attr:`sample_rate` falls
-    back to the :class:`StaticPayloadType` table in that case.  For
-    dynamic payload types (PT ≥ 96) an explicit ``a=rtpmap`` is always
-    required.
-
-    Instances serialise to the ``a=rtpmap`` attribute *value* (without the
-    leading ``a=rtpmap:`` prefix) when all codec fields are present.
+    Serialises to the ``a=rtpmap`` value when codec fields are present.
     """
 
     payload_type: int
     fmtp: str | None = None
     encoding_name: str | None = None
     channels: int = 1
-    sample_rate: int = None
+    sample_rate: int | None = None
 
     def __post_init__(self):
         try:
@@ -311,17 +302,7 @@ class RTPPayloadFormat:
 
     @classmethod
     def from_pt(cls, pt: int) -> RTPPayloadFormat:
-        """Create a stub :class:`RTPPayloadFormat` from a payload type number.
-
-        Only the *payload_type* is set.  Codec parameters (*encoding_name*,
-        *sample_rate*, *channels*) remain ``None`` / default until an explicit
-        ``a=rtpmap`` attribute is parsed and merged in by the SDP parser.
-        :attr:`sample_rate` will fall back to :class:`StaticPayloadType` for
-        known static payload types.
-
-        Args:
-            pt: RTP payload type number (0–127).
-        """
+        """Create an :class:`RTPPayloadFormat` from a payload type number."""
         return cls(payload_type=pt)
 
 
@@ -344,32 +325,15 @@ class MediaDescription:
     attributes: list[Attribute] = dataclasses.field(default_factory=list)
 
     def get_format(self, pt: int | str) -> RTPPayloadFormat | None:
-        """Return the :class:`RTPPayloadFormat` for the given payload type, or ``None``.
-
-        Args:
-            pt: Payload type as an integer or its string representation
-                (e.g. ``111`` or ``"111"``).
-
-        Returns:
-            The matching :class:`RTPPayloadFormat` from :attr:`fmt`, or
-            ``None`` if not found.
-        """
+        """Return the :class:`RTPPayloadFormat` for payload type *pt*, or ``None``."""
         target = int(pt)
         return next((f for f in self.fmt if f.payload_type == target), None)
 
     def apply_attribute(self, attr: Attribute) -> bool:
-        """Apply a media-level ``a=`` attribute to this description.
+        """Apply a media-level ``a=`` attribute, returning ``True`` if consumed.
 
         Handles ``a=rtpmap`` and ``a=fmtp`` by updating the matching
-        :class:`RTPPayloadFormat` entry in :attr:`fmt`.  All other
-        attributes are appended to :attr:`attributes`.
-
-        Args:
-            attr: The parsed :class:`Attribute` to apply.
-
-        Returns:
-            ``True`` when the attribute was consumed as a format-specific
-            attribute (``rtpmap`` or ``fmtp``), ``False`` otherwise.
+        :class:`RTPPayloadFormat` entry.  Other attributes go to :attr:`attributes`.
         """
         if attr.name == "rtpmap" and attr.value is not None:
             rtpfmt = RTPPayloadFormat.parse(attr.value)
