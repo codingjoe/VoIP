@@ -1,13 +1,11 @@
 """Tests for the SIP session and RTP call handler."""
 
-import socket
-import struct
 from unittest.mock import MagicMock, patch
 
 import pytest
 from voip.rtp import RTP, RTPPacket
-from voip.sip import SIP, SessionInitiationProtocol
 from voip.sip.messages import Message, Request, Response
+from voip.sip.protocol import SIP, SessionInitiationProtocol
 
 
 class TestRTP:
@@ -97,18 +95,17 @@ class TestSIP:
         assert b"RTP/AVP 0" in bytes(response.body)
 
     async def test_answer__sdp_uses_stun_public_address_for_rtp(self):
-        """_answer advertises the STUN-discovered public IP:port in the SDP when STUN is configured."""
+        """_answer advertises the STUN-discovered public IP in the SDP when STUN is configured."""
         protocol = SIP(stun_server_address=("stun.example.com", 3478))
         send = MagicMock()
         protocol.send = send
         protocol._transport = make_mock_transport()
         request = make_invite()
         protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
-        with patch.object(RTP, "stun_discover", return_value=("203.0.113.5", 54321)):
+        with patch("voip.sip.protocol.stun_discover", return_value=("203.0.113.5", 54321)):
             await protocol._answer(request, RTP)
         response, _ = send.call_args[0]
         assert b"c=IN IP4 203.0.113.5" in bytes(response.body)
-        assert b"m=audio 54321" in bytes(response.body)
 
     async def test_answer__sdp_falls_back_to_local_when_rtp_stun_fails(self):
         """_answer falls back to local address when RTP STUN discovery fails."""
@@ -118,7 +115,7 @@ class TestSIP:
         protocol._transport = make_mock_transport()
         request = make_invite()
         protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
-        with patch.object(RTP, "stun_discover", side_effect=TimeoutError("timeout")):
+        with patch("voip.sip.protocol.stun_discover", side_effect=TimeoutError("timeout")):
             await protocol._answer(request, RTP)
         response, _ = send.call_args[0]
         assert b"m=audio" in bytes(response.body)
@@ -145,8 +142,8 @@ class TestSIP:
         created = []
 
         class MyCall(RTP):
-            def __init__(self, caller: str = "", payload_type: int = 0) -> None:
-                super().__init__(caller=caller, payload_type=payload_type)
+            def __init__(self, caller: str = "", payload_type: int = 0, sample_rate: int = 8000) -> None:
+                super().__init__(caller=caller, payload_type=payload_type, sample_rate=sample_rate)
                 created.append(self)
 
         protocol = SIP()
@@ -399,8 +396,8 @@ class TestSessionInitiationProtocol:
             stun_server_address=("stun.example.com", 3478),
         )
         transport = make_mock_transport()
-        with patch.object(
-            p, "stun_discover", return_value=("203.0.113.1", 54321)
+        with patch(
+            "voip.sip.protocol.stun_discover", return_value=("203.0.113.1", 54321)
         ) as mock_discover:
             p.connection_made(transport)
             await asyncio.sleep(0.05)
@@ -420,7 +417,9 @@ class TestSessionInitiationProtocol:
             stun_server_address=("stun.example.com", 3478),
         )
         transport = make_mock_transport()
-        with patch.object(p, "stun_discover", side_effect=TimeoutError("timeout")):
+        with patch(
+            "voip.sip.protocol.stun_discover", side_effect=TimeoutError("timeout")
+        ):
             p.connection_made(transport)
             await asyncio.sleep(0.05)
         transport.sendto.assert_called()
@@ -617,65 +616,8 @@ class TestSessionInitiationProtocol:
         data, _ = transport.sendto.call_args[0]
         assert b"Contact: <sip:alice@203.0.113.1:12345>" in data
 
-    async def test_handle_stun__parses_xor_mapped_address(self):
-        """handle_stun resolves the future with the XOR-MAPPED-ADDRESS."""
-        import asyncio
-
-        p = make_register_session()
-        p.connection_made(make_mock_transport())
-        p._stun_transactions = {}
-        magic_cookie = 0x2112A442
-        transaction_id = b"\x01" * 12
-        public_ip = (203 << 24) | (0 << 16) | (113 << 8) | 5
-        xor_ip = public_ip ^ magic_cookie
-        xor_port = 54321 ^ (magic_cookie >> 16)
-        attr_val = struct.pack(">BBH I", 0x00, 0x01, xor_port, xor_ip)
-        attr = struct.pack(">HH", 0x0020, len(attr_val)) + attr_val
-        msg_len = len(attr)
-        response = (
-            struct.pack(">HHI12s", 0x0101, msg_len, magic_cookie, transaction_id) + attr
-        )
-        loop = asyncio.get_running_loop()
-        future = loop.create_future()
-        p._stun_transactions[transaction_id] = future
-        p.handle_stun(response, ("stun.l.google.com", 19302))
-        result = future.result()
-        assert result == ("203.0.113.5", 54321)
-
-    async def test_handle_stun__falls_back_to_mapped_address(self):
-        """handle_stun falls back to MAPPED-ADDRESS when XOR-MAPPED-ADDRESS is absent."""
-        import asyncio
-
-        p = make_register_session()
-        p.connection_made(make_mock_transport())
-        p._stun_transactions = {}
-        magic_cookie = 0x2112A442
-        transaction_id = b"\x02" * 12
-        attr_val = struct.pack(
-            ">BBH4s", 0x00, 0x01, 60001, socket.inet_aton("198.51.100.7")
-        )
-        attr = struct.pack(">HH", 0x0001, len(attr_val)) + attr_val
-        msg_len = len(attr)
-        response = (
-            struct.pack(">HHI12s", 0x0101, msg_len, magic_cookie, transaction_id) + attr
-        )
-        loop = asyncio.get_running_loop()
-        future = loop.create_future()
-        p._stun_transactions[transaction_id] = future
-        p.handle_stun(response, ("stun.example.com", 3478))
-        assert future.result() == ("198.51.100.7", 60001)
-
-    def test_datagram_received__stun_routes_to_handle_stun(self):
-        """datagram_received routes STUN messages (first byte 0-3) to handle_stun."""
-        p = make_register_session()
-        p.connection_made(make_mock_transport())
-        stun_data = b"\x01\x01" + b"\x00" * 18
-        with patch.object(p, "handle_stun") as mock_handle:
-            p.datagram_received(stun_data, ("stun.l.google.com", 19302))
-            mock_handle.assert_called_once_with(stun_data, ("stun.l.google.com", 19302))
-
     def test_datagram_received__sip_response__calls_response_received(self):
-        """datagram_received routes SIP messages (first byte >= 4) to response_received."""
+        """datagram_received routes SIP messages to response_received."""
         received = []
 
         class ConcreteSession(SessionInitiationProtocol):
@@ -688,15 +630,6 @@ class TestSessionInitiationProtocol:
         p.datagram_received(sip_data, ("192.0.2.2", 5060))
         assert len(received) == 1
         assert received[0].status_code == 200
-
-    def test_handle_stun__truncated_returns_early(self):
-        """handle_stun silently ignores packets shorter than 20 bytes."""
-        p = make_register_session()
-        transport = make_mock_transport()
-        p.connection_made(transport)
-        transport.sendto.reset_mock()
-        p.handle_stun(b"\x00" * 19, ("stun.l.google.com", 19302))
-        transport.sendto.assert_not_called()
 
     def test_invite_received_after_register(self):
         """INVITE dispatching still works after registration (call_received is called)."""

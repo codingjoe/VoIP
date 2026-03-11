@@ -44,8 +44,11 @@ class ConsoleMessageProcessor:
 
 @click.group()
 @click.option("-v", "--verbose", count=True, help="Increase verbosity.")
-def voip(verbose):
+@click.pass_context
+def voip(ctx, verbose):
     """VoIP command line interface."""
+    ctx.ensure_object(dict)
+    ctx.obj["verbose"] = verbose
     logging.basicConfig(
         level=max(10, 10 * (2 - verbose)),
         format="%(levelname)s: [%(asctime)s] %(message)s",
@@ -63,22 +66,22 @@ logger = logging.getLogger(__name__)
 main = voip
 
 
-def _parse_server(server: str) -> tuple[tuple[str, int], str]:
-    """Parse 'HOST[:PORT]' -> ((host, port), host)."""
-    if ":" in server:
-        host, port_str = server.rsplit(":", 1)
-        return (host, int(port_str)), host
-    return (server, 5060), server
+def _parse_server(ctx, param, value: str) -> tuple[str, int]:
+    """Parse 'HOST[:PORT]' option into a (host, port) tuple."""
+    if ":" in value:
+        host, port_str = value.rsplit(":", 1)
+        return (host, int(port_str))
+    return (value, 5060)
 
 
-def _parse_stun_server(stun_server: str) -> tuple[str, int] | None:
-    """Parse a STUN server string into a (host, port) tuple, or None if disabled."""
-    if stun_server.lower() == "none":
+def _parse_stun_server(ctx, param, value: str) -> tuple[str, int] | None:
+    """Parse a STUN server option into a (host, port) tuple, or None if disabled."""
+    if value.lower() == "none":
         return None
-    if ":" in stun_server:
-        stun_host, stun_port_str = stun_server.rsplit(":", 1)
+    if ":" in value:
+        stun_host, stun_port_str = value.rsplit(":", 1)
         return (stun_host, int(stun_port_str))
-    return (stun_server, 3478)
+    return (value, 3478)
 
 
 @sip.command()
@@ -94,6 +97,7 @@ def _parse_stun_server(stun_server: str) -> tuple[str, int] | None:
     envvar="SIP_SERVER",
     required=True,
     metavar="HOST[:PORT]",
+    callback=_parse_server,
     help="SIP server address.",
 )
 @click.option(
@@ -114,18 +118,22 @@ def _parse_stun_server(stun_server: str) -> tuple[str, int] | None:
     default="stun.cloudflare.com",
     envvar="STUN_SERVER",
     show_default=True,
+    callback=_parse_stun_server,
     help="STUN server for NAT traversal (HOST:PORT or 'none' to disable).",
 )
-def transcribe(model, server, aor, username, password, local_port, stun_server):
+@click.pass_context
+def transcribe(ctx, model, server, aor, username, password, local_port, stun_server):
     """Register with a SIP carrier and transcribe incoming calls via Whisper."""
-    from voip.sip import SIP
+    from voip.sip.protocol import SIP
 
     from .audio import WhisperCall  # noqa: PLC0415
 
-    server_addr, host = _parse_server(server)
+    server_addr = server
+    host = server_addr[0]
     if aor is None:
         aor = f"sip:{username}@{host}"
-    stun = _parse_stun_server(stun_server)
+
+    verbose = ctx.obj.get("verbose", 0)
 
     class TranscribingCall(WhisperCall):
         def __init__(self, caller: str = "", payload_type=None) -> None:
@@ -135,10 +143,12 @@ def transcribe(model, server, aor, username, password, local_port, stun_server):
             logger.info("Transcription: %s", text)
             click.echo(text)
 
-    class TranscribeSession(ConsoleMessageProcessor, SIP):
+    bases = (ConsoleMessageProcessor, SIP) if verbose >= 3 else (SIP,)
+
+    class TranscribeSession(*bases):
         def registered(self) -> None:
-            logger.info("Registered with %s — waiting for calls", server)
-            click.echo(f"Registered with {server} — waiting for calls", err=True)
+            logger.info("Registered with %s — waiting for calls", host)
+            click.echo(f"Registered with {host} — waiting for calls", err=True)
 
         def call_received(self, request) -> None:
             click.echo(
@@ -156,7 +166,7 @@ def transcribe(model, server, aor, username, password, local_port, stun_server):
                 aor,
                 username,
                 password,
-                stun_server_address=stun,
+                stun_server_address=stun_server,
             ),
             local_addr=("0.0.0.0", local_port),  # noqa: S104
         )

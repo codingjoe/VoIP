@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import struct
-from unittest.mock import MagicMock, patch
 
 import pytest
 from voip.rtp import RTP, RealtimeTransportProtocol, RTPPacket, RTPPayloadType
-from voip.stun import STUNProtocol
+from voip.sdp.types import Attribute, MediaDescription
 
 
 def make_rtp_packet(
@@ -142,34 +141,72 @@ class TestRealtimeTransportProtocol:
         ConcreteRTP().datagram_received(b"\x80" * 12, ("127.0.0.1", 5004))
         assert received == []
 
-    def test_rtp__is_stun_protocol(self):
-        """RealtimeTransportProtocol mixes in STUNProtocol for NAT traversal."""
-        assert issubclass(RealtimeTransportProtocol, STUNProtocol)
+    def test_init__stores_sample_rate(self):
+        """sample_rate parameter is stored on the protocol instance."""
+        protocol = RealtimeTransportProtocol(sample_rate=16000)
+        assert protocol.sample_rate == 16000
 
-    def test_connection_made__stores_transport(self):
-        """connection_made stores the transport for STUN discovery and outbound sends."""
+    def test_init__default_sample_rate(self):
+        """Default sample_rate is 8000 Hz."""
         protocol = RealtimeTransportProtocol()
-        transport = MagicMock()
-        protocol.connection_made(transport)
-        assert protocol._transport is transport
+        assert protocol.sample_rate == 8000
 
-    def test_datagram_received__stun__routes_to_handle_stun(self):
-        """Packets with first byte 0–3 (STUN per RFC 7983) are forwarded to handle_stun."""
-        protocol = RealtimeTransportProtocol()
-        stun_data = b"\x01\x01" + b"\x00" * 18  # STUN binding success response header
-        with patch.object(protocol, "handle_stun") as mock_handle:
-            protocol.datagram_received(stun_data, ("stun.example.com", 3478))
-            mock_handle.assert_called_once_with(stun_data, ("stun.example.com", 3478))
 
-    def test_datagram_received__stun__does_not_call_audio_received(self):
-        """STUN packets are not passed to audio_received."""
-        received: list[RTPPacket] = []
+class TestNegotiateCodec:
+    def _make_media(self, fmts: list[str], rtpmaps: list[str] | None = None) -> MediaDescription:
+        """Build a MediaDescription with given format list and optional rtpmap attributes."""
+        attributes = []
+        for rtpmap in (rtpmaps or []):
+            attributes.append(Attribute(name="rtpmap", value=rtpmap))
+        return MediaDescription(media="audio", port=49170, proto="RTP/AVP", fmt=fmts, attributes=attributes)
 
-        class ConcreteRTP(RealtimeTransportProtocol):
-            def audio_received(self, packet: RTPPacket) -> None:
-                received.append(packet)
+    def test_negotiate_codec__prefers_opus(self):
+        """Select Opus when offered alongside lower-priority codecs."""
+        media = self._make_media(
+            ["0", "8", "111"],
+            ["111 opus/48000/2", "8 PCMA/8000"],
+        )
+        result = RealtimeTransportProtocol.negotiate_codec(media)
+        assert result is not None
+        fmt, rtpmap, sample_rate = result
+        assert fmt == "111"
+        assert sample_rate == 48000
 
-        stun_data = b"\x01\x01" + b"\x00" * 18
-        with patch.object(ConcreteRTP, "handle_stun"):
-            ConcreteRTP().datagram_received(stun_data, ("stun.example.com", 3478))
-        assert received == []
+    def test_negotiate_codec__falls_back_to_pcma(self):
+        """Select PCMA when Opus and G.722 are not offered."""
+        media = self._make_media(["0", "8"])
+        result = RealtimeTransportProtocol.negotiate_codec(media)
+        assert result is not None
+        assert result[0] == "8"
+        assert result[2] == 8000
+
+    def test_negotiate_codec__falls_back_to_pcmu(self):
+        """Select PCMU when only PCMU is offered."""
+        media = self._make_media(["0"])
+        result = RealtimeTransportProtocol.negotiate_codec(media)
+        assert result is not None
+        assert result[0] == "0"
+
+    def test_negotiate_codec__empty_fmt__returns_none(self):
+        """Return None when the remote side offers no audio formats."""
+        media = self._make_media([])
+        assert RealtimeTransportProtocol.negotiate_codec(media) is None
+
+    def test_negotiate_codec__unknown_codec__returns_first(self):
+        """Fall back to the first offered format for an unrecognised codec."""
+        media = self._make_media(
+            ["126"], ["126 telephone-event/8000"]
+        )
+        result = RealtimeTransportProtocol.negotiate_codec(media)
+        assert result is not None
+        assert result[0] == "126"
+
+    def test_negotiate_codec__subclass_can_override_preferences(self):
+        """A subclass with a different PREFERRED_CODECS list uses its own preferences."""
+        class PCMAOnlyCall(RealtimeTransportProtocol):
+            PREFERRED_CODECS = [("8", "PCMA/8000", 8000)]
+
+        media = self._make_media(["0", "8", "111"])
+        result = PCMAOnlyCall.negotiate_codec(media)
+        assert result is not None
+        assert result[0] == "8"

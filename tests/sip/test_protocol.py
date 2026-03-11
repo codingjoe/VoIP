@@ -5,6 +5,7 @@ import errno
 import unittest.mock
 
 import pytest
+from voip.rtp import RealtimeTransportProtocol
 from voip.sdp.messages import SessionDescription
 from voip.sdp.types import Timing
 from voip.sip.messages import Request, Response
@@ -388,10 +389,11 @@ class TestAnswer:
     async def _run_answer(self, protocol, invite, fake_rtp_transport):
         """Run _answer coroutine synchronously using a new event loop."""
 
-        class FakeRTPProtocol(asyncio.DatagramProtocol):
-            def __init__(self, caller, payload_type=0):
+        class FakeRTPProtocol(RealtimeTransportProtocol):
+            def __init__(self, caller="", payload_type=0, sample_rate=8000):
                 self.caller = caller
                 self.payload_type = payload_type
+                self.sample_rate = sample_rate
 
         async def _answer_coro():
             with unittest.mock.patch.object(
@@ -516,8 +518,8 @@ class TestAnswer:
         assert response.body.media[0].fmt == ["100"]
 
     def test_preferred_codecs__class_attribute(self):
-        """PREFERRED_CODECS is a class attribute with Opus first."""
-        codecs = SessionInitiationProtocol.PREFERRED_CODECS
+        """PREFERRED_CODECS is a class attribute on RTP with Opus first."""
+        codecs = RealtimeTransportProtocol.PREFERRED_CODECS
         assert isinstance(codecs, list)
         fmts = [fmt for fmt, _, _ in codecs]
         assert fmts[0] == "111"  # Opus is highest priority

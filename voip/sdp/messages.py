@@ -17,7 +17,7 @@ from .types import (
     Timing,
 )
 
-__all__ = ["SessionDescription", "FIELD_MAP", "FIELD_BY_LETTER"]
+__all__ = ["SessionDescription"]
 
 
 # Ordered sequence of field descriptors; each carries letter, session_attr,

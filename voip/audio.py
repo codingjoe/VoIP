@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import os
 import struct
-import subprocess
 
-import ffmpeg
+import av
 import numpy as np
 import whisper
 
@@ -116,7 +116,7 @@ class WhisperCall(RealtimeTransportProtocol):
     opus_frame_size = 960
     #: Audio buffered (in seconds) before each transcription is triggered.
     chunk_duration = 30
-    #: Maximum seconds to wait for ffmpeg to decode an audio chunk.
+    #: Maximum seconds to wait for audio decoding to complete.
     decode_timeout_secs = 60
 
     def __init__(
@@ -124,8 +124,9 @@ class WhisperCall(RealtimeTransportProtocol):
         caller: str = "",
         model: str = "base",
         payload_type: int = RTPPayloadType.OPUS,
+        sample_rate: int = 48000,
     ) -> None:
-        super().__init__(caller=caller, payload_type=payload_type)
+        super().__init__(caller=caller, payload_type=payload_type, sample_rate=sample_rate)
         logger.debug("Loading Whisper model %r", model)
         self._whisper_model = whisper.load_model(model)
         self._audio_packets: list[bytes] = []
@@ -168,66 +169,65 @@ class WhisperCall(RealtimeTransportProtocol):
         """Decode audio packets to a float32 PCM array at Whisper's sample rate."""
         match payload_type:
             case RTPPayloadType.OPUS:
-                return self._decode_via_ffmpeg(
-                    _build_ogg_opus(packets), input_format="ogg", input_sample_rate=None
+                return self._decode_via_av(
+                    _build_ogg_opus(packets),
+                    input_format="ogg",
+                    input_sample_rate=None,
                 )
             case RTPPayloadType.G722:
-                return self._decode_via_ffmpeg(
-                    b"".join(packets), input_format="g722", input_sample_rate=16000
+                return self._decode_via_av(
+                    b"".join(packets),
+                    input_format="g722",
+                    input_sample_rate=self.sample_rate,
                 )
             case RTPPayloadType.PCMA:
-                return self._decode_via_ffmpeg(
-                    b"".join(packets), input_format="alaw", input_sample_rate=8000
+                return self._decode_via_av(
+                    b"".join(packets),
+                    input_format="alaw",
+                    input_sample_rate=self.sample_rate,
                 )
-            case _:  # PCMU or unknown
-                return self._decode_via_ffmpeg(
-                    b"".join(packets), input_format="mulaw", input_sample_rate=8000
+            case RTPPayloadType.PCMU:
+                return self._decode_via_av(
+                    b"".join(packets),
+                    input_format="mulaw",
+                    input_sample_rate=self.sample_rate,
+                )
+            case _:
+                raise NotImplementedError(
+                    f"Unsupported RTP payload type: {payload_type}"
                 )
 
-    def _decode_via_ffmpeg(
+    def _decode_via_av(
         self,
         data: bytes,
         input_format: str,
         input_sample_rate: int | None,
     ) -> np.ndarray:
-        """Decode audio data via ffmpeg into float32 PCM at Whisper's sample rate."""
-        input_kwargs: dict[str, str] = {"format": input_format}
-        if input_sample_rate is not None:
-            input_kwargs["ar"] = str(input_sample_rate)
-            input_kwargs["ac"] = "1"
+        """Decode audio data via PyAV into float32 PCM at Whisper's sample rate."""
+        resampler = av.audio.resampler.AudioResampler(
+            format="fltp",
+            layout="mono",
+            rate=whisper.audio.SAMPLE_RATE,
+        )
+        frames: list[np.ndarray] = []
         try:
-            proc = (
-                ffmpeg.input("pipe:0", **input_kwargs)
-                .output(
-                    "pipe:1",
-                    format="f32le",
-                    ar=str(whisper.audio.SAMPLE_RATE),
-                    ac="1",
-                )
-                .run_async(pipe_stdin=True, pipe_stdout=True, pipe_stderr=True)
-            )
-            try:
-                out, err = proc.communicate(
-                    input=data, timeout=self.decode_timeout_secs
-                )
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.communicate()
-                raise RuntimeError(
-                    f"ffmpeg decoding timed out after {self.decode_timeout_secs}s"
-                )
-            if proc.returncode != 0:
-                raise ffmpeg.Error("ffmpeg", b"", err)
-        except ffmpeg.Error as exc:
-            raise RuntimeError(
-                f"ffmpeg decoding failed: {getattr(exc, 'stderr', b'').decode(errors='replace')}"
-            ) from exc
-        except FileNotFoundError as exc:
-            raise RuntimeError(
-                "ffmpeg is not installed or not on $PATH. "
-                "Install it (e.g. `apt install ffmpeg` or `brew install ffmpeg`)."
-            ) from exc
-        return np.frombuffer(out, dtype=np.float32)
+            with av.open(
+                io.BytesIO(data),
+                format=input_format,
+                options=(
+                    {"sample_rate": str(input_sample_rate)}
+                    if input_sample_rate is not None
+                    else {}
+                ),
+            ) as container:
+                for frame in container.decode(audio=0):
+                    for resampled in resampler.resample(frame):
+                        frames.append(resampled.to_ndarray().flatten())
+            for resampled in resampler.resample(None):
+                frames.append(resampled.to_ndarray().flatten())
+        except av.AVError as exc:
+            raise RuntimeError(f"Audio decoding failed: {exc}") from exc
+        return np.concatenate(frames) if frames else np.array([], dtype=np.float32)
 
     def _run_transcription(self, audio: np.ndarray) -> str:
         """Transcribe a float32 PCM array using the Whisper model."""

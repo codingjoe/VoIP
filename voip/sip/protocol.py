@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 from voip.sdp.messages import SessionDescription
 from voip.sdp.types import Attribute, ConnectionData, MediaDescription, Origin, Timing
-from voip.stun import STUNProtocol
+from voip.stun import stun_discover
 from voip.types import DigestQoP
 
 from .messages import Message, Request, Response
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 __all__ = ["SIP", "SessionInitiationProtocol"]
 
 
-class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
+class SessionInitiationProtocol(asyncio.DatagramProtocol):
     """SIP session handler (RFC 3261).
 
     Handles incoming calls and, optionally, carrier registration with digest
@@ -58,15 +58,6 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
 
     #: RFC 3261 §11 – methods supported by this UA (used in Allow header).
     ALLOW = "INVITE, ACK, BYE, CANCEL, OPTIONS"
-
-    #: Codec preference list (fmt, rtpmap value, clock rate Hz). Highest priority first.
-    #: Opus > G.722 > PCMA (G.711 A-law) > PCMU (G.711 µ-law).
-    PREFERRED_CODECS: list[tuple[str, str, int]] = [
-        ("111", "opus/48000/2", 48000),
-        ("9", "G722/8000", 8000),
-        ("8", "PCMA/8000", 8000),
-        ("0", "PCMU/8000", 8000),
-    ]
 
     def __init__(
         self,
@@ -105,7 +96,7 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
     async def _stun_then_register(self) -> None:
         """Discover the public address via STUN, then send REGISTER."""
         try:
-            self.public_address = await self.stun_discover(*self.stun_server_address)
+            self.public_address = await stun_discover(*self.stun_server_address)
             logger.info(
                 "STUN: public address is %s:%s",
                 self.public_address[0],
@@ -118,13 +109,10 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
         self.register()
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
-        """Handle RFC 5626 keepalive pings, STUN messages, then dispatch SIP messages."""
+        """Handle RFC 5626 keepalive pings, then dispatch SIP messages."""
         if data == b"\r\n\r\n":  # RFC 5626 §4.4.1 double-CRLF keepalive ping
             logger.debug("RFC 5626 keepalive from %s, sending pong", addr)
             self._transport.sendto(b"\r\n", addr)
-            return
-        if data and data[0] < 4:  # STUN: first byte is 0-3 (RFC 7983 multiplexing)
-            self.handle_stun(data, addr)
             return
         match Message.parse(data):
             case Request() as request:
@@ -339,7 +327,7 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
         """
         asyncio.get_running_loop().create_task(self._answer(request, call_class))
 
-    async def _answer(  # noqa: C901
+    async def _answer(
         self, request: Request, call_class: type[RealtimeTransportProtocol]
     ) -> None:
         """Perform the asynchronous part of answering: set up RTP, send 200 OK."""
@@ -359,61 +347,39 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
             ),
             None,
         )
-        remote_rtpmaps: dict[str, str] = {}
-        remote_name_to_fmt: dict[str, str] = {}
+        # Delegate codec negotiation to the call class so that each subclass
+        # can declare its own codec preferences independently of the SIP layer.
+        selected: tuple[str, str | None, int] | None = None
         if remote_audio:
-            for attribute in remote_audio.attributes:
-                if attribute.name == "rtpmap" and attribute.value:
-                    pt, _, codec_str = attribute.value.partition(" ")
-                    remote_rtpmaps[pt.strip()] = codec_str.strip()
-                    remote_name_to_fmt[codec_str.strip().lower()] = pt.strip()
-        selected_fmt: str | None = None
-        selected_rtpmap: str | None = None
-        selected_pt: int = 0
-        if remote_audio:
-            remote_fmts = set(remote_audio.fmt)
-            for our_fmt, our_rtpmap, _ in self.PREFERRED_CODECS:
-                if our_fmt in remote_fmts:
-                    selected_fmt = our_fmt
-                    selected_rtpmap = f"{our_fmt} {our_rtpmap}"
-                    selected_pt = int(our_fmt)
-                    break
-                if our_rtpmap.lower() in remote_name_to_fmt:
-                    remote_fmt = remote_name_to_fmt[our_rtpmap.lower()]
-                    selected_fmt = remote_fmt
-                    selected_rtpmap = f"{remote_fmt} {our_rtpmap}"
-                    selected_pt = int(remote_fmt)
-                    break
-            if selected_fmt is None and remote_audio.fmt:
-                selected_fmt = remote_audio.fmt[0]
-                selected_pt = int(selected_fmt)
-                if selected_fmt in remote_rtpmaps:
-                    selected_rtpmap = f"{selected_fmt} {remote_rtpmaps[selected_fmt]}"
+            selected = call_class.negotiate_codec(remote_audio)
+        selected_fmt = selected[0] if selected else None
+        selected_rtpmap = selected[1] if selected else None
+        selected_pt = int(selected[0]) if selected else 0
+        selected_sample_rate = selected[2] if selected else 8000
         rtp_transport, rtp_protocol = await loop.create_datagram_endpoint(
-            lambda: call_class(caller=caller, payload_type=selected_pt),
+            lambda: call_class(
+                caller=caller,
+                payload_type=selected_pt,
+                sample_rate=selected_sample_rate,
+            ),
             local_addr=("0.0.0.0", 0),  # noqa: S104
         )
         local_addr = rtp_transport.get_extra_info("sockname")
-        # Discover the public RTP address via STUN when a STUN server is configured.
-        # Without this, the SDP advertises the local (private) port, which is
-        # unreachable by the remote peer behind a NAT (RFC 5389 / RFC 7983).
-        rtp_public_addr: tuple[str, int] | None = None
-        if self.stun_server_address and isinstance(rtp_protocol, STUNProtocol):
+        # Discover the public RTP IP via a dedicated STUN socket when a STUN
+        # server is configured. The RTP port comes from the locally bound socket.
+        sdp_ip = local_addr[0]
+        sdp_port = local_addr[1]
+        if self.stun_server_address:
             try:
-                rtp_public_addr = await rtp_protocol.stun_discover(
-                    *self.stun_server_address
-                )
-                logger.info(
-                    "RTP STUN: public address is %s:%s",
-                    rtp_public_addr[0],
-                    rtp_public_addr[1],
-                )
+                public_ip, _ = await stun_discover(*self.stun_server_address)
+                sdp_ip = public_ip
+                logger.info("RTP STUN: public IP is %s, port %s", sdp_ip, sdp_port)
             except (TimeoutError, OSError, RuntimeError) as exc:
                 logger.warning(
                     "RTP STUN discovery failed (%s), using local address", exc
                 )
-        sdp_ip = (rtp_public_addr or self.public_address or local_addr)[0]
-        sdp_port = (rtp_public_addr or local_addr)[1]
+        elif self.public_address:
+            sdp_ip = self.public_address[0]
         logger.debug("RTP listening on %s:%s", local_addr[0], local_addr[1])
         sip_local_addr = self._transport.get_extra_info("sockname") or ("0.0.0.0", 5060)  # noqa: S104
         sip_contact_addr = self.public_address or sip_local_addr
@@ -654,6 +620,7 @@ class SessionInitiationProtocol(STUNProtocol, asyncio.DatagramProtocol):
         """Handle a lost connection."""
         if exc is not None:
             logger.exception("Connection lost", exc_info=exc)
+        self._transport = None
 
 
 #: Short alias for :class:`SessionInitiationProtocol`.

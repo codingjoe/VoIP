@@ -38,8 +38,8 @@ classifiers = [
 requires-python = ">=3.13"
 
 [project.optional-dependencies]
-audio = ["openai-whisper", "numpy", "ffmpeg-python"]
-cli = ["click", "pygments", "openai-whisper", "numpy", "ffmpeg-python"]
+audio = ["openai-whisper", "numpy", "av"]
+cli = ["click", "pygments", "openai-whisper", "numpy", "av"]
 pygments = ["Pygments"]
 
 [project.scripts]

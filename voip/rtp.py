@@ -11,7 +11,7 @@ import dataclasses
 import enum
 import logging
 
-from voip.stun import STUNProtocol
+from voip.sdp.types import MediaDescription
 
 __all__ = ["RTP", "RTPPacket", "RTPPayloadType", "RealtimeTransportProtocol"]
 
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class RTPPayloadType(enum.IntEnum):
-    """Common RTP payload types.
+    """Common RTP payload types, aligned with SDP media format identifiers.
 
     Static payload types (0–95) are defined by RFC 3551.
     Dynamic payload types (96–127) are negotiated via SDP.
@@ -63,7 +63,7 @@ class RTPPacket:
         )
 
 
-class RealtimeTransportProtocol(STUNProtocol, asyncio.DatagramProtocol):
+class RealtimeTransportProtocol(asyncio.DatagramProtocol):
     """Base class for RTP audio call handlers (RFC 3550).
 
     Subclass this and override :meth:`audio_received` to process incoming audio::
@@ -75,34 +75,80 @@ class RealtimeTransportProtocol(STUNProtocol, asyncio.DatagramProtocol):
     Instances are used directly as asyncio datagram protocols, so they handle
     their own RTP header parsing before calling :meth:`audio_received`.
 
-    The :class:`~voip.stun.STUNProtocol` mixin enables STUN-based NAT traversal
-    (RFC 5389) so that the session can discover the public IP:port of the RTP
-    socket and advertise it correctly in the SDP offer (RFC 7983 multiplexing).
+    Override :meth:`negotiate_codec` to customise codec selection when answering
+    incoming calls.
     """
 
     #: Fixed RTP header size in bytes (RFC 3550 §5.1).
     rtp_header_size: int = 12
 
-    def __init__(self, caller: str = "", payload_type: int = 0) -> None:
+    #: Codec preference list (fmt, rtpmap value, clock rate Hz). Highest priority first.
+    #: Opus > G.722 > PCMA (G.711 A-law) > PCMU (G.711 µ-law).
+    PREFERRED_CODECS: list[tuple[str, str, int]] = [
+        ("111", "opus/48000/2", 48000),
+        ("9", "G722/8000", 8000),
+        ("8", "PCMA/8000", 8000),
+        ("0", "PCMU/8000", 8000),
+    ]
+
+    def __init__(
+        self, caller: str = "", payload_type: int = 0, sample_rate: int = 8000
+    ) -> None:
         super().__init__()
         #: The SIP address of the caller (from the From header of the INVITE).
         self.caller = caller
         #: The negotiated RTP payload type for this call.
         self.payload_type = payload_type
+        #: The clock rate (Hz) of the negotiated codec, as declared in the SDP rtpmap.
+        self.sample_rate = sample_rate
 
-    def connection_made(self, transport: asyncio.DatagramTransport) -> None:
-        """Store the transport for STUN discovery and outbound sends."""
-        self._transport = transport
+    @classmethod
+    def negotiate_codec(
+        cls, remote_media: MediaDescription
+    ) -> tuple[str, str | None, int] | None:
+        """Select the best codec from the offered SDP MediaDescription.
+
+        Iterates :attr:`PREFERRED_CODECS` in priority order and returns the
+        first match found in the remote offer.
+
+        Args:
+            remote_media: The ``m=audio`` :class:`~voip.sdp.types.MediaDescription`
+                from the INVITE SDP body.
+
+        Returns:
+            A ``(fmt, rtpmap_value, sample_rate)`` tuple for the selected codec,
+            or ``None`` if the remote offer contains no audio formats.
+            *rtpmap_value* may be ``None`` for static payload types that carry no
+            ``a=rtpmap`` attribute.
+        """
+        remote_fmts = set(remote_media.fmt)
+        remote_rtpmaps: dict[str, str] = {}
+        remote_name_to_fmt: dict[str, str] = {}
+        for attribute in remote_media.attributes:
+            if attribute.name == "rtpmap" and attribute.value:
+                pt, _, codec_str = attribute.value.partition(" ")
+                remote_rtpmaps[pt.strip()] = codec_str.strip()
+                remote_name_to_fmt[codec_str.strip().lower()] = pt.strip()
+
+        for our_fmt, our_rtpmap, sample_rate in cls.PREFERRED_CODECS:
+            if our_fmt in remote_fmts:
+                return (our_fmt, f"{our_fmt} {our_rtpmap}", sample_rate)
+            if our_rtpmap.lower() in remote_name_to_fmt:
+                remote_fmt = remote_name_to_fmt[our_rtpmap.lower()]
+                return (remote_fmt, f"{remote_fmt} {our_rtpmap}", sample_rate)
+
+        # Fallback: accept the first format the remote side offered.
+        if remote_media.fmt:
+            fmt = remote_media.fmt[0]
+            rtpmap = (
+                f"{fmt} {remote_rtpmaps[fmt]}" if fmt in remote_rtpmaps else None
+            )
+            return (fmt, rtpmap, 8000)
+
+        return None
 
     def datagram_received(self, data: bytes, address: tuple[str, int]) -> None:
-        """Multiplex STUN and RTP per RFC 7983.
-
-        STUN messages (first byte 0–3) are routed to :meth:`~voip.stun.STUNProtocol.handle_stun`.
-        Valid RTP packets are parsed and forwarded to :meth:`audio_received`.
-        """
-        if data and data[0] < 4:  # STUN: first byte is 0-3 (RFC 7983 multiplexing)
-            self.handle_stun(data, address)
-            return
+        """Parse and forward incoming RTP packets to :meth:`audio_received`."""
         try:
             packet = RTPPacket.parse(data)
         except ValueError:

@@ -30,10 +30,9 @@ class Field(Protocol):
     @staticmethod
     def parse(value: str) -> object:
         """Parse a raw SDP line value."""
-        ...
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(slots=True)
 class StrField:
     """Descriptor for SDP fields that parse and serialize as plain strings."""
 
@@ -48,7 +47,7 @@ class StrField:
         return value
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(slots=True)
 class IntField:
     """Descriptor for SDP fields that parse and serialize as integers."""
 
@@ -63,7 +62,7 @@ class IntField:
         return int(value)
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(slots=True)
 class Origin:
     """Origin field (o=) as defined by RFC 4566 §5.2."""
 
@@ -102,7 +101,7 @@ class Origin:
         )
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(slots=True)
 class ConnectionData:
     """Connection data field (c=) as defined by RFC 4566 §5.7."""
 
@@ -130,7 +129,7 @@ class ConnectionData:
         )
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(slots=True)
 class Bandwidth:
     """Bandwidth field (b=) as defined by RFC 4566 §5.8."""
 
@@ -153,7 +152,7 @@ class Bandwidth:
         return cls(bwtype=bwtype, bandwidth=int(bandwidth))
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(slots=True)
 class Timing:
     """Timing field (t=) as defined by RFC 4566 §5.9."""
 
@@ -176,7 +175,7 @@ class Timing:
         return cls(start_time=int(start_time), stop_time=int(stop_time))
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(slots=True)
 class Attribute:
     """Attribute field (a=) as defined by RFC 4566 §5.13."""
 
@@ -201,7 +200,7 @@ class Attribute:
         return cls(name=name, value=attr_value or None)
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(slots=True)
 class MediaDescription:
     """Media description section (m=) as defined by RFC 4566 §5.14."""
 
