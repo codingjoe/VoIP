@@ -239,7 +239,20 @@ class StaticPayloadType(PayloadTypeSpec, enum.Enum):
     CN = PayloadTypeSpec(13, 8000, "CN")
     MPA = PayloadTypeSpec(14, 90000, "MPA")
     G728 = PayloadTypeSpec(15, 8000, "G728")
+    #: DVI4 at 11.025 kHz
+    DVI4_11K = PayloadTypeSpec(16, 11025, "DVI4")
+    #: DVI4 at 22.05 kHz
+    DVI4_22K = PayloadTypeSpec(17, 22050, "DVI4")
     G729 = PayloadTypeSpec(18, 8000, "G729")
+    CELB = PayloadTypeSpec(25, 90000, "CelB")
+    JPEG = PayloadTypeSpec(26, 90000, "JPEG")
+    NV = PayloadTypeSpec(28, 90000, "nv")
+    H261 = PayloadTypeSpec(31, 90000, "H261")
+    #: MPEG-1 and MPEG-2 video
+    MPV = PayloadTypeSpec(32, 90000, "MPV")
+    #: MPEG-2 transport stream
+    MP2T = PayloadTypeSpec(33, 90000, "MP2T")
+    H263 = PayloadTypeSpec(34, 90000, "H263")
 
     @classmethod
     def from_pt(cls, pt: int) -> StaticPayloadType:
@@ -250,7 +263,7 @@ class StaticPayloadType(PayloadTypeSpec, enum.Enum):
         raise ValueError(f"No static payload type with PT {pt}")
 
 
-@dataclasses.dataclass(slots=True)
+@dataclasses.dataclass(init=False, slots=True, repr=False)
 class RTPPayloadFormat:
     """RTP payload format descriptor (RFC 3551 §6 / RFC 4566 §6).
 
@@ -271,15 +284,55 @@ class RTPPayloadFormat:
     """
 
     payload_type: int
-    encoding_name: str | None = None
-    sample_rate: int = dataclasses.field(default=None)
-    #: Explicit sample rate parsed from ``a=rtpmap``.  When ``None``,
-    #: :attr:`sample_rate` falls back to :class:`StaticPayloadType`.
-    channels: int = 1
+    encoding_name: str | None
+    _sample_rate: int | None
+    channels: int
 
-    def __post_init__(self):
-        self.sample_rate = (
-            self.sample_rate or StaticPayloadType.from_pt(self.payload_type).sample_rate
+    def __init__(
+        self,
+        payload_type: int,
+        encoding_name: str | None = None,
+        sample_rate: int | None = None,
+        channels: int = 1,
+    ) -> None:
+        self.payload_type = payload_type
+        self.encoding_name = encoding_name
+        self._sample_rate = sample_rate
+        self.channels = channels
+        if self._sample_rate is None:
+            try:
+                self._sample_rate = StaticPayloadType.from_pt(
+                    self.payload_type
+                ).sample_rate
+            except ValueError:
+                pass  # Dynamic PT; sample_rate will be supplied via a=rtpmap.
+
+    @property
+    def sample_rate(self) -> int:
+        """RTP clock rate in Hz.
+
+        Raises:
+            ValueError: If the sample rate is not known — i.e. a dynamic
+                payload type with no ``a=rtpmap`` attribute parsed yet.
+        """
+        if self._sample_rate is None:
+            raise ValueError(
+                f"No sample rate for payload type {self.payload_type}; "
+                "supply an explicit a=rtpmap attribute"
+            )
+        return self._sample_rate
+
+    @sample_rate.setter
+    def sample_rate(self, value: int | None) -> None:
+        self._sample_rate = value
+
+    def __repr__(self) -> str:
+        return (
+            f"RTPPayloadFormat("
+            f"payload_type={self.payload_type!r}, "
+            f"encoding_name={self.encoding_name!r}, "
+            f"sample_rate={self._sample_rate!r}, "
+            f"channels={self.channels!r})"
         )
 
     def __str__(self) -> str:
@@ -372,7 +425,7 @@ class MediaDescription:
             lines.append(f"c={self.connection}")
         lines.extend(f"b={b}" for b in self.bandwidths)
         for f in self.fmt:
-            if f.encoding_name is not None and f.sample_rate is not None:
+            if f.encoding_name is not None and f._sample_rate is not None:
                 lines.append(f"a=rtpmap:{f}")
         lines.extend(f"a={a}" for a in self.attributes)
         return "\r\n".join(lines)
