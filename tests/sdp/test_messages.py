@@ -647,7 +647,7 @@ class TestMediaDescription:
         )
         pcmu = media.get_format(0)
         opus = media.get_format(111)
-        assert pcmu is not None and pcmu.encoding_name is None
+        assert pcmu is not None and pcmu.encoding_name == "PCMU"
         assert opus is not None and opus.encoding_name == "opus"
         assert opus.channels == 2
         assert opus.fmtp == "minptime=10"

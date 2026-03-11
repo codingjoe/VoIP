@@ -59,7 +59,6 @@ class Message:
         return None
 
     def __bytes__(self) -> bytes:
-        """Serialize to bytes."""
         headers = dict(self.headers)
         raw_body = bytes(self.body) if self.body is not None else b""
         if raw_body:

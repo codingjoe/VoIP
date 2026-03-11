@@ -82,7 +82,6 @@ class Origin:
     unicast_address: str
 
     def __str__(self) -> str:
-        """Serialize to SDP o= line value."""
         return (
             f"{self.username} {self.sess_id} {self.sess_version}"
             f" {self.nettype} {self.addrtype} {self.unicast_address}"
@@ -118,12 +117,10 @@ class ConnectionData:
     connection_address: str
 
     def __str__(self) -> str:
-        """Serialize to SDP c= line value."""
         return f"{self.nettype} {self.addrtype} {self.connection_address}"
 
     @classmethod
     def parse(cls, value: str) -> ConnectionData:
-        """Parse a c= line value into a ConnectionData."""
         nettype, addrtype, connection_address = value.split(" ", 2)
         return cls(
             nettype=nettype,
@@ -145,7 +142,6 @@ class Bandwidth:
     bandwidth: int
 
     def __str__(self) -> str:
-        """Serialize to SDP b= line value."""
         return f"{self.bwtype}:{self.bandwidth}"
 
     @classmethod
@@ -168,12 +164,10 @@ class Timing:
     stop_time: int
 
     def __str__(self) -> str:
-        """Serialize to SDP t= line value."""
         return f"{self.start_time} {self.stop_time}"
 
     @classmethod
     def parse(cls, value: str) -> Timing:
-        """Parse a t= line value into a Timing."""
         start_time, stop_time = value.split(" ", 1)
         return cls(start_time=int(start_time), stop_time=int(stop_time))
 
@@ -191,7 +185,6 @@ class Attribute:
     value: str | None = None
 
     def __str__(self) -> str:
-        """Serialize to SDP a= line value."""
         if self.value is None:
             return self.name
         return f"{self.name}:{self.value}"
@@ -263,7 +256,7 @@ class StaticPayloadType(PayloadTypeSpec, enum.Enum):
         raise ValueError(f"No static payload type with PT {pt}")
 
 
-@dataclasses.dataclass(init=False, slots=True, repr=False)
+@dataclasses.dataclass(slots=True)
 class RTPPayloadFormat:
     """RTP payload format descriptor (RFC 3551 §6 / RFC 4566 §6).
 
@@ -284,82 +277,27 @@ class RTPPayloadFormat:
     """
 
     payload_type: int
-    encoding_name: str | None
-    _sample_rate: int | None
-    channels: int
-    fmtp: str | None
+    fmtp: str | None = None
+    encoding_name: str | None = None
+    channels: int = 1
+    sample_rate: int = None
 
-    def __init__(
-        self,
-        payload_type: int,
-        encoding_name: str | None = None,
-        sample_rate: int | None = None,
-        channels: int = 1,
-        fmtp: str | None = None,
-    ) -> None:
-        self.payload_type = payload_type
-        self.encoding_name = encoding_name
-        self._sample_rate = sample_rate
-        self.channels = channels
-        self.fmtp = fmtp
-        if self._sample_rate is None:
-            try:
-                self._sample_rate = StaticPayloadType.from_pt(
-                    self.payload_type
-                ).sample_rate
-            except ValueError:
-                pass  # Dynamic PT; sample_rate will be supplied via a=rtpmap.
-
-    @property
-    def sample_rate(self) -> int:
-        """RTP clock rate in Hz.
-
-        Raises:
-            ValueError: If the sample rate is not known — i.e. a dynamic
-                payload type with no ``a=rtpmap`` attribute parsed yet.
-        """
-        if self._sample_rate is None:
-            raise ValueError(
-                f"No sample rate for payload type {self.payload_type}; "
-                "supply an explicit a=rtpmap attribute"
-            )
-        return self._sample_rate
-
-    @sample_rate.setter
-    def sample_rate(self, value: int | None) -> None:
-        self._sample_rate = value
-
-    def __repr__(self) -> str:
-        return (
-            f"RTPPayloadFormat("
-            f"payload_type={self.payload_type!r}, "
-            f"encoding_name={self.encoding_name!r}, "
-            f"sample_rate={self._sample_rate!r}, "
-            f"channels={self.channels!r}, "
-            f"fmtp={self.fmtp!r})"
-        )
+    def __post_init__(self):
+        try:
+            default = StaticPayloadType.from_pt(self.payload_type)
+        except ValueError:
+            pass
+        else:
+            self.sample_rate = self.sample_rate or default.sample_rate
+            self.encoding_name = self.encoding_name or default.encoding_name
+            self.channels = self.channels or default.channels
 
     def __str__(self) -> str:
-        """Serialize to an ``a=rtpmap`` attribute value (without the ``a=`` prefix).
-
-        Example: ``"111 opus/48000/2"`` or ``"8 PCMA/8000"``.
-
-        Raises:
-            ValueError: If *encoding_name* or *sample_rate* are not explicitly set.
-        """
         base = f"{self.payload_type} {self.encoding_name}/{self.sample_rate}"
         return f"{base}/{self.channels}" if self.channels != 1 else base
 
     @classmethod
     def parse(cls, value: str) -> RTPPayloadFormat:
-        """Parse an ``a=rtpmap`` attribute value into an :class:`RTPPayloadFormat`.
-
-        Args:
-            value: The attribute value, e.g. ``"111 opus/48000/2"``.
-
-        Raises:
-            ValueError: If the value does not conform to the expected format.
-        """
         fmt, _, rest = value.partition(" ")
         parts = rest.split("/")
         if len(parts) < 2:
@@ -456,7 +394,6 @@ class MediaDescription:
         return False
 
     def __str__(self) -> str:
-        """Serialize to SDP m= section lines."""
         fmt_str = " ".join(str(f.payload_type) for f in self.fmt)
         lines = [f"m={self.media} {self.port} {self.proto} {fmt_str}"]
         if self.title is not None:
@@ -465,7 +402,7 @@ class MediaDescription:
             lines.append(f"c={self.connection}")
         lines.extend(f"b={b}" for b in self.bandwidths)
         for f in self.fmt:
-            if f.encoding_name is not None and f._sample_rate is not None:
+            if f.encoding_name is not None and f.sample_rate is not None:
                 lines.append(f"a=rtpmap:{f}")
             if f.fmtp is not None:
                 lines.append(f"a=fmtp:{f.payload_type} {f.fmtp}")
@@ -474,18 +411,6 @@ class MediaDescription:
 
     @classmethod
     def parse(cls, value: str) -> MediaDescription:
-        """Parse an ``m=`` line value into a :class:`MediaDescription`.
-
-        *value* may be either just the ``m=`` line's value (e.g.
-        ``"audio 49170 RTP/AVP 0 111"``) or a multi-line block as produced
-        by :meth:`__str__` — i.e. including a leading ``m=`` and subsequent
-        ``i=``, ``c=``, ``b=``, ``a=rtpmap``, ``a=fmtp`` and generic ``a=``
-        lines.  This allows :meth:`parse` and :meth:`__str__` to round-trip
-        without going through :class:`~voip.sdp.messages.SessionDescription`.
-
-        Args:
-            value: The ``m=`` line value or a full media-section block.
-        """
         lines = value.splitlines()
         first = lines[0].rstrip("\r")
         if first.startswith("m="):
