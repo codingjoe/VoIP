@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 import enum
 import logging
-import os
 import socket
 import struct
+import uuid
 
 __all__ = ["STUNAttributeType", "STUNMessageType", "stun_discover"]
 
@@ -78,7 +78,7 @@ def _parse_stun_response(
 
 
 async def stun_discover(
-    host: str, port: int, timeout_secs: float = 3.0
+    host: str, port: int = 3478, timeout_secs: float = 3.0
 ) -> tuple[str, int]:
     """Discover the public IP:port using STUN on a dedicated ephemeral socket.
 
@@ -101,7 +101,7 @@ async def stun_discover(
         RuntimeError: If the STUN response contains no address attribute.
     """
     loop = asyncio.get_running_loop()
-    transaction_id = os.urandom(12)
+    transaction_id = uuid.uuid4().bytes[:12]
     future: asyncio.Future[tuple[str, int]] = loop.create_future()
 
     class _STUNClientProtocol(asyncio.DatagramProtocol):

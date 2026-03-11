@@ -346,20 +346,14 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
         )
         # Delegate codec negotiation to the call class so that each subclass
         # can declare its own codec preferences independently of the SIP layer.
-        selected: tuple[str, str | None, int] | None = None
-        if remote_audio:
-            selected = call_class.negotiate_codec(remote_audio)
-        selected_fmt = selected[0] if selected else None
-        selected_rtpmap = selected[1] if selected else None
-        # Build the negotiated MediaDescription to pass to the call class so that
-        # it has full codec context (format, rtpmap, sample rate) in one object.
-        negotiated_media = MediaDescription(
-            media="audio",
-            port=0,
-            proto="RTP/AVP",
-            fmt=[selected_fmt] if selected_fmt else ["0"],
-            attributes=[Attribute(name="rtpmap", value=selected_rtpmap)] if selected_rtpmap else [],
-        )
+        # negotiate_codec raises NotImplementedError when no supported codec is
+        # found; when the INVITE contains no SDP audio at all, default to PCMU.
+        if remote_audio is not None:
+            negotiated_media = call_class.negotiate_codec(remote_audio)
+        else:
+            negotiated_media = MediaDescription(
+                media="audio", port=0, proto="RTP/AVP", fmt=["0"], attributes=[]
+            )
         rtp_transport, rtp_protocol = await loop.create_datagram_endpoint(
             lambda: call_class(
                 caller=caller,
@@ -389,11 +383,12 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
         sip_contact_addr = self.public_address or sip_local_addr
         record_route = request.headers.get("Record-Route")
         sess_id = str(secrets.randbelow(2**32) + 1)
-        attributes = [
+        rtpmap_attr = negotiated_media.get_rtpmap(negotiated_media.fmt[0])
+        sdp_media_attributes = [
             Attribute(name="sendrecv"),
             *(
-                [Attribute(name="rtpmap", value=selected_rtpmap)]
-                if selected_rtpmap
+                [Attribute(name="rtpmap", value=str(rtpmap_attr))]
+                if rtpmap_attr is not None
                 else []
             ),
         ]
@@ -434,8 +429,8 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
                             media="audio",
                             port=sdp_port,
                             proto="RTP/AVP",
-                            fmt=[selected_fmt] if selected_fmt else ["0"],
-                            attributes=attributes,
+                            fmt=negotiated_media.fmt,
+                            attributes=sdp_media_attributes,
                         )
                     ],
                 ),

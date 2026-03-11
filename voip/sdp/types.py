@@ -14,6 +14,7 @@ __all__ = [
     "Bandwidth",
     "Timing",
     "Attribute",
+    "RtpMap",
     "MediaDescription",
 ]
 
@@ -201,6 +202,54 @@ class Attribute:
 
 
 @dataclasses.dataclass(slots=True)
+class RtpMap:
+    """Parsed ``a=rtpmap`` attribute value (RFC 4566 §6 / RFC 3550 §8).
+
+    Associates a payload type number with an encoding name and clock rate::
+
+        a=rtpmap:111 opus/48000/2
+        a=rtpmap:8 PCMA/8000
+
+    Instances are compared and serialized without the leading ``a=rtpmap:``
+    prefix so they can be stored directly as :attr:`Attribute.value`.
+    """
+
+    payload_type: int
+    encoding_name: str
+    clock_rate: int
+    channels: int = 1
+
+    def __str__(self) -> str:
+        """Serialize to an ``a=rtpmap`` attribute value (without the ``a=`` prefix).
+
+        Example: ``"111 opus/48000/2"`` or ``"8 PCMA/8000"``.
+        """
+        base = f"{self.payload_type} {self.encoding_name}/{self.clock_rate}"
+        return f"{base}/{self.channels}" if self.channels != 1 else base
+
+    @classmethod
+    def parse(cls, value: str) -> RtpMap:
+        """Parse an ``a=rtpmap`` attribute value into an :class:`RtpMap`.
+
+        Args:
+            value: The attribute value, e.g. ``"111 opus/48000/2"``.
+
+        Raises:
+            ValueError: If the value does not conform to the expected format.
+        """
+        fmt, _, rest = value.partition(" ")
+        parts = rest.split("/")
+        if len(parts) < 2:
+            raise ValueError(f"Invalid rtpmap value: {value!r}")
+        return cls(
+            payload_type=int(fmt),
+            encoding_name=parts[0],
+            clock_rate=int(parts[1]),
+            channels=int(parts[2]) if len(parts) > 2 else 1,
+        )
+
+
+@dataclasses.dataclass(slots=True)
 class MediaDescription:
     """Media description section (m=) as defined by RFC 4566 §5.14."""
 
@@ -208,6 +257,25 @@ class MediaDescription:
     session_attr: ClassVar[str] = "media"
     is_list: ClassVar[bool] = True
     media_attr: ClassVar[str | None] = None
+
+    #: Clock rates (Hz) for static RTP payload types as defined by RFC 3551 §6.
+    _STATIC_CLOCK_RATES: ClassVar[dict[int, int]] = {
+        0: 8000,    # PCMU  – G.711 µ-law
+        3: 8000,    # GSM
+        4: 8000,    # G723
+        5: 8000,    # DVI4
+        6: 16000,   # DVI4 (16 kHz variant)
+        7: 8000,    # LPC
+        8: 8000,    # PCMA  – G.711 A-law
+        9: 8000,    # G722  – RTP clock rate is 8000 per RFC 3551 even though wideband
+        10: 44100,  # L16 stereo
+        11: 44100,  # L16 mono
+        12: 8000,   # QCELP
+        13: 8000,   # CN
+        14: 90000,  # MPA
+        15: 8000,   # G728
+        18: 8000,   # G729
+    }
 
     media: str
     port: int
@@ -217,6 +285,54 @@ class MediaDescription:
     connection: ConnectionData | None = None
     bandwidths: list[Bandwidth] = dataclasses.field(default_factory=list)
     attributes: list[Attribute] = dataclasses.field(default_factory=list)
+
+    def get_rtpmap(self, fmt: str) -> RtpMap | None:
+        """Return the :class:`RtpMap` for the given payload type string, or ``None``.
+
+        Searches the ``a=rtpmap`` attributes for an entry whose payload type
+        matches *fmt*.
+
+        Args:
+            fmt: The payload type as a string (e.g. ``"111"`` or ``"8"``).
+
+        Returns:
+            A :class:`RtpMap` if a matching ``a=rtpmap`` attribute is found,
+            otherwise ``None``.
+        """
+        for attr in self.attributes:
+            if attr.name == "rtpmap" and attr.value and attr.value.startswith(f"{fmt} "):
+                return RtpMap.parse(attr.value)
+        return None
+
+    @property
+    def sample_rate(self) -> int:
+        """Clock rate (Hz) of the primary codec as declared in ``a=rtpmap``.
+
+        For static payload types that carry no ``a=rtpmap`` attribute, the rate
+        is taken from the RFC 3551 §6 static table.
+
+        Raises:
+            ValueError: If the primary format has no ``a=rtpmap`` and is not a
+                recognised RFC 3551 static payload type.
+        """
+        if not self.fmt:
+            raise ValueError("No audio format in MediaDescription")
+        fmt = self.fmt[0]
+        rtpmap = self.get_rtpmap(fmt)
+        if rtpmap is not None:
+            return rtpmap.clock_rate
+        try:
+            pt = int(fmt)
+        except ValueError as exc:
+            raise ValueError(
+                f"Cannot determine sample rate for format {fmt!r}"
+            ) from exc
+        if pt in self._STATIC_CLOCK_RATES:
+            return self._STATIC_CLOCK_RATES[pt]
+        raise ValueError(
+            f"No a=rtpmap attribute for dynamic payload type {fmt!r} "
+            f"and no RFC 3551 static rate defined"
+        )
 
     def __str__(self) -> str:
         """Serialize to SDP m= section lines."""
