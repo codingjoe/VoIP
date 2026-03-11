@@ -30,9 +30,7 @@ class TestSIP:
     @pytest.fixture(autouse=True)
     def _stun_patch(self):
         """Patch stun_discover so _answer tests don't make real network calls."""
-        with patch(
-            "voip.sip.protocol.stun_discover", return_value=("127.0.0.1", 0)
-        ):
+        with patch("voip.sip.protocol.stun_discover", return_value=("127.0.0.1", 0)):
             yield
 
     def test_connection_made__stores_transport(self):
@@ -110,7 +108,9 @@ class TestSIP:
         protocol._transport = make_mock_transport()
         request = make_invite()
         protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
-        with patch("voip.sip.protocol.stun_discover", return_value=("203.0.113.5", 54321)):
+        with patch(
+            "voip.sip.protocol.stun_discover", return_value=("203.0.113.5", 54321)
+        ):
             await protocol._answer(request, RTP)
         response, _ = send.call_args[0]
         assert b"c=IN IP4 203.0.113.5" in bytes(response.body)
@@ -123,7 +123,9 @@ class TestSIP:
         protocol._transport = make_mock_transport()
         request = make_invite()
         protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
-        with patch("voip.sip.protocol.stun_discover", side_effect=TimeoutError("timeout")):
+        with patch(
+            "voip.sip.protocol.stun_discover", side_effect=TimeoutError("timeout")
+        ):
             await protocol._answer(request, RTP)
         response, _ = send.call_args[0]
         assert b"m=audio" in bytes(response.body)
@@ -388,9 +390,7 @@ class TestSessionInitiationProtocol:
 
         p = make_register_session()
         transport = make_mock_transport()
-        with patch(
-            "voip.sip.protocol.stun_discover", return_value=("1.2.3.4", 0)
-        ):
+        with patch("voip.sip.protocol.stun_discover", return_value=("1.2.3.4", 0)):
             p.connection_made(transport)
             await asyncio.sleep(0.05)
         transport.sendto.assert_called()

@@ -204,16 +204,13 @@ class TestStunDiscover:
             def datagram_received(self, data, addr):
                 received_requests.append(data)
                 tid = data[8:20]
-                response = (
-                    struct.pack(
-                        ">HHI12s",
-                        STUNMessageType.BINDING_SUCCESS_RESPONSE,
-                        0,
-                        MAGIC_COOKIE,
-                        tid,
-                    )
-                    + make_xor_mapped_address_attribute("1.2.3.4", 54321)
-                )
+                response = struct.pack(
+                    ">HHI12s",
+                    STUNMessageType.BINDING_SUCCESS_RESPONSE,
+                    0,
+                    MAGIC_COOKIE,
+                    tid,
+                ) + make_xor_mapped_address_attribute("1.2.3.4", 54321)
                 server_transport.sendto(response, addr)
                 if not server_future.done():
                     server_future.set_result(addr)
