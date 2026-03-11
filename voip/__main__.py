@@ -143,6 +143,8 @@ def transcribe(ctx, model, server, aor, username, password, local_port, stun_ser
             logger.info("Transcription: %s", text)
             click.echo(text)
 
+    # Mix in ConsoleMessageProcessor only at maximum verbosity (-vvv) so that
+    # normal operation is not flooded with protocol-level message dumps.
     bases = (ConsoleMessageProcessor, SIP) if verbose >= 3 else (SIP,)
 
     class TranscribeSession(*bases):

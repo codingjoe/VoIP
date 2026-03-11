@@ -140,10 +140,19 @@ class RealtimeTransportProtocol(asyncio.DatagramProtocol):
         # Fallback: accept the first format the remote side offered.
         if remote_media.fmt:
             fmt = remote_media.fmt[0]
-            rtpmap = (
-                f"{fmt} {remote_rtpmaps[fmt]}" if fmt in remote_rtpmaps else None
-            )
-            return (fmt, rtpmap, 8000)
+            sample_rate = 8000  # default for unknown/static codecs
+            rtpmap = None
+            if fmt in remote_rtpmaps:
+                rtpmap_str = remote_rtpmaps[fmt]
+                rtpmap = f"{fmt} {rtpmap_str}"
+                # Parse the clock rate from "codec/clockrate[/channels]"
+                parts = rtpmap_str.split("/")
+                if len(parts) >= 2:
+                    try:
+                        sample_rate = int(parts[1])
+                    except ValueError:
+                        pass
+            return (fmt, rtpmap, sample_rate)
 
         return None
 

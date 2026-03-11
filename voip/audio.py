@@ -194,7 +194,11 @@ class WhisperCall(RealtimeTransportProtocol):
                 )
             case _:
                 raise NotImplementedError(
-                    f"Unsupported RTP payload type: {payload_type}"
+                    f"Unsupported RTP payload type: {payload_type}. "
+                    f"Supported types: OPUS ({RTPPayloadType.OPUS}), "
+                    f"G722 ({RTPPayloadType.G722}), "
+                    f"PCMA ({RTPPayloadType.PCMA}), "
+                    f"PCMU ({RTPPayloadType.PCMU})"
                 )
 
     def _decode_via_av(
