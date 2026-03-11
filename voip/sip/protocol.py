@@ -100,7 +100,7 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
         aor: str | None = None,
         username: str | None = None,
         password: str | None = None,
-        stun_server_address: tuple[str, int] = ("stun.cloudflare.com", 3478),
+        stun_server_address: tuple[str, int] | None = ("stun.cloudflare.com", 3478),
     ) -> None:
         super().__init__()
         #: Pending INVITE addresses keyed by Call-ID.
@@ -127,17 +127,18 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
 
     async def _stun_then_register(self) -> None:
         """Discover the public address via STUN, then send REGISTER."""
-        try:
-            self.public_address = await stun_discover(*self.stun_server_address)
-            logger.debug(
-                "STUN: public address is %s:%s",
-                self.public_address[0],
-                self.public_address[1],
-            )
-        except (TimeoutError, OSError, RuntimeError) as exc:
-            logger.warning(
-                "STUN discovery failed (%s), continuing with local address", exc
-            )
+        if self.stun_server_address is not None:
+            try:
+                self.public_address = await stun_discover(*self.stun_server_address)
+                logger.debug(
+                    "STUN: public address is %s:%s",
+                    self.public_address[0],
+                    self.public_address[1],
+                )
+            except (TimeoutError, OSError, RuntimeError) as exc:
+                logger.warning(
+                    "STUN discovery failed (%s), continuing with local address", exc
+                )
         self.register()
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
@@ -450,14 +451,17 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
         # because we bind the RTP socket on a fixed ephemeral port.
         sdp_ip = local_addr[0]
         sdp_port = local_addr[1]
-        try:
-            public_ip, _ = await stun_discover(*self.stun_server_address)
-            sdp_ip = public_ip
-            logger.debug("RTP STUN: public IP is %s, port %s", sdp_ip, sdp_port)
-        except (TimeoutError, OSError, RuntimeError) as exc:
-            logger.warning("RTP STUN discovery failed (%s), using local address", exc)
-            if self.public_address:
-                sdp_ip = self.public_address[0]
+        if self.stun_server_address is not None:
+            try:
+                public_ip, _ = await stun_discover(*self.stun_server_address)
+                sdp_ip = public_ip
+                logger.debug("RTP STUN: public IP is %s, port %s", sdp_ip, sdp_port)
+            except (TimeoutError, OSError, RuntimeError) as exc:
+                logger.warning("RTP STUN discovery failed (%s), using local address", exc)
+                if self.public_address:
+                    sdp_ip = self.public_address[0]
+        elif self.public_address:
+            sdp_ip = self.public_address[0]
         logger.debug("RTP listening on %s:%s", local_addr[0], local_addr[1])
         sip_local_addr = self._transport.get_extra_info("sockname") or ("0.0.0.0", 5060)  # noqa: S104
         sip_contact_addr = self.public_address or sip_local_addr

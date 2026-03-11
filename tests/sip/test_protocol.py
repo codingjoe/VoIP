@@ -541,6 +541,9 @@ class TestAnswer:
         await self._run_answer(protocol, invite, fake_rtp_transport)
         response, _ = protocol._sent_responses[-1]
         assert response.body.media[0].fmt[0].payload_type == 0  # PCMU when only option
+
+    @pytest.mark.asyncio
+    async def test_answer__selects_opus_from_offer(self, fake_rtp_transport):
         """Select Opus (111) when the remote SDP offers Opus alongside PCMA and PCMU."""
         protocol = FakeProtocol()
         addr = ("192.0.2.1", 5060)
@@ -644,6 +647,9 @@ class TestAnswer:
         await self._run_answer(protocol, invite, fake_rtp_transport)
         response, _ = protocol._sent_responses[-1]
         assert response.body.media[0].fmt[0].payload_type == 0  # PCMU default
+
+    @pytest.mark.asyncio
+    async def test_answer__includes_to_tag_in_200_ok(self, fake_rtp_transport):
         """Include the locally generated To tag in the 200 OK response."""
         protocol = FakeProtocol()
         addr = ("192.0.2.1", 5060)
