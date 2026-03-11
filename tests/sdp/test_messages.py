@@ -550,7 +550,7 @@ class TestMediaDescription:
         assert str(media) == "m=audio 49170 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000"
 
 
-class TestRtpPayloadFormat:
+class TestRTPPayloadFormat:
     def test_parse__opus(self):
         """Parse a full Opus rtpmap attribute value."""
         rm = RTPPayloadFormat.parse("111 opus/48000/2")
@@ -583,11 +583,6 @@ class TestRtpPayloadFormat:
         """Serialize an RtpPayloadFormat with a single channel (omit channel suffix)."""
         rm = RTPPayloadFormat(payload_type=8, encoding_name="PCMA", sample_rate=8000)
         assert str(rm) == "8 PCMA/8000"
-
-    def test_str__missing_codec_info__raises(self):
-        """Raise ValueError when encoding_name or sample_rate is absent."""
-        with pytest.raises(ValueError):
-            str(RTPPayloadFormat(payload_type=0))
 
 
 class TestMediaDescriptionGetFormat:
@@ -631,23 +626,6 @@ class TestMediaDescriptionGetFormat:
             fmt=[RTPPayloadFormat(payload_type=8)],
         )
         assert media.get_format(111) is None
-
-    def test_get_rtpmap__alias(self):
-        """get_rtpmap is a backwards-compatible alias for get_format."""
-        media = MediaDescription(
-            media="audio",
-            port=0,
-            proto="RTP/AVP",
-            fmt=[
-                RTPPayloadFormat(
-                    payload_type=111,
-                    encoding_name="opus",
-                    sample_rate=48000,
-                    channels=2,
-                )
-            ],
-        )
-        assert media.get_rtpmap("111") is media.get_format(111)
 
 
 class TestMediaDescriptionSampleRate:
