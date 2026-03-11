@@ -37,7 +37,10 @@ class TestParseServer:
         """Parse host and port from HOST:PORT format."""
         from voip.__main__ import _parse_server
 
-        assert _parse_server(None, None, "sip.example.com:5080") == ("sip.example.com", 5080)
+        assert _parse_server(None, None, "sip.example.com:5080") == (
+            "sip.example.com",
+            5080,
+        )
 
 
 class TestParseStunServer:
@@ -57,13 +60,19 @@ class TestParseStunServer:
         """Parse host and port from HOST:PORT format."""
         from voip.__main__ import _parse_stun_server
 
-        assert _parse_stun_server(None, None, "stun.example.com:3478") == ("stun.example.com", 3478)
+        assert _parse_stun_server(None, None, "stun.example.com:3478") == (
+            "stun.example.com",
+            3478,
+        )
 
     def test_parse_stun_server__without_port(self):
         """Return default STUN port 3478 when no port is specified."""
         from voip.__main__ import _parse_stun_server
 
-        assert _parse_stun_server(None, None, "stun.example.com") == ("stun.example.com", 3478)
+        assert _parse_stun_server(None, None, "stun.example.com") == (
+            "stun.example.com",
+            3478,
+        )
 
 
 class TestVoIPCommand:
