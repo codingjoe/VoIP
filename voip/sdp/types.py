@@ -498,14 +498,15 @@ class MediaDescription:
             if not line or "=" not in line:
                 continue
             letter, _, attr_value = line.partition("=")
-            if letter == "i":
-                obj.title = attr_value
-            elif letter == "c":
-                obj.connection = ConnectionData.parse(attr_value)
-            elif letter == "b":
-                obj.bandwidths.append(Bandwidth.parse(attr_value))
-            elif letter == "a":
-                attr = Attribute.parse(attr_value)
-                if not obj.apply_attribute(attr):
-                    obj.attributes.append(attr)
+            match letter:
+                case "i":
+                    obj.title = attr_value
+                case "c":
+                    obj.connection = ConnectionData.parse(attr_value)
+                case "b":
+                    obj.bandwidths.append(Bandwidth.parse(attr_value))
+                case "a":
+                    attr = Attribute.parse(attr_value)
+                    if not obj.apply_attribute(attr):
+                        obj.attributes.append(attr)
         return obj
