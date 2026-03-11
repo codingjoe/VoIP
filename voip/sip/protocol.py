@@ -13,7 +13,6 @@ import json
 import logging
 import re
 import secrets
-import struct
 import uuid
 from typing import TYPE_CHECKING
 
@@ -26,7 +25,6 @@ from voip.sdp.types import (
     RTPPayloadFormat,
     Timing,
 )
-from voip.stun import MAGIC_COOKIE, STUNMessageType, _parse_stun_response
 from voip.types import DigestQoP
 
 from .messages import Message, Request, Response
@@ -71,7 +69,7 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
     """SIP session handler (RFC 3261).
 
     Handles incoming calls and, optionally, carrier registration with digest
-    auth (RFC 3261 §22) and STUN-based NAT traversal (RFC 5389).
+    auth (RFC 3261 §22).
 
     Subclass and override :meth:`call_received` to handle incoming calls::
 
@@ -101,7 +99,6 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
         aor: str | None = None,
         username: str | None = None,
         password: str | None = None,
-        stun_server_address: tuple[str, int] = ("stun.cloudflare.com", 3478),
     ) -> None:
         super().__init__()
         #: Pending INVITE addresses keyed by Call-ID.
@@ -116,83 +113,25 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
         self.password = password
         self.call_id = str(uuid.uuid4())
         self.cseq = 0
-        self.stun_server_address = stun_server_address
-        self.public_address: tuple[str, int] | None = None
-        self._stun_pending: dict[bytes, asyncio.Future[tuple[str, int]]] = {}
+        #: Shared RTP multiplexer and its transport, lazily created on the first
+        #: answered call and reused for all subsequent calls.
+        self._rtp_protocol: RealtimeTransportProtocol | None = None
+        self._rtp_transport: asyncio.DatagramTransport | None = None
+        #: Remote RTP address per call, used to unregister on BYE/CANCEL.
+        self._call_rtp_addrs: dict[str, tuple[str, int] | None] = {}
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
-        """Store the transport; if registration params are set, send REGISTER after STUN."""
+        """Store the transport; if registration params are set, send REGISTER."""
         logger.debug("SIP transport connected")
         self._transport = transport
         if self.server_address is not None:
-            asyncio.ensure_future(self._stun_then_register())
-
-    async def stun_discover(
-        self, host: str, port: int = 3478, timeout_secs: float = 3.0
-    ) -> tuple[str, int]:
-        """Discover the public IP:port for this SIP socket via STUN (RFC 5389).
-
-        Sends the STUN Binding Request through the actual SIP transport socket so
-        the server observes the same NAT mapping used by SIP signalling traffic.
-
-        Args:
-            host: STUN server hostname or IP address.
-            port: STUN server UDP port (default 3478).
-            timeout_secs: Seconds to wait for a STUN response.
-
-        Returns:
-            A ``(public_ip, public_port)`` tuple as seen by the STUN server.
-
-        Raises:
-            asyncio.TimeoutError: If the server does not respond in time.
-            RuntimeError: If the STUN response contains no address attribute.
-        """
-        loop = asyncio.get_running_loop()
-        transaction_id = uuid.uuid4().bytes[:12]
-        future: asyncio.Future[tuple[str, int]] = loop.create_future()
-        self._stun_pending[transaction_id] = future
-        request = struct.pack(
-            ">HHI12s",
-            STUNMessageType.BINDING_REQUEST,
-            0,
-            MAGIC_COOKIE,
-            transaction_id,
-        )
-        logger.debug("Sending STUN Binding Request to %s:%s via SIP socket", host, port)
-        self._transport.sendto(request, (host, port))
-        try:
-            return await asyncio.wait_for(future, timeout_secs)
-        finally:
-            self._stun_pending.pop(transaction_id, None)
-
-    async def _stun_then_register(self) -> None:
-        """Discover the public address via STUN on the SIP socket, then send REGISTER."""
-        try:
-            self.public_address = await self.stun_discover(*self.stun_server_address)
-            logger.debug(
-                "STUN: public address is %s:%s",
-                self.public_address[0],
-                self.public_address[1],
-            )
-        except (TimeoutError, OSError, RuntimeError) as exc:
-            logger.warning(
-                "STUN discovery failed (%s), continuing with local address", exc
-            )
-        self.register()
+            self.register()
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
-        """Handle RFC 5626 keepalive pings, STUN responses, then dispatch SIP messages."""
+        """Handle RFC 5626 keepalive pings, then dispatch SIP messages."""
         if data == b"\r\n\r\n":  # RFC 5626 §4.4.1 double-CRLF keepalive ping
             logger.debug("RFC 5626 keepalive from %s, sending pong", addr)
             self._transport.sendto(b"\r\n", addr)
-            return
-        # RFC 7983: first byte in [0, 3] indicates a STUN packet.
-        if data and data[0] < 4:
-            if len(data) >= 20:
-                tid = data[8:20]
-                fut = self._stun_pending.get(tid)
-                if fut is not None:
-                    _parse_stun_response(data, tid, fut)
             return
         match Message.parse(data):
             case Request() as request:
@@ -204,6 +143,11 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
         """Serialize and send a SIP message to the given address."""
         logger.debug("Sending %r to %r", message, addr)
         self._transport.sendto(bytes(message), addr)
+
+    def _cleanup_rtp_call(self, call_id: str) -> None:
+        """Remove the call handler registered with the shared RTP mux, if any."""
+        if call_id in self._call_rtp_addrs and self._rtp_protocol is not None:
+            self._rtp_protocol.unregister_call(self._call_rtp_addrs.pop(call_id))
 
     def request_received(self, request: Request, addr: tuple[str, int]) -> None:
         """Dispatch a received SIP request to the appropriate handler."""
@@ -228,7 +172,7 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
                     )
                     return
                 # Mark immediately (before async answering) so retransmissions
-                # that arrive while STUN/RTP setup is in progress are suppressed.
+                # that arrive while RTP setup is in progress are suppressed.
                 self._answered_calls.add(call_id)
                 self._request_addrs[call_id] = addr
                 self._to_tags[call_id] = secrets.token_hex(8)
@@ -266,6 +210,7 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
                     addr,
                 )
                 self._to_tags.pop(call_id, None)
+                self._cleanup_rtp_call(call_id)
                 self.bye_received(request)
             case "CANCEL":
                 caller = CallerID(request.headers.get("From", ""))
@@ -311,6 +256,7 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
                     )
                 self._answered_calls.discard(call_id)
                 self._to_tags.pop(call_id, None)
+                self._cleanup_rtp_call(call_id)
                 self.cancel_received(request)
             case _:
                 raise NotImplementedError(
@@ -445,6 +391,8 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
         self, request: Request, call_class: type[RealtimeTransportProtocol]
     ) -> None:
         """Perform the asynchronous part of answering: set up RTP, send 200 OK."""
+        from voip.rtp import RealtimeTransportProtocol  # noqa: PLC0415
+
         call_id = request.headers.get("Call-ID", "")
         addr = self._request_addrs.pop(call_id, None)
         if addr is None:
@@ -484,30 +432,40 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
                 proto="RTP/AVP",
                 fmt=[RTPPayloadFormat.from_pt(0)],
             )
-        rtp_transport, rtp_protocol = await loop.create_datagram_endpoint(
-            lambda: call_class(
-                caller=caller,
-                media=negotiated_media,
-            ),
-            local_addr=("0.0.0.0", 0),  # noqa: S104
-        )
-        local_addr = rtp_transport.get_extra_info("sockname")
-        # Discover the public RTP address by running STUN on the actual RTP
-        # socket (RFC 7983 multiplexing).  This ensures the NAT mapping seen by
-        # the STUN server corresponds to the socket carrying real-time audio,
-        # which is critical for symmetric-NAT traversal (RFC 5389).
-        sdp_ip = local_addr[0]
-        sdp_port = local_addr[1]
-        try:
-            sdp_ip, sdp_port = await rtp_protocol.stun_discover(*self.stun_server_address)
-            logger.debug("RTP STUN: public address is %s:%s", sdp_ip, sdp_port)
-        except (TimeoutError, OSError, RuntimeError, AttributeError) as exc:
-            logger.warning("RTP STUN discovery failed (%s), using local address", exc)
-            if self.public_address:
-                sdp_ip = self.public_address[0]
-        logger.debug("RTP listening on %s:%s", local_addr[0], local_addr[1])
-        sip_local_addr = self._transport.get_extra_info("sockname") or ("0.0.0.0", 5060)  # noqa: S104
-        sip_contact_addr = self.public_address or sip_local_addr
+
+        # Create the shared RTP multiplexer socket on the first call and reuse
+        # it for all subsequent calls on this SIP session.
+        if self._rtp_protocol is None:
+            mux = RealtimeTransportProtocol()
+            self._rtp_transport, self._rtp_protocol = await loop.create_datagram_endpoint(
+                lambda: mux,
+                local_addr=("0.0.0.0", 0),  # noqa: S104
+            )
+
+        # Instantiate the per-call handler and register it with the shared mux.
+        call_handler = call_class(caller=caller, media=negotiated_media)
+        # Determine the remote RTP address for routing.  If the INVITE SDP
+        # specifies a connection address, use that; otherwise fall back to the
+        # source IP of the SIP message.  When no remote audio port is known
+        # (no SDP), register under the ``None`` wildcard key so that the mux
+        # delivers all unmatched traffic to this handler.
+        if remote_audio is not None:
+            conn = request.body.connection if request.body else None
+            remote_ip = conn.connection_address if conn else addr[0]
+            remote_rtp_addr: tuple[str, int] | None = (remote_ip, remote_audio.port)
+        else:
+            remote_rtp_addr = None
+        self._rtp_protocol.register_call(remote_rtp_addr, call_handler)
+        self._call_rtp_addrs[call_id] = remote_rtp_addr
+
+        local_rtp_addr = self._rtp_transport.get_extra_info("sockname")
+        sdp_ip = local_rtp_addr[0]
+        sdp_port = local_rtp_addr[1]
+        logger.debug("RTP multiplexer listening on %s:%s", sdp_ip, sdp_port)
+
+        # Contact header reflects the SIP socket's local address; the
+        # SIP carrier handles the external NAT mapping at the signalling layer.
+        sip_contact_addr = self._transport.get_extra_info("sockname") or ("0.0.0.0", 5060)  # noqa: S104
         record_route = request.headers.get("Record-Route")
         sess_id = str(secrets.randbelow(2**32) + 1)
         sdp_media_attributes = [
@@ -688,15 +646,13 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
         # Extract SIP user part from AOR (e.g. "sip:alice@example.com" -> "alice")
         aor_rest = self.aor.partition(":")[2] if self.aor else ""
         user = aor_rest.partition("@")[0] if "@" in aor_rest else aor_rest
-        # Use the public (STUN-discovered) address in Contact for inbound routing
-        contact_address = self.public_address or local_address
         headers = {
             "Via": f"SIP/2.0/UDP {local_address[0]}:{local_address[1]};rport;branch={branch}",
             "From": self.aor,
             "To": self.aor,
             "Call-ID": self.call_id,
             "CSeq": f"{self.cseq} REGISTER",
-            "Contact": f"<sip:{user}@{contact_address[0]}:{contact_address[1]}>",
+            "Contact": f"<sip:{user}@{local_address[0]}:{local_address[1]}>",
             "Expires": "3600",  # 1 hour
             "Max-Forwards": "70",
         }

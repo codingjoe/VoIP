@@ -1,6 +1,6 @@
 """Tests for the SIP session and RTP call handler."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from voip.rtp import RTP, RTPPacket
@@ -27,20 +27,6 @@ class TestRTP:
 
 
 class TestSIP:
-    @pytest.fixture(autouse=True)
-    def _stun_patch(self):
-        """Patch RTP.stun_discover so _answer tests don't make real network calls.
-
-        Raises TimeoutError so that _answer falls back to the locally-bound
-        RTP address, giving audio-receive tests the correct port.
-        """
-        with patch.object(
-            RTP,
-            "stun_discover",
-            new=AsyncMock(side_effect=TimeoutError("STUN unavailable in tests")),
-        ):
-            yield
-
     def test_connection_made__stores_transport(self):
         """Store the transport when a connection is established."""
         protocol = SIP()
@@ -103,37 +89,6 @@ class TestSIP:
         protocol._transport = make_mock_transport()
         request = make_invite()
         protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
-        await protocol._answer(request, RTP)
-        response, _ = send.call_args[0]
-        assert b"m=audio" in bytes(response.body)
-        assert b"RTP/AVP 0" in bytes(response.body)
-
-    async def test_answer__sdp_uses_stun_public_address_for_rtp(self):
-        """_answer advertises the STUN-discovered public IP and port in the SDP."""
-        protocol = SIP(stun_server_address=("stun.example.com", 3478))
-        send = MagicMock()
-        protocol.send = send
-        protocol._transport = make_mock_transport()
-        request = make_invite()
-        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
-        with patch.object(
-            RTP,
-            "stun_discover",
-            new=AsyncMock(return_value=("203.0.113.5", 54321)),
-        ):
-            await protocol._answer(request, RTP)
-        response, _ = send.call_args[0]
-        assert b"c=IN IP4 203.0.113.5" in bytes(response.body)
-
-    async def test_answer__sdp_falls_back_to_local_when_rtp_stun_fails(self):
-        """_answer falls back to local address when RTP STUN discovery fails."""
-        protocol = SIP(stun_server_address=("stun.example.com", 3478))
-        send = MagicMock()
-        protocol.send = send
-        protocol._transport = make_mock_transport()
-        request = make_invite()
-        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
-        # Autouse _stun_patch already raises TimeoutError; the fallback is tested here.
         await protocol._answer(request, RTP)
         response, _ = send.call_args[0]
         assert b"m=audio" in bytes(response.body)
@@ -260,6 +215,98 @@ class TestSIP:
         serialized = bytes(response)
         parsed = Message.parse(serialized)
         assert "Content-Length" in parsed.headers
+
+    async def test_answer__reuses_shared_rtp_socket_for_second_call(self):
+        """A second _answer() reuses the same shared RTP socket (one port for all calls)."""
+        from voip.sdp.messages import SessionDescription  # noqa: PLC0415
+
+        protocol = SIP()
+        protocol.send = MagicMock()
+        protocol._transport = make_mock_transport()
+
+        sdp_body1 = SessionDescription.parse(
+            b"v=0\r\no=- 0 0 IN IP4 1.2.3.4\r\ns=-\r\nc=IN IP4 1.2.3.4\r\nt=0 0\r\nm=audio 5000 RTP/AVP 0\r\n"
+        )
+        invite1 = make_invite({"Call-ID": "call-1@test", "Content-Type": "application/sdp"})
+        object.__setattr__(invite1, "body", sdp_body1) if hasattr(invite1, "__dataclass_fields__") else None
+        # Use lower-level: directly set body via Request construction
+        from voip.sip.messages import Request as SIPRequest  # noqa: PLC0415
+        invite1 = SIPRequest(
+            method="INVITE",
+            uri="sip:alice@atlanta.com",
+            headers={
+                "Via": "SIP/2.0/UDP pc33.atlanta.com",
+                "To": "sip:alice@atlanta.com",
+                "From": "sip:bob@biloxi.com",
+                "Call-ID": "call-1@test",
+                "CSeq": "1 INVITE",
+            },
+            body=sdp_body1,
+        )
+        protocol._request_addrs["call-1@test"] = ("1.2.3.4", 5060)
+        await protocol._answer(invite1, RTP)
+        rtp_proto_1 = protocol._rtp_protocol
+        rtp_transport_1 = protocol._rtp_transport
+
+        sdp_body2 = SessionDescription.parse(
+            b"v=0\r\no=- 0 0 IN IP4 5.6.7.8\r\ns=-\r\nc=IN IP4 5.6.7.8\r\nt=0 0\r\nm=audio 6000 RTP/AVP 0\r\n"
+        )
+        invite2 = SIPRequest(
+            method="INVITE",
+            uri="sip:alice@atlanta.com",
+            headers={
+                "Via": "SIP/2.0/UDP pc33.atlanta.com",
+                "To": "sip:alice@atlanta.com",
+                "From": "sip:charlie@biloxi.com",
+                "Call-ID": "call-2@test",
+                "CSeq": "1 INVITE",
+            },
+            body=sdp_body2,
+        )
+        protocol._request_addrs["call-2@test"] = ("5.6.7.8", 5060)
+        await protocol._answer(invite2, RTP)
+
+        # The same RTP protocol and transport must be reused.
+        assert protocol._rtp_protocol is rtp_proto_1
+        assert protocol._rtp_transport is rtp_transport_1
+
+        # Both calls registered under their respective remote addrs.
+        assert ("1.2.3.4", 5000) in rtp_proto_1._calls
+        assert ("5.6.7.8", 6000) in rtp_proto_1._calls
+
+        # Clean up the real socket.
+        if rtp_transport_1:
+            rtp_transport_1.close()
+
+    async def test_answer__bye_unregisters_call_from_rtp_mux(self):
+        """BYE for an active call removes its handler from the shared RTP mux."""
+        protocol = SIP()
+        protocol.send = MagicMock()
+        protocol._transport = make_mock_transport()
+        request = make_invite()
+        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        await protocol._answer(request, RTP)
+
+        mux = protocol._rtp_protocol
+        # The call is registered under the None wildcard (no SDP in invite).
+        assert None in mux._calls
+
+        bye = Request(
+            method="BYE",
+            uri="sip:alice@atlanta.com",
+            headers={
+                "Via": "SIP/2.0/UDP pc33.atlanta.com",
+                "To": "sip:alice@atlanta.com",
+                "From": "sip:bob@biloxi.com",
+                "Call-ID": request.headers["Call-ID"],
+                "CSeq": "2 BYE",
+            },
+        )
+        protocol.request_received(bye, ("192.0.2.1", 5060))
+        assert None not in mux._calls
+
+        if protocol._rtp_transport:
+            protocol._rtp_transport.close()
 
     async def test_answer__logs_info(self, caplog):
         """Log an info message when answering a call."""
@@ -393,66 +440,17 @@ class TestSessionInitiationProtocol:
         assert p.registrar_uri == "sip:example.com:5080"
 
     async def test_connection_made__sends_register(self):
-        """Send a REGISTER request after STUN discovery when connection is established."""
+        """Send a REGISTER request immediately when connection is established."""
         import asyncio
 
         p = make_register_session()
         transport = make_mock_transport()
-        with patch.object(
-            SessionInitiationProtocol,
-            "stun_discover",
-            new=AsyncMock(return_value=("1.2.3.4", 0)),
-        ):
-            p.connection_made(transport)
-            await asyncio.sleep(0.05)
+        p.connection_made(transport)
+        await asyncio.sleep(0.05)
         transport.sendto.assert_called()
         data, addr = transport.sendto.call_args[0]
         assert b"REGISTER sip:example.com SIP/2.0" in data
         assert addr == ("192.0.2.2", 5060)
-
-    async def test_connection_made__with_stun__registers_after_discovery(self):
-        """Send REGISTER after STUN discovery when a STUN server is configured."""
-        import asyncio
-
-        p = SessionInitiationProtocol(
-            ("192.0.2.2", 5060),
-            "sip:alice@example.com",
-            "alice",
-            "password",  # noqa: S106
-            stun_server_address=("stun.example.com", 3478),
-        )
-        transport = make_mock_transport()
-        with patch.object(
-            SessionInitiationProtocol,
-            "stun_discover",
-            new=AsyncMock(return_value=("203.0.113.1", 54321)),
-        ) as mock_discover:
-            p.connection_made(transport)
-            await asyncio.sleep(0.05)
-        mock_discover.assert_called_once_with("stun.example.com", 3478)
-        assert p.public_address == ("203.0.113.1", 54321)
-        transport.sendto.assert_called()
-
-    async def test_connection_made__with_stun__registers_even_if_discovery_fails(self):
-        """Send REGISTER even when STUN discovery raises an error."""
-        import asyncio
-
-        p = SessionInitiationProtocol(
-            ("192.0.2.2", 5060),
-            "sip:alice@example.com",
-            "alice",
-            "password",  # noqa: S106
-            stun_server_address=("stun.example.com", 3478),
-        )
-        transport = make_mock_transport()
-        with patch.object(
-            SessionInitiationProtocol,
-            "stun_discover",
-            new=AsyncMock(side_effect=TimeoutError("timeout")),
-        ):
-            p.connection_made(transport)
-            await asyncio.sleep(0.05)
-        transport.sendto.assert_called()
 
     @pytest.mark.asyncio
     async def test_register__includes_required_headers(self):
@@ -643,26 +641,14 @@ class TestSessionInitiationProtocol:
         assert branch1 != branch2
 
     @pytest.mark.asyncio
-    async def test_register__contact_uses_local_addr_before_stun_completes(self):
-        """Contact header uses local socket address when public_address is not yet set."""
+    async def test_register__contact_uses_local_addr(self):
+        """Contact header always uses the local socket address."""
         p = make_register_session()
         transport = make_mock_transport("10.0.0.5", 5060)
         p._transport = transport
         p.register()
         data, _ = transport.sendto.call_args[0]
         assert b"Contact: <sip:alice@10.0.0.5:5060>" in data
-
-    @pytest.mark.asyncio
-    async def test_register__contact_uses_public_addr_when_stun_discovered(self):
-        """Contact header uses the STUN-discovered public address."""
-        p = make_register_session()
-        transport = make_mock_transport("10.0.0.5", 5060)
-        p.connection_made(transport)
-        p.public_address = ("203.0.113.1", 12345)
-        transport.reset_mock()
-        p.register()
-        data, _ = transport.sendto.call_args[0]
-        assert b"Contact: <sip:alice@203.0.113.1:12345>" in data
 
     @pytest.mark.asyncio
     async def test_datagram_received__sip_response__calls_response_received(self):

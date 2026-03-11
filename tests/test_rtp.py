@@ -290,6 +290,67 @@ class TestRealtimeTransportProtocol:
             rtp_t.close()
             server_t.close()
 
+    def test_register_call__routes_by_addr(self):
+        """Packets from a registered remote addr are forwarded to the registered handler."""
+        received_main: list[list[bytes]] = []
+        received_call: list[list[bytes]] = []
+
+        class MuxRTP(RealtimeTransportProtocol):
+            def audio_received(self, packets):
+                received_main.extend(packets)
+
+        class CallRTP(RealtimeTransportProtocol):
+            def audio_received(self, packets):
+                received_call.extend(packets)
+
+        mux = MuxRTP()
+        handler = CallRTP()
+        remote_addr = ("1.2.3.4", 5004)
+        mux.register_call(remote_addr, handler)
+
+        mux.datagram_received(make_rtp_packet(payload=b"call-audio"), remote_addr)
+        assert received_call == [b"call-audio"]
+        assert received_main == []
+
+    def test_register_call__unmatched_addr_uses_wildcard_handler(self):
+        """Packets from an unknown addr reach the None-key wildcard handler."""
+        received: list[bytes] = []
+
+        class WildcardRTP(RealtimeTransportProtocol):
+            def audio_received(self, packets):
+                received.extend(packets)
+
+        mux = RealtimeTransportProtocol()
+        handler = WildcardRTP()
+        mux.register_call(None, handler)
+
+        unknown_addr = ("9.9.9.9", 9999)
+        mux.datagram_received(make_rtp_packet(payload=b"unmatched"), unknown_addr)
+        assert received == [b"unmatched"]
+
+    def test_unregister_call__removes_handler(self):
+        """After unregister_call, packets from that addr are no longer routed to handler."""
+        received: list[bytes] = []
+
+        class RecordRTP(RealtimeTransportProtocol):
+            def audio_received(self, packets):
+                received.extend(packets)
+
+        mux = RealtimeTransportProtocol()
+        handler = RecordRTP()
+        remote_addr = ("5.6.7.8", 5004)
+        mux.register_call(remote_addr, handler)
+        mux.unregister_call(remote_addr)
+
+        mux.datagram_received(make_rtp_packet(payload=b"gone"), remote_addr)
+        assert received == []
+
+    def test_inherits_stun_protocol(self):
+        """RealtimeTransportProtocol inherits from STUNProtocol."""
+        from voip.stun import STUNProtocol  # noqa: PLC0415
+
+        assert issubclass(RealtimeTransportProtocol, STUNProtocol)
+
 
 class TestNegotiateCodec:
     def _make_media(

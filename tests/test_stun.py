@@ -11,6 +11,7 @@ from voip.stun import (
     MAGIC_COOKIE,
     STUNAttributeType,
     STUNMessageType,
+    STUNProtocol,
     _parse_stun_response,
     stun_discover,
 )
@@ -243,3 +244,86 @@ class TestStunDiscover:
                 )
         finally:
             blackhole_t.close()
+
+
+class TestSTUNProtocol:
+    def test_is_datagram_protocol(self):
+        """STUNProtocol is an asyncio.DatagramProtocol subclass."""
+        assert issubclass(STUNProtocol, asyncio.DatagramProtocol)
+
+    def test_connection_made__stores_transport(self):
+        """connection_made() stores the transport for later use by stun_discover."""
+        proto = STUNProtocol()
+        transport = asyncio.DatagramTransport()
+        proto.connection_made(transport)
+        assert proto._transport is transport
+
+    def test_datagram_received__stun_packet__not_forwarded(self):
+        """A STUN packet (first byte < 4) does not reach packet_received."""
+        received: list[bytes] = []
+
+        class ConcreteProto(STUNProtocol):
+            def packet_received(self, data, addr):
+                received.append(data)
+
+        stun_bytes = b"\x01\x01" + b"\x00" * 18
+        ConcreteProto().datagram_received(stun_bytes, ("127.0.0.1", 5004))
+        assert received == []
+
+    def test_datagram_received__non_stun__forwarded_to_packet_received(self):
+        """Non-STUN datagrams (first byte >= 4) are forwarded to packet_received."""
+        received: list[bytes] = []
+
+        class ConcreteProto(STUNProtocol):
+            def packet_received(self, data, addr):
+                received.append(data)
+
+        ConcreteProto().datagram_received(b"\x80hello", ("127.0.0.1", 5004))
+        assert received == [b"\x80hello"]
+
+    async def test_stun_discover__uses_actual_socket(self):
+        """stun_discover() sends through the socket bound to the protocol."""
+        received_requests: list[bytes] = []
+        server_transport: asyncio.DatagramTransport | None = None
+
+        class _StubSTUNServer(asyncio.DatagramProtocol):
+            def connection_made(self, transport):
+                nonlocal server_transport
+                server_transport = transport
+
+            def datagram_received(self, data, addr):
+                received_requests.append(data)
+                tid = data[8:20]
+                ip_int = (203 << 24) | (0 << 16) | (113 << 8) | 5
+                xor_ip = ip_int ^ MAGIC_COOKIE
+                xor_port = 12345 ^ (MAGIC_COOKIE >> 16)
+                attr = struct.pack(">HH", 0x0020, 8) + struct.pack(">BBH I", 0, 1, xor_port, xor_ip)
+                response = (
+                    struct.pack(
+                        ">HHI12s",
+                        STUNMessageType.BINDING_SUCCESS_RESPONSE,
+                        len(attr),
+                        MAGIC_COOKIE,
+                        tid,
+                    )
+                    + attr
+                )
+                server_transport.sendto(response, addr)
+
+        loop = asyncio.get_running_loop()
+        server_t, _ = await loop.create_datagram_endpoint(
+            _StubSTUNServer, local_addr=("127.0.0.1", 0)
+        )
+        server_addr = server_t.get_extra_info("sockname")
+
+        proto = STUNProtocol()
+        client_t, _ = await loop.create_datagram_endpoint(
+            lambda: proto, local_addr=("127.0.0.1", 0)
+        )
+        try:
+            result = await proto.stun_discover(server_addr[0], server_addr[1])
+            assert result == ("203.0.113.5", 12345)
+            assert len(received_requests) == 1
+        finally:
+            client_t.close()
+            server_t.close()

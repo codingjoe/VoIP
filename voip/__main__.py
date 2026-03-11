@@ -73,16 +73,6 @@ def _parse_server(ctx, param, value: str) -> tuple[str, int]:
     return (value, 5060)
 
 
-def _parse_stun_server(ctx, param, value: str) -> tuple[str, int] | None:
-    """Parse a STUN server option into a (host, port) tuple, or None if disabled."""
-    if value.lower() == "none":
-        return None
-    if ":" in value:
-        stun_host, stun_port_str = value.rsplit(":", 1)
-        return (stun_host, int(stun_port_str))
-    return (value, 3478)
-
-
 @sip.command()
 @click.option(
     "--model",
@@ -112,16 +102,8 @@ def _parse_stun_server(ctx, param, value: str) -> tuple[str, int] | None:
 @click.option(
     "--local-port", default=5060, show_default=True, help="Local UDP port to bind."
 )
-@click.option(
-    "--stun-server",
-    default="stun.cloudflare.com",
-    envvar="STUN_SERVER",
-    show_default=True,
-    callback=_parse_stun_server,
-    help="STUN server for NAT traversal (HOST:PORT or 'none' to disable).",
-)
 @click.pass_context
-def transcribe(ctx, model, server, aor, username, password, local_port, stun_server):
+def transcribe(ctx, model, server, aor, username, password, local_port):
     """Register with a SIP carrier and transcribe incoming calls via Whisper."""
     from voip.sip.protocol import SIP
 
@@ -158,7 +140,6 @@ def transcribe(ctx, model, server, aor, username, password, local_port, stun_ser
                 aor,
                 username,
                 password,
-                stun_server_address=stun_server,
             ),
             local_addr=("0.0.0.0", local_port),  # noqa: S104
         )

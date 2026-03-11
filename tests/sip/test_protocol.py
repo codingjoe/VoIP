@@ -2,7 +2,6 @@
 
 import asyncio
 import errno
-import unittest.mock
 
 import pytest
 from voip.rtp import RealtimeTransportProtocol
@@ -469,32 +468,17 @@ class TestAnswer:
         )
 
     async def _run_answer(self, protocol, invite, fake_rtp_transport):
-        """Run _answer coroutine synchronously using a new event loop."""
+        """Run _answer coroutine with a pre-populated shared RTP mux."""
+        from voip.rtp import RealtimeTransportProtocol as RTPMux  # noqa: PLC0415
 
         class FakeRTPProtocol(RealtimeTransportProtocol):
-            def __init__(self, caller="", media=None):
-                self.caller = caller
-                self.media = media
-                self._stun_pending = {}
-                if media is not None and media.fmt:
-                    self.payload_type = media.fmt[0].payload_type
-                    self.sample_rate = media.fmt[0].sample_rate
-                else:
-                    self.payload_type = 0
-                    self.sample_rate = 8000
+            pass
 
-            async def stun_discover(self, host, port=3478, timeout_secs=3.0):
-                return ("127.0.0.1", 0)
+        # Pre-populate the shared RTP mux so _answer() skips socket creation.
+        protocol._rtp_protocol = RTPMux()
+        protocol._rtp_transport = fake_rtp_transport
 
-        async def _answer_coro():
-            with unittest.mock.patch.object(
-                asyncio.get_event_loop(),
-                "create_datagram_endpoint",
-                return_value=(fake_rtp_transport, FakeRTPProtocol(caller="")),
-            ):
-                await protocol._answer(invite, FakeRTPProtocol)
-
-        await _answer_coro()
+        await protocol._answer(invite, FakeRTPProtocol)
 
     @pytest.mark.asyncio
     async def test_answer__selects_pcma_from_offer(self, fake_rtp_transport):
