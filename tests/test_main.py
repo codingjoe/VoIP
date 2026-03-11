@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-pytest.importorskip("ffmpeg")
+pytest.importorskip("click")
 _click_testing = pytest.importorskip("click.testing")
 CliRunner = _click_testing.CliRunner
 
@@ -16,7 +16,8 @@ CliRunner = _click_testing.CliRunner
 _WHISPER_STUBS = {
     "numpy": MagicMock(),
     "whisper": MagicMock(),
-    "voip.whisper": MagicMock(WhisperCall=MagicMock),
+    "av": MagicMock(),
+    "voip.audio": MagicMock(WhisperCall=MagicMock),
 }
 
 
@@ -30,19 +31,13 @@ class TestParseServer:
         """Return port 5060 when no port is specified."""
         from voip.__main__ import _parse_server
 
-        assert _parse_server("sip.example.com") == (
-            ("sip.example.com", 5060),
-            "sip.example.com",
-        )
+        assert _parse_server(None, None, "sip.example.com") == ("sip.example.com", 5060)
 
     def test_parse_server__with_port(self):
         """Parse host and port from HOST:PORT format."""
         from voip.__main__ import _parse_server
 
-        assert _parse_server("sip.example.com:5080") == (
-            ("sip.example.com", 5080),
-            "sip.example.com",
-        )
+        assert _parse_server(None, None, "sip.example.com:5080") == ("sip.example.com", 5080)
 
 
 class TestParseStunServer:
@@ -50,25 +45,25 @@ class TestParseStunServer:
         """Return None when stun server is 'none'."""
         from voip.__main__ import _parse_stun_server
 
-        assert _parse_stun_server("none") is None
+        assert _parse_stun_server(None, None, "none") is None
 
     def test_parse_stun_server__none_case_insensitive(self):
         """Return None regardless of case for 'none'."""
         from voip.__main__ import _parse_stun_server
 
-        assert _parse_stun_server("NONE") is None
+        assert _parse_stun_server(None, None, "NONE") is None
 
     def test_parse_stun_server__with_port(self):
         """Parse host and port from HOST:PORT format."""
         from voip.__main__ import _parse_stun_server
 
-        assert _parse_stun_server("stun.example.com:3478") == ("stun.example.com", 3478)
+        assert _parse_stun_server(None, None, "stun.example.com:3478") == ("stun.example.com", 3478)
 
     def test_parse_stun_server__without_port(self):
         """Return default STUN port 3478 when no port is specified."""
         from voip.__main__ import _parse_stun_server
 
-        assert _parse_stun_server("stun.example.com") == ("stun.example.com", 3478)
+        assert _parse_stun_server(None, None, "stun.example.com") == ("stun.example.com", 3478)
 
 
 class TestVoIPCommand:
@@ -83,18 +78,18 @@ class TestVoIPCommand:
 class TestTranscribeCLI:
     def test_transcribe__missing_server_exits_with_error(self):
         """Exit with an error when SIP_SERVER is not provided."""
-        from voip.__main__ import sip
+        from voip.__main__ import voip
 
         runner = make_runner()
         result = runner.invoke(
-            sip, ["transcribe", "--aor=sip:u@h", "--username=u", "--password=p"]
+            voip, ["sip", "transcribe", "--aor=sip:u@h", "--username=u", "--password=p"]
         )
         assert result.exit_code != 0
         assert "server" in result.output.lower() or "SIP_SERVER" in result.output
 
     def test_transcribe__missing_aor_defaults_to_username_at_host(self):
         """Default AOR to sip:{username}@{server_host} when SIP_AOR is not provided."""
-        from voip.__main__ import sip
+        from voip.__main__ import voip
 
         runner = make_runner()
         captured = {}
@@ -111,8 +106,9 @@ class TestTranscribeCLI:
         ):
             mock_loop.return_value.create_datagram_endpoint = fake_endpoint
             runner.invoke(
-                sip,
+                voip,
                 [
+                    "sip",
                     "transcribe",
                     "--server=sip.example.com",
                     "--username=u",
@@ -124,7 +120,7 @@ class TestTranscribeCLI:
 
     def test_transcribe__server_with_port_is_parsed(self):
         """Parse host and port from SIP_SERVER when a colon is present."""
-        from voip.__main__ import sip
+        from voip.__main__ import voip
 
         runner = make_runner()
         captured = {}
@@ -141,8 +137,9 @@ class TestTranscribeCLI:
         ):
             mock_loop.return_value.create_datagram_endpoint = fake_endpoint
             runner.invoke(
-                sip,
+                voip,
                 [
+                    "sip",
                     "transcribe",
                     "--server=sip.carrier.example:5080",
                     "--aor=sip:user@carrier.example",
@@ -155,7 +152,7 @@ class TestTranscribeCLI:
 
     def test_transcribe__server_without_port_defaults_to_5060(self):
         """Use port 5060 when SIP_SERVER has no port."""
-        from voip.__main__ import sip
+        from voip.__main__ import voip
 
         runner = make_runner()
         captured = {}
@@ -172,8 +169,9 @@ class TestTranscribeCLI:
         ):
             mock_loop.return_value.create_datagram_endpoint = fake_endpoint
             runner.invoke(
-                sip,
+                voip,
                 [
+                    "sip",
                     "transcribe",
                     "--server=sip.carrier.example",
                     "--aor=sip:user@carrier.example",
@@ -186,7 +184,7 @@ class TestTranscribeCLI:
 
     def test_transcribe__stun_none_disables_stun(self):
         """Disable STUN when --stun-server=none is passed."""
-        from voip.__main__ import sip
+        from voip.__main__ import voip
 
         runner = make_runner()
         captured = {}
@@ -203,8 +201,9 @@ class TestTranscribeCLI:
         ):
             mock_loop.return_value.create_datagram_endpoint = fake_endpoint
             runner.invoke(
-                sip,
+                voip,
                 [
+                    "sip",
                     "transcribe",
                     "--server=sip.example.com",
                     "--aor=sip:u@example.com",
@@ -218,7 +217,7 @@ class TestTranscribeCLI:
 
     def test_transcribe__registered_logs_and_echoes(self):
         """Log and echo a message when registration succeeds."""
-        from voip.__main__ import sip
+        from voip.__main__ import voip
 
         runner = make_runner()
         protocol_holder = {}
@@ -235,8 +234,9 @@ class TestTranscribeCLI:
         ):
             mock_loop.return_value.create_datagram_endpoint = fake_endpoint
             runner.invoke(
-                sip,
+                voip,
                 [
+                    "sip",
                     "transcribe",
                     "--server=sip.example.com",
                     "--aor=sip:u@example.com",
@@ -252,7 +252,7 @@ class TestTranscribeCLI:
 
     def test_transcribe__call_received_answers_call(self):
         """Answer the call when call_received is invoked."""
-        from voip.__main__ import sip
+        from voip.__main__ import voip
 
         runner = make_runner()
         protocol_holder = {}
@@ -269,8 +269,9 @@ class TestTranscribeCLI:
         ):
             mock_loop.return_value.create_datagram_endpoint = fake_endpoint
             runner.invoke(
-                sip,
+                voip,
                 [
+                    "sip",
                     "transcribe",
                     "--server=sip.example.com",
                     "--aor=sip:u@example.com",
@@ -304,7 +305,7 @@ class TestTranscribeCLI:
 
     def test_transcribe__call_received_uses_whisper_call_class(self):
         """call_received answers with a WhisperCall subclass."""
-        from voip.__main__ import sip
+        from voip.__main__ import voip
 
         runner = make_runner()
         protocol_holder = {}
@@ -322,13 +323,14 @@ class TestTranscribeCLI:
             patch.dict(sys.modules, stubs),
             patch("asyncio.get_event_loop"),
             patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
-            patch("voip.whisper.whisper") as wm,
+            patch("voip.audio.whisper") as wm,
         ):
             wm.load_model.return_value = MagicMock()
             mock_loop.return_value.create_datagram_endpoint = fake_endpoint
             runner.invoke(
-                sip,
+                voip,
                 [
+                    "sip",
                     "transcribe",
                     "--server=sip.example.com",
                     "--aor=sip:u@example.com",
