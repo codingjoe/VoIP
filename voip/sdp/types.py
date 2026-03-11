@@ -287,6 +287,7 @@ class RTPPayloadFormat:
     encoding_name: str | None
     _sample_rate: int | None
     channels: int
+    fmtp: str | None
 
     def __init__(
         self,
@@ -294,11 +295,13 @@ class RTPPayloadFormat:
         encoding_name: str | None = None,
         sample_rate: int | None = None,
         channels: int = 1,
+        fmtp: str | None = None,
     ) -> None:
         self.payload_type = payload_type
         self.encoding_name = encoding_name
         self._sample_rate = sample_rate
         self.channels = channels
+        self.fmtp = fmtp
         if self._sample_rate is None:
             try:
                 self._sample_rate = StaticPayloadType.from_pt(
@@ -332,7 +335,8 @@ class RTPPayloadFormat:
             f"payload_type={self.payload_type!r}, "
             f"encoding_name={self.encoding_name!r}, "
             f"sample_rate={self._sample_rate!r}, "
-            f"channels={self.channels!r})"
+            f"channels={self.channels!r}, "
+            f"fmtp={self.fmtp!r})"
         )
 
     def __str__(self) -> str:
@@ -427,6 +431,8 @@ class MediaDescription:
         for f in self.fmt:
             if f.encoding_name is not None and f._sample_rate is not None:
                 lines.append(f"a=rtpmap:{f}")
+            if f.fmtp is not None:
+                lines.append(f"a=fmtp:{f.payload_type} {f.fmtp}")
         lines.extend(f"a={a}" for a in self.attributes)
         return "\r\n".join(lines)
 

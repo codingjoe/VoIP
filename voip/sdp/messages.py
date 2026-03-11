@@ -89,20 +89,13 @@ class SessionDescription:
         if letter == "m":
             self.media.append(parsed)
             return parsed
-        # Route a=rtpmap into the matching RtpPayloadFormat in current_media.fmt.
         if (
             letter == "a"
             and isinstance(parsed, Attribute)
-            and parsed.name == "rtpmap"
-            and parsed.value is not None
             and current_media is not None
         ):
-            rtpfmt = RTPPayloadFormat.parse(parsed.value)
-            for i, f in enumerate(current_media.fmt):
-                if f.payload_type == rtpfmt.payload_type:
-                    current_media.fmt[i] = rtpfmt
-                    break
-            return current_media
+            if self._apply_media_attribute(parsed, current_media):
+                return current_media
         if field.media_attr is not None and current_media is not None:
             return self._apply_to_media(
                 current_media, field.media_attr, parsed, field.is_list
@@ -112,6 +105,34 @@ class SessionDescription:
         else:
             setattr(self, field.session_attr, parsed)
         return current_media
+
+    @staticmethod
+    def _apply_media_attribute(attr: Attribute, media: MediaDescription) -> bool:
+        """Fold a media-level a= attribute into *media* if it is a format-specific attribute.
+
+        Returns ``True`` when the attribute was consumed (``a=rtpmap`` or
+        ``a=fmtp``), ``False`` otherwise so the caller can fall through to the
+        generic attribute list.
+        """
+        if attr.name == "rtpmap" and attr.value is not None:
+            rtpfmt = RTPPayloadFormat.parse(attr.value)
+            for i, f in enumerate(media.fmt):
+                if f.payload_type == rtpfmt.payload_type:
+                    media.fmt[i] = rtpfmt
+                    break
+            return True
+        if attr.name == "fmtp" and attr.value is not None:
+            pt_str, _, params = attr.value.partition(" ")
+            try:
+                pt = int(pt_str)
+            except ValueError:
+                return False
+            for f in media.fmt:
+                if f.payload_type == pt:
+                    f.fmtp = params
+                    break
+            return True
+        return False
 
     @staticmethod
     def _apply_to_media(
