@@ -10,8 +10,8 @@ import subprocess
 
 import ffmpeg
 import numpy as np
-
 import whisper
+
 from voip.rtp import RealtimeTransportProtocol, RTPPacket, RTPPayloadType
 
 __all__ = ["WhisperCall"]

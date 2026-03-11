@@ -120,7 +120,7 @@ def transcribe(model, server, aor, username, password, local_port, stun_server):
     """Register with a SIP carrier and transcribe incoming calls via Whisper."""
     from voip.sip import SIP
 
-    from .whisper import WhisperCall  # noqa: PLC0415
+    from .audio import WhisperCall  # noqa: PLC0415
 
     server_addr, host = _parse_server(server)
     if aor is None:

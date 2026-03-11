@@ -12,10 +12,9 @@ np = pytest.importorskip("numpy")
 pytest.importorskip("ffmpeg")
 pytest.importorskip("whisper")
 
-from voip.rtp import RTP, RTPPacket, RTPPayloadType  # noqa: E402
-from voip.whisper import WhisperCall, _build_ogg_opus  # noqa: E402
-
 import whisper  # noqa: E402
+from voip.audio import WhisperCall, _build_ogg_opus  # noqa: E402
+from voip.rtp import RTP, RTPPacket, RTPPayloadType  # noqa: E402
 
 
 def packet_threshold(call_class: type[WhisperCall]) -> int:
@@ -30,7 +29,7 @@ def packet_threshold(call_class: type[WhisperCall]) -> int:
 def make_whisper_call(model_mock: MagicMock, call_class=None) -> WhisperCall:
     """Return a WhisperCall with a mocked Whisper model."""
     cls = call_class or WhisperCall
-    with patch("voip.whisper.whisper.load_model", return_value=model_mock):
+    with patch("whisper.load_model", return_value=model_mock):
         return cls(caller="sip:bob@biloxi.com")
 
 
@@ -159,7 +158,7 @@ class TestWhisperCall:
         model_mock = MagicMock()
         call = make_whisper_call(model_mock)
         pcm_bytes = np.zeros(16000, dtype=np.float32).tobytes()
-        with patch("voip.whisper.ffmpeg") as mock_ffmpeg:
+        with patch("voip.audio.ffmpeg") as mock_ffmpeg:
             mock_proc = MagicMock()
             mock_proc.returncode = 0
             mock_proc.communicate.return_value = (pcm_bytes, b"")
@@ -174,7 +173,7 @@ class TestWhisperCall:
         """Pass ar and ac kwargs to ffmpeg input when input_sample_rate is set."""
         call = make_whisper_call(MagicMock())
         pcm_bytes = np.zeros(16000, dtype=np.float32).tobytes()
-        with patch("voip.whisper.ffmpeg") as mock_ffmpeg:
+        with patch("voip.audio.ffmpeg") as mock_ffmpeg:
             mock_proc = MagicMock()
             mock_proc.returncode = 0
             mock_proc.communicate.return_value = (pcm_bytes, b"")
@@ -190,7 +189,7 @@ class TestWhisperCall:
         """Raise RuntimeError when ffmpeg returns a non-zero exit code."""
         call = make_whisper_call(MagicMock())
         with (
-            patch("voip.whisper.ffmpeg") as mock_ffmpeg,
+            patch("voip.audio.ffmpeg") as mock_ffmpeg,
             pytest.raises(RuntimeError, match="ffmpeg decoding failed"),
         ):
             mock_ffmpeg.Error = type("Error", (Exception,), {"stderr": b"error output"})
@@ -206,7 +205,7 @@ class TestWhisperCall:
         """Raise RuntimeError when the ffmpeg binary is not found."""
         call = make_whisper_call(MagicMock())
         with (
-            patch("voip.whisper.ffmpeg") as mock_ffmpeg,
+            patch("voip.audio.ffmpeg") as mock_ffmpeg,
             pytest.raises(RuntimeError, match="ffmpeg is not installed"),
         ):
             mock_ffmpeg.Error = type("Error", (Exception,), {})
@@ -221,7 +220,7 @@ class TestWhisperCall:
         """Raise RuntimeError when ffmpeg decoding exceeds the timeout."""
         call = make_whisper_call(MagicMock())
         with (
-            patch("voip.whisper.ffmpeg") as mock_ffmpeg,
+            patch("voip.audio.ffmpeg") as mock_ffmpeg,
             pytest.raises(RuntimeError, match="timed out"),
         ):
             mock_ffmpeg.Error = type("Error", (Exception,), {})
@@ -281,7 +280,7 @@ class TestWhisperCall:
         import logging
 
         call = make_whisper_call(MagicMock())
-        with caplog.at_level(logging.DEBUG, logger="voip.whisper"):
+        with caplog.at_level(logging.DEBUG, logger="voip.audio"):
             call.audio_received(make_rtp_packet(b"opus_packet"))
         assert any("RTP audio" in r.message for r in caplog.records)
 

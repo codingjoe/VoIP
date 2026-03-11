@@ -22,7 +22,7 @@ class _STUNOnlyProtocol(STUNProtocol, asyncio.DatagramProtocol):
 
 @pytest.mark.integration
 async def test_stun_discover__public_stun_server():
-    """Discover public address via STUN against stun.l.google.com:19302."""
+    """Discover public address via STUN against stun.cloudflare.com:3478."""
     loop = asyncio.get_running_loop()
     protocol = _STUNOnlyProtocol()
     transport, _ = await loop.create_datagram_endpoint(
@@ -30,7 +30,7 @@ async def test_stun_discover__public_stun_server():
         local_addr=("0.0.0.0", 0),  # noqa: S104 – ephemeral port for outbound STUN discovery
     )
     try:
-        host, port = await protocol.stun_discover("stun.l.google.com", 19302)
+        host, port = await protocol.stun_discover("stun.cloudflare.com", 3478)
     finally:
         transport.close()
     assert isinstance(host, str)

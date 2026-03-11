@@ -44,9 +44,9 @@ jobs:
           - "3.13"
           - "3.14"
         extra:
+          - audio
           - cli
           - pygments
-          - whisper
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
