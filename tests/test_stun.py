@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import socket
 import struct
+import unittest.mock
 
 from voip.stun import (
     MAGIC_COOKIE,
@@ -71,12 +72,12 @@ class TestSTUNProtocol:
     async def test_connection_made__stores_transport(self):
         """connection_made() stores the transport and initialises public_address."""
         proto = STUNProtocol()
-        transport = asyncio.DatagramTransport()
+        transport = unittest.mock.MagicMock(spec=asyncio.DatagramTransport)
         proto.connection_made(transport)
         assert proto.transport is transport
         assert isinstance(proto.public_address, asyncio.Future)
 
-    def test_datagram_received__stun_packet__not_forwarded(self):
+    async def test_datagram_received__stun_packet__not_forwarded(self):
         """A STUN packet (first byte < 4) does not reach packet_received."""
         received: list[bytes] = []
 
@@ -84,11 +85,14 @@ class TestSTUNProtocol:
             def packet_received(self, data, addr):
                 received.append(data)
 
+        transport = unittest.mock.MagicMock(spec=asyncio.DatagramTransport)
+        proto = ConcreteProto()
+        proto.connection_made(transport)
         stun_bytes = b"\x01\x01" + b"\x00" * 18
-        ConcreteProto().datagram_received(stun_bytes, ("127.0.0.1", 5004))
+        proto.datagram_received(stun_bytes, ("127.0.0.1", 5004))
         assert received == []
 
-    def test_datagram_received__non_stun__forwarded_to_packet_received(self):
+    async def test_datagram_received__non_stun__forwarded_to_packet_received(self):
         """Non-STUN datagrams (first byte >= 4) are forwarded to packet_received."""
         received: list[bytes] = []
 
@@ -96,7 +100,10 @@ class TestSTUNProtocol:
             def packet_received(self, data, addr):
                 received.append(data)
 
-        ConcreteProto().datagram_received(b"\x80hello", ("127.0.0.1", 5004))
+        transport = unittest.mock.MagicMock(spec=asyncio.DatagramTransport)
+        proto = ConcreteProto()
+        proto.connection_made(transport)
+        proto.datagram_received(b"\x80hello", ("127.0.0.1", 5004))
         assert received == [b"\x80hello"]
 
     async def test_stun_discover__uses_actual_socket(self):
