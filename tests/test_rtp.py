@@ -106,7 +106,8 @@ class TestRealtimeTransportProtocol:
         """RTP is an alias for RealtimeTransportProtocol."""
         assert RTP is RealtimeTransportProtocol
 
-    def test_datagram_received__routes_to_handler(self):
+    @pytest.mark.asyncio
+    async def test_datagram_received__routes_to_handler(self):
         """Non-STUN datagrams from registered addr are forwarded to the handler."""
         routed: list[bytes] = []
 
@@ -122,7 +123,8 @@ class TestRealtimeTransportProtocol:
         mux.datagram_received(rtp_packet, remote_addr)
         assert routed == [rtp_packet]
 
-    def test_datagram_received__no_handler__drops_packet(self):
+    @pytest.mark.asyncio
+    async def test_datagram_received__no_handler__drops_packet(self):
         """Packets from an unknown address with no wildcard handler are dropped silently."""
         mux = RealtimeTransportProtocol()
         # No handler registered; must not raise.
@@ -196,7 +198,8 @@ class TestRealtimeTransportProtocol:
             rtp_t.close()
             server_t.close()
 
-    def test_register_call__routes_by_addr(self):
+    @pytest.mark.asyncio
+    async def test_register_call__routes_by_addr(self):
         """Packets from a registered remote addr are forwarded to the registered handler."""
         received_wildcard: list[bytes] = []
         received_call: list[bytes] = []
@@ -221,7 +224,8 @@ class TestRealtimeTransportProtocol:
         assert received_call == [rtp_packet]
         assert received_wildcard == []
 
-    def test_register_call__unmatched_addr_uses_wildcard_handler(self):
+    @pytest.mark.asyncio
+    async def test_register_call__unmatched_addr_uses_wildcard_handler(self):
         """Packets from an unknown addr reach the None-key wildcard handler."""
         received: list[bytes] = []
 
@@ -237,7 +241,8 @@ class TestRealtimeTransportProtocol:
         mux.datagram_received(rtp_packet, ("9.9.9.9", 9999))
         assert received == [rtp_packet]
 
-    def test_unregister_call__removes_handler(self):
+    @pytest.mark.asyncio
+    async def test_unregister_call__removes_handler(self):
         """After unregister_call, packets from that addr are no longer routed to handler."""
         received: list[bytes] = []
 
@@ -254,7 +259,8 @@ class TestRealtimeTransportProtocol:
         mux.datagram_received(make_rtp_packet(payload=b"gone"), remote_addr)
         assert received == []
 
-    def test_register_call__logs_info(self, caplog):
+    @pytest.mark.asyncio
+    async def test_register_call__logs_info(self, caplog):
         """register_call emits an info-level log entry."""
         import logging  # noqa: PLC0415
 
@@ -264,7 +270,8 @@ class TestRealtimeTransportProtocol:
             mux.register_call(("1.2.3.4", 5004), handler)
         assert any("rtp_call_registered" in r.message for r in caplog.records)
 
-    def test_unregister_call__logs_info(self, caplog):
+    @pytest.mark.asyncio
+    async def test_unregister_call__logs_info(self, caplog):
         """unregister_call emits an info-level log entry."""
         import logging  # noqa: PLC0415
 
@@ -276,7 +283,8 @@ class TestRealtimeTransportProtocol:
             mux.unregister_call(addr)
         assert any("rtp_call_unregistered" in r.message for r in caplog.records)
 
-    def test_packet_received__logs_debug_for_routed_packet(self, caplog):
+    @pytest.mark.asyncio
+    async def test_packet_received__logs_debug_for_routed_packet(self, caplog):
         """packet_received logs a debug message when routing to a handler."""
         import logging  # noqa: PLC0415
 
@@ -290,7 +298,8 @@ class TestRealtimeTransportProtocol:
             mux.packet_received(make_rtp_packet(), ("1.2.3.4", 5004))
         assert any("Routing" in r.message for r in caplog.records)
 
-    def test_packet_received__logs_debug_for_dropped_packet(self, caplog):
+    @pytest.mark.asyncio
+    async def test_packet_received__logs_debug_for_dropped_packet(self, caplog):
         """packet_received logs a debug message when no handler is registered."""
         import logging  # noqa: PLC0415
 
