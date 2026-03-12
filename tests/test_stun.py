@@ -251,12 +251,13 @@ class TestSTUNProtocol:
         """STUNProtocol is an asyncio.DatagramProtocol subclass."""
         assert issubclass(STUNProtocol, asyncio.DatagramProtocol)
 
-    def test_connection_made__stores_transport(self):
-        """connection_made() stores the transport for later use by stun_discover."""
+    async def test_connection_made__stores_transport(self):
+        """connection_made() stores the transport and initialises public_address."""
         proto = STUNProtocol()
         transport = asyncio.DatagramTransport()
         proto.connection_made(transport)
         assert proto.transport is transport
+        assert isinstance(proto.public_address, asyncio.Future)
 
     def test_datagram_received__stun_packet__not_forwarded(self):
         """A STUN packet (first byte < 4) does not reach packet_received."""
@@ -282,7 +283,7 @@ class TestSTUNProtocol:
         assert received == [b"\x80hello"]
 
     async def test_stun_discover__uses_actual_socket(self):
-        """stun_discover() sends through the socket bound to the protocol."""
+        """public_address is resolved via the socket bound to the protocol."""
         received_requests: list[bytes] = []
         server_transport: asyncio.DatagramTransport | None = None
 
@@ -318,12 +319,12 @@ class TestSTUNProtocol:
         )
         server_addr = server_t.get_extra_info("sockname")
 
-        proto = STUNProtocol()
+        proto = STUNProtocol(stun_server_address=server_addr)
         client_t, _ = await loop.create_datagram_endpoint(
             lambda: proto, local_addr=("127.0.0.1", 0)
         )
         try:
-            result = await proto.stun_discover(server_addr[0], server_addr[1])
+            result = await proto.public_address
             assert result == ("203.0.113.5", 12345)
             assert len(received_requests) == 1
         finally:

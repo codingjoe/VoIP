@@ -140,51 +140,41 @@ class STUNProtocol(asyncio.DatagramProtocol):
 
     Use this as the base class for any protocol that shares a UDP socket with
     STUN. Incoming datagrams whose first byte is in ``[0, 3]`` (RFC 7983) are
-    treated as STUN messages and routed to any pending :meth:`stun_discover`
-    coroutines. All other datagrams are forwarded to :meth:`packet_received`.
+    treated as STUN messages and routed to the pending discovery future. All
+    other datagrams are forwarded to :meth:`packet_received`.
 
-    When *stun_server_address* is provided, :meth:`stun_discover` is called
-    automatically in :meth:`connection_made` and the result is stored as
-    :attr:`public_address` so that subclasses can advertise the correct
-    routable address without any extra wiring.
-
-    Subclass and override :meth:`packet_received` to handle your own traffic::
+    :attr:`public_address` is an :class:`asyncio.Future` resolved automatically
+    in :meth:`connection_made` via STUN so that subclasses can simply
+    ``await`` it to obtain the correct routable address::
 
         class MyProtocol(STUNProtocol):
+            async def on_ready(self) -> None:
+                ip, port = await self.public_address
+
             def packet_received(self, data: bytes, addr: tuple[str, int]) -> None:
                 process(data)
     """
 
     stun_server_address: tuple[str, int] = "stun.cloudflare.com", 3478
     stun_server_timeout: datetime.timedelta = datetime.timedelta(seconds=3)
-    public_address: tuple[str, int] = dataclasses.field(init=False)
-    _stun_task: asyncio.Task[None] = dataclasses.field(init=False, default=None)
+    public_address: asyncio.Future[tuple[str, int]] = dataclasses.field(init=False)
     _stun_pending: dict[bytes, asyncio.Future[tuple[str, int]]] = dataclasses.field(
         init=False, default_factory=dict
     )
     transport: asyncio.DatagramTransport = dataclasses.field(init=False)
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:  # type: ignore[override]
-        """Store the transport and, if configured, schedule STUN address discovery."""
+        """Store the transport, initialise :attr:`public_address`, and start STUN discovery."""
         self.transport = transport
-        self._stun_task = asyncio.get_running_loop().create_task(self.stun_discover())
-
-    async def await_stun_discovery(self) -> None:
-        """Wait for the STUN discovery task to complete, if one is running."""
-        if self._stun_task is not None:
-            await self._stun_task
-            logger.info(
-                "STUN: public address for %s is %s:%d",
-                type(self).__name__,
-                *self.public_address,
-            )
+        loop = asyncio.get_running_loop()
+        self.public_address = loop.create_future()
+        loop.create_task(self.stun_discover())
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         """Demultiplex STUN responses (RFC 7983) from other traffic.
 
         Datagrams with first byte in ``[0, 3]`` are dispatched to any pending
-        :meth:`stun_discover` future; all others are forwarded to
-        :meth:`packet_received`.
+        discovery future; all others are forwarded to :meth:`packet_received`.
         """
         if data and data[0] < 4:
             # RFC 7983: first byte in [0, 3] indicates a STUN packet.
@@ -204,30 +194,19 @@ class STUNProtocol(asyncio.DatagramProtocol):
             addr: Source ``(host, port)`` of the datagram.
         """
 
-    async def stun_discover(self):
-        """Discover the public IP:port for this socket via STUN (RFC 5389).
+    async def stun_discover(self) -> None:
+        """Send a STUN Binding Request and resolve :attr:`public_address`.
 
-        Sends the STUN Binding Request through the transport bound to this
-        protocol so the server observes the same NAT mapping used by real
-        traffic on the socket.  Responses are demultiplexed from normal
-        datagrams using the first-byte heuristic defined in RFC 7983.
-
-        Args:
-            host: STUN server hostname or IP address.
-            port: STUN server UDP port (default 3478).
-            timeout_secs: Seconds to wait for a STUN response.
-
-        Returns:
-            A ``(public_ip, public_port)`` tuple as seen by the STUN server.
+        Sends the request through the transport bound to this protocol so the
+        server observes the same NAT mapping as real traffic.  Responses are
+        demultiplexed from normal datagrams via the RFC 7983 first-byte rule.
 
         Raises:
             asyncio.TimeoutError: If the server does not respond in time.
             RuntimeError: If the STUN response contains no address attribute.
         """
-        loop = asyncio.get_running_loop()
         transaction_id = uuid.uuid4().bytes[:12]
-        future: asyncio.Future[tuple[str, int]] = loop.create_future()
-        self._stun_pending[transaction_id] = future
+        self._stun_pending[transaction_id] = self.public_address
         request = struct.pack(
             ">HHI12s",
             STUNMessageType.BINDING_REQUEST,
@@ -238,8 +217,17 @@ class STUNProtocol(asyncio.DatagramProtocol):
         logger.debug("Sending STUN Binding Request to %s:%s", *self.stun_server_address)
         self.transport.sendto(request, self.stun_server_address)
         try:
-            self.public_address = await asyncio.wait_for(
-                future, self.stun_server_timeout.total_seconds()
+            await asyncio.wait_for(
+                asyncio.shield(self.public_address),
+                self.stun_server_timeout.total_seconds(),
             )
+            logger.info(
+                "STUN: public address for %s is %s:%d",
+                type(self).__name__,
+                *self.public_address.result(),
+            )
+        except Exception as exc:
+            if not self.public_address.done():
+                self.public_address.set_exception(exc)
         finally:
             self._stun_pending.pop(transaction_id, None)
