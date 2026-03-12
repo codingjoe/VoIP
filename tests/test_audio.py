@@ -482,3 +482,74 @@ class TestAudioCall:
         await asyncio.sleep(0.05)  # let the executor task run
         assert len(received) == 1
         assert len(received[0]) == 50
+
+
+class TestNegotiateCodec:
+    def _make_media(self, fmts: list[str], rtpmaps: list[str] | None = None):
+        """Build a MediaDescription with given format list and optional rtpmap attributes."""
+        from voip.sdp.types import MediaDescription, RTPPayloadFormat  # noqa: PLC0415
+
+        rtpmap_by_pt: dict[int, RTPPayloadFormat] = {}
+        for rtpmap in rtpmaps or []:
+            f = RTPPayloadFormat.parse(rtpmap)
+            rtpmap_by_pt[f.payload_type] = f
+        formats = [
+            rtpmap_by_pt.get(int(pt)) or RTPPayloadFormat(payload_type=int(pt))
+            for pt in fmts
+        ]
+        return MediaDescription(media="audio", port=49170, proto="RTP/AVP", fmt=formats)
+
+    def test_negotiate_codec__prefers_opus(self):
+        """Select Opus when offered alongside lower-priority codecs."""
+        media = self._make_media(["0", "8", "111"], ["111 opus/48000/2", "8 PCMA/8000"])
+        result = AudioCall.negotiate_codec(media)
+        assert result.fmt[0].payload_type == 111
+        assert result.fmt[0].sample_rate == 48000
+
+    def test_negotiate_codec__falls_back_to_pcma(self):
+        """Select PCMA when Opus and G.722 are not offered."""
+        media = self._make_media(["0", "8"])
+        result = AudioCall.negotiate_codec(media)
+        assert result.fmt[0].payload_type == 8
+        assert result.fmt[0].sample_rate == 8000
+
+    def test_negotiate_codec__falls_back_to_pcmu(self):
+        """Select PCMU when only PCMU is offered."""
+        media = self._make_media(["0"])
+        result = AudioCall.negotiate_codec(media)
+        assert result.fmt[0].payload_type == 0
+
+    def test_negotiate_codec__empty_fmt__raises(self):
+        """Raise NotImplementedError when the remote side offers no audio formats."""
+        media = self._make_media([])
+        with pytest.raises(NotImplementedError):
+            AudioCall.negotiate_codec(media)
+
+    def test_negotiate_codec__unknown_codec__raises(self):
+        """Raise NotImplementedError when no offered codec matches PREFERRED_CODECS."""
+        media = self._make_media(["126"], ["126 telephone-event/8000"])
+        with pytest.raises(NotImplementedError):
+            AudioCall.negotiate_codec(media)
+
+    def test_negotiate_codec__returns_media_description(self):
+        """negotiate_codec returns a MediaDescription object."""
+        from voip.sdp.types import MediaDescription  # noqa: PLC0415
+
+        media = self._make_media(["0", "8", "111"], ["111 opus/48000/2"])
+        result = AudioCall.negotiate_codec(media)
+        assert isinstance(result, MediaDescription)
+        assert result.media == "audio"
+        assert result.proto == "RTP/AVP"
+
+    def test_negotiate_codec__subclass_can_override_preferences(self):
+        """A subclass with a different PREFERRED_CODECS list uses its own preferences."""
+        from voip.sdp.types import RTPPayloadFormat  # noqa: PLC0415
+
+        class PCMAOnlyCall(AudioCall):
+            PREFERRED_CODECS = [
+                RTPPayloadFormat(payload_type=8, encoding_name="PCMA", sample_rate=8000)
+            ]
+
+        media = self._make_media(["0", "8", "111"])
+        result = PCMAOnlyCall.negotiate_codec(media)
+        assert result.fmt[0].payload_type == 8
