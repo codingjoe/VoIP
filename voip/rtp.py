@@ -89,6 +89,15 @@ class RealtimeTransportProtocol(STUNProtocol):
         #: ``None`` is a wildcard key for calls with an unknown remote address.
         self._calls: dict[tuple[str, int] | None, Call] = {}
 
+    def send(self, data: bytes, addr: tuple[str, int]) -> None:
+        """Send a raw datagram through the shared UDP socket.
+
+        Args:
+            data: Raw bytes to transmit.
+            addr: Destination ``(host, port)``.
+        """
+        self._transport.sendto(data, addr)
+
     def register_call(
         self,
         addr: tuple[str, int] | None,

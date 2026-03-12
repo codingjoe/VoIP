@@ -116,7 +116,6 @@ class TestAudioCall:
                 received.append(packets)
 
         rtp_packet = struct.pack(">BBHII", 0x80, 111 & 0x7F, 1, 0, 0) + b"audio"
-        make_audio_call.__wrapped__ = None  # prevent pickling issues
         call = ConcreteCall(rtp=MagicMock(), sip=MagicMock())
         call.datagram_received(rtp_packet, ("127.0.0.1", 5004))
         assert received == [[b"audio"]]

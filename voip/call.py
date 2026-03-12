@@ -74,7 +74,7 @@ class Call:
             data: Raw bytes to send.
             addr: Destination ``(host, port)``.
         """
-        self.rtp._transport.sendto(data, addr)
+        self.rtp.send(data, addr)
 
     async def hang_up(self) -> None:
         """Terminate the call by sending a SIP BYE request.
@@ -118,7 +118,6 @@ class AudioCall(Call):
         RTPPayloadFormat(payload_type=RTPPayloadType.PCMU),
     ]
 
-    # Private state — initialised in __post_init__, not via __init__ args.
     _payload_type: int = dataclasses.field(init=False, default=0, repr=False)
     _sample_rate: int = dataclasses.field(init=False, default=8000, repr=False)
     _audio_buffer: list[bytes] = dataclasses.field(

@@ -108,6 +108,8 @@ def transcribe(ctx, model, server, aor, username, password, local_port):
     from voip.sip.protocol import SIP
 
     from .audio import WhisperCall  # noqa: PLC0415
+    from .rtp import RealtimeTransportProtocol  # noqa: PLC0415
+    from .sdp.types import MediaDescription  # noqa: PLC0415
 
     server_addr = server
     host = server_addr[0]
@@ -117,7 +119,13 @@ def transcribe(ctx, model, server, aor, username, password, local_port):
     verbose = ctx.obj.get("verbose", 0)
 
     class TranscribingCall(WhisperCall):
-        def __init__(self, rtp, sip, caller: str = "", media=None) -> None:
+        def __init__(
+            self,
+            rtp: RealtimeTransportProtocol,
+            sip: SIP,
+            caller: str = "",
+            media: MediaDescription | None = None,
+        ) -> None:
             super().__init__(rtp=rtp, sip=sip, caller=caller, media=media, model=model)
 
         def transcription_received(self, text: str) -> None:
