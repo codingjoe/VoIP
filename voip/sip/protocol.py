@@ -97,6 +97,7 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
         aor: str | None = None,
         username: str | None = None,
         password: str | None = None,
+        stun_server_address: tuple[str, int] | None = None,
     ) -> None:
         super().__init__()
         #: Pending INVITE addresses keyed by Call-ID.
@@ -111,10 +112,14 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
         self.password = password
         self.call_id = str(uuid.uuid4())
         self.cseq = 0
+        #: Optional STUN server to discover the public IP for Contact and SDP.
+        self.stun_server_address = stun_server_address
         #: Shared RTP multiplexer and its transport, created eagerly in
         #: :meth:`connection_made` and reused for all calls on this session.
         self._rtp_protocol: RealtimeTransportProtocol | None = None
         self._rtp_transport: asyncio.DatagramTransport | None = None
+        #: Public RTP address discovered via STUN (ip, port), or None if STUN not configured.
+        self._public_rtp_addr: tuple[str, int] | None = None
         #: Remote RTP address per call, used to unregister on BYE/CANCEL.
         self._call_rtp_addrs: dict[str, tuple[str, int] | None] = {}
 
@@ -155,7 +160,12 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
             self._rtp_protocol.unregister_call(self._call_rtp_addrs.pop(call_id))
 
     async def _start_rtp_mux(self) -> None:
-        """Create the shared RTP multiplexer socket (idempotent)."""
+        """Create the shared RTP multiplexer socket (idempotent).
+
+        If :attr:`stun_server_address` is configured, also discovers the public
+        IP and port via STUN so that :meth:`_answer` and :meth:`register` can
+        advertise the correct routable address in Contact and SDP headers.
+        """
         if self._rtp_protocol is not None:
             return
         loop = asyncio.get_running_loop()
@@ -166,6 +176,18 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
         )
         rtp_addr = self._rtp_transport.get_extra_info("sockname")
         logger.debug("RTP mux listening on %s:%d", *rtp_addr)
+        if self.stun_server_address is not None:
+            try:
+                host, port = self.stun_server_address
+                self._public_rtp_addr = await self._rtp_protocol.stun_discover(host, port)
+                logger.info(
+                    "STUN discovery: public RTP address is %s:%d", *self._public_rtp_addr
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "STUN discovery failed; Contact/SDP will use local RTP address",
+                    exc_info=True,
+                )
 
     def request_received(self, request: Request, addr: tuple[str, int]) -> None:
         """Dispatch a received SIP request to the appropriate handler."""
