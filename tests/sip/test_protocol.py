@@ -96,7 +96,7 @@ class FakeProtocol(SessionInitiationProtocol):
     """Fake SIP protocol that captures sent messages."""
 
     def __init__(self):
-        super().__init__()
+        super().__init__(server_address=("127.0.0.1", 5060), aor="sip:test@example.com")
         self.transport = FakeTransport()
         self._sent_responses: list[tuple[Response, tuple]] = []
 
@@ -110,7 +110,7 @@ class ConcreteProtocol(SessionInitiationProtocol):
     """Concrete subclass for testing that records received messages."""
 
     def __init__(self):
-        super().__init__()
+        super().__init__(server_address=("127.0.0.1", 5060), aor="sip:test@example.com")
         self.requests = []
         self.responses = []
 
@@ -233,45 +233,59 @@ class TestCallerID:
 
     def test_error_received__blocking_io(self):
         """Log blocking IO errors without re-raising."""
-        protocol = SessionInitiationProtocol()
+        protocol = SessionInitiationProtocol(
+            server_address=("127.0.0.1", 5060), aor="sip:test@example.com"
+        )
         exc = OSError(errno.EAGAIN, "Resource temporarily unavailable")
         protocol.error_received(exc)  # should not raise
 
     def test_error_received__reraises(self):
         """Re-raise unexpected transport errors."""
-        protocol = SessionInitiationProtocol()
+        protocol = SessionInitiationProtocol(
+            server_address=("127.0.0.1", 5060), aor="sip:test@example.com"
+        )
         exc = OSError("Unexpected error")
         with pytest.raises(OSError):
             protocol.error_received(exc)
 
     def test_connection_lost__no_exception(self):
         """Handle a clean connection close without raising."""
-        protocol = SessionInitiationProtocol()
+        protocol = SessionInitiationProtocol(
+            server_address=("127.0.0.1", 5060), aor="sip:test@example.com"
+        )
         protocol.connection_lost(None)  # should not raise
 
     def test_connection_lost__with_exception(self):
         """Log an exception on connection lost without re-raising."""
-        protocol = SessionInitiationProtocol()
+        protocol = SessionInitiationProtocol(
+            server_address=("127.0.0.1", 5060), aor="sip:test@example.com"
+        )
         protocol.connection_lost(Exception("Connection reset"))  # should not raise
 
 
 class TestWithToTag:
     def test__with_to_tag__adds_tag(self):
         """Append the To tag to the To header for a known Call-ID."""
-        protocol = SessionInitiationProtocol()
+        protocol = SessionInitiationProtocol(
+            server_address=("127.0.0.1", 5060), aor="sip:test@example.com"
+        )
         protocol._to_tags["call-1"] = "abc123"
         result = protocol._with_to_tag({"To": "sip:bob@biloxi.com"}, "call-1")
         assert result["To"] == "sip:bob@biloxi.com;tag=abc123"
 
     def test__with_to_tag__unknown_call_id(self):
         """Leave the To header unchanged when the Call-ID has no stored tag."""
-        protocol = SessionInitiationProtocol()
+        protocol = SessionInitiationProtocol(
+            server_address=("127.0.0.1", 5060), aor="sip:test@example.com"
+        )
         result = protocol._with_to_tag({"To": "sip:bob@biloxi.com"}, "unknown")
         assert result["To"] == "sip:bob@biloxi.com"
 
     def test__with_to_tag__missing_to_header(self):
         """Return an empty To header when none is present and no tag exists."""
-        protocol = SessionInitiationProtocol()
+        protocol = SessionInitiationProtocol(
+            server_address=("127.0.0.1", 5060), aor="sip:test@example.com"
+        )
         result = protocol._with_to_tag({}, "unknown")
         assert result["To"] == ""
 

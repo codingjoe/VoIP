@@ -256,7 +256,10 @@ class TestSIP:
         """SIP subclass that captures sent messages without monkey-patching slots."""
 
         def __init__(self):
-            super().__init__()
+            super().__init__(
+                server_address=("127.0.0.1", 5060),
+                aor="sip:test@example.com",
+            )
             self._sent: list[tuple] = []
 
         def send(self, message, addr):
@@ -264,14 +267,14 @@ class TestSIP:
 
     async def test_connection_made__stores_transport(self):
         """Store the transport when a connection is established."""
-        protocol = SIP()
+        protocol = SIP(server_address=("127.0.0.1", 5060), aor="sip:test@example.com")
         transport = MagicMock()
         protocol.connection_made(transport)
         assert protocol.transport is transport
 
     async def test_send__serializes_and_forwards_to_transport(self):
         """Serialize the message and forward it to the underlying transport."""
-        protocol = SIP()
+        protocol = SIP(server_address=("127.0.0.1", 5060), aor="sip:test@example.com")
         transport = MagicMock()
         protocol.connection_made(transport)
         transport.sendto.reset_mock()  # clear the STUN request call
@@ -288,7 +291,7 @@ class TestSIP:
             def call_received(self, request):
                 received.append(request)
 
-        protocol = MySIP()
+        protocol = MySIP(server_address=("127.0.0.1", 5060), aor="sip:test@example.com")
         protocol.connection_made(MagicMock())
         request = make_invite()
         addr = ("192.0.2.1", 5060)
@@ -299,7 +302,7 @@ class TestSIP:
 
     async def test_call_received__noop_by_default(self):
         """call_received is a no-op in the base class."""
-        protocol = SIP()
+        protocol = SIP(server_address=("127.0.0.1", 5060), aor="sip:test@example.com")
         protocol.connection_made(MagicMock())
         protocol.call_received(make_invite())  # must not raise
 
@@ -701,7 +704,7 @@ class TestSIP:
 
     async def test_datagram_received__keepalive__sends_pong(self):
         """Double-CRLF keepalive (RFC 5626 §4.4.1) is answered with a single-CRLF pong."""
-        protocol = SIP()
+        protocol = SIP(server_address=("127.0.0.1", 5060), aor="sip:test@example.com")
         transport = MagicMock()
         protocol.connection_made(transport)
         transport.sendto.reset_mock()  # clear the STUN request call
@@ -711,7 +714,7 @@ class TestSIP:
 
     async def test_request_received__unsupported_method__raises(self):
         """Raise NotImplementedError for any non-INVITE SIP request method."""
-        protocol = SIP()
+        protocol = SIP(server_address=("127.0.0.1", 5060), aor="sip:test@example.com")
         protocol.connection_made(MagicMock())
         request = Request(method="OPTIONS", uri="sip:alice@atlanta.com")
         with pytest.raises(NotImplementedError, match="OPTIONS"):
@@ -728,7 +731,7 @@ class TestSIP:
             async def _answer(self, request, call_class):
                 answered.append((request, call_class))
 
-        protocol = MySIP()
+        protocol = MySIP(server_address=("127.0.0.1", 5060), aor="sip:test@example.com")
         protocol.connection_made(MagicMock())
         request = make_invite()
         addr = ("192.0.2.1", 5060)
