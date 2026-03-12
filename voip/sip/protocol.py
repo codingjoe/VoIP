@@ -15,6 +15,7 @@ import re
 import secrets
 import uuid
 
+from voip.call import Call
 from voip.rtp import RealtimeTransportProtocol
 from voip.sdp.messages import SessionDescription
 from voip.sdp.types import (
@@ -371,7 +372,7 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
         """
 
     def answer(
-        self, request: Request, *, call_class: type[RealtimeTransportProtocol]
+        self, request: Request, *, call_class: type[Call]
     ) -> None:
         """Answer an incoming call by setting up RTP and sending 200 OK with SDP.
 
@@ -379,13 +380,15 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
 
         Args:
             request: The SIP INVITE request (from :meth:`call_received`).
-            call_class: The :class:`~voip.rtp.RealtimeTransportProtocol` subclass
-                to instantiate for the call.
+            call_class: A :class:`~voip.call.Call` subclass (typically
+                :class:`~voip.call.AudioCall`) to instantiate for the call.
+                The class is constructed with ``rtp``, ``sip``, ``caller``,
+                and ``media`` keyword arguments.
         """
         asyncio.get_running_loop().create_task(self._answer(request, call_class))
 
     async def _answer(
-        self, request: Request, call_class: type[RealtimeTransportProtocol]
+        self, request: Request, call_class: type[Call]
     ) -> None:
         """Perform the asynchronous part of answering: set up RTP, send 200 OK."""
         call_id = request.headers.get("Call-ID", "")
@@ -418,8 +421,9 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
         # can declare its own codec preferences independently of the SIP layer.
         # negotiate_codec raises NotImplementedError when no supported codec is
         # found; when the INVITE contains no SDP audio at all, default to PCMU.
-        if remote_audio is not None:
-            negotiated_media = call_class.negotiate_codec(remote_audio)
+        negotiate_fn = getattr(call_class, "negotiate_codec", None)
+        if remote_audio is not None and callable(negotiate_fn):
+            negotiated_media = negotiate_fn(remote_audio)
         else:
             negotiated_media = MediaDescription(
                 media="audio",
@@ -438,7 +442,9 @@ class SessionInitiationProtocol(asyncio.DatagramProtocol):
             )
 
         # Instantiate the per-call handler and register it with the shared mux.
-        call_handler = call_class(caller=caller, media=negotiated_media)
+        call_handler = call_class(
+            rtp=self._rtp_protocol, sip=self, caller=caller, media=negotiated_media
+        )
         # Determine the remote RTP address for routing.  If the INVITE SDP
         # specifies a connection address, use that; otherwise fall back to the
         # source IP of the SIP message.  When no remote audio port is known

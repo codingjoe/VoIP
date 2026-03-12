@@ -117,8 +117,8 @@ def transcribe(ctx, model, server, aor, username, password, local_port):
     verbose = ctx.obj.get("verbose", 0)
 
     class TranscribingCall(WhisperCall):
-        def __init__(self, caller: str = "", media=None) -> None:
-            super().__init__(caller=caller, model=model, media=media)
+        def __init__(self, rtp, sip, caller: str = "", media=None) -> None:
+            super().__init__(rtp=rtp, sip=sip, caller=caller, media=media, model=model)
 
         def transcription_received(self, text: str) -> None:
             click.echo(text)

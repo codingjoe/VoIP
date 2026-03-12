@@ -1,29 +1,231 @@
-"""Tests for the SIP session and RTP call handler."""
+"""Tests for the SIP session and call handler hierarchy."""
 
 from unittest.mock import MagicMock
 
 import pytest
-from voip.rtp import RTP, RTPPacket
+from voip.call import AudioCall
+from voip.rtp import RealtimeTransportProtocol
 from voip.sip.messages import Message, Request, Response
 from voip.sip.protocol import SIP, SessionInitiationProtocol
 
 
-class TestRTP:
+def make_audio_call(**kwargs) -> AudioCall:
+    """Create an AudioCall with mock rtp/sip for unit testing."""
+    defaults: dict = {"rtp": MagicMock(spec=RealtimeTransportProtocol), "sip": MagicMock()}
+    defaults.update(kwargs)
+    return AudioCall(**defaults)
+
+
+class TestAudioCall:
     def test_caller__returns_caller_arg(self):
         """Return the caller string passed at construction."""
-        call = RTP(caller="sip:bob@biloxi.com")
+        call = make_audio_call(caller="sip:bob@biloxi.com")
         assert call.caller == "sip:bob@biloxi.com"
 
     def test_caller__defaults_to_empty_string(self):
         """Return an empty string when no caller is given."""
-        assert RTP().caller == ""
+        assert make_audio_call().caller == ""
 
     def test_audio_received__noop_by_default(self):
-        """audio_received is a no-op in the base class."""
-        packet = RTPPacket(
-            payload_type=0, sequence_number=1, timestamp=0, ssrc=0, payload=b"data"
+        """audio_received is a no-op in the base AudioCall class."""
+        make_audio_call().audio_received([b"data"])  # must not raise
+
+    def test_rtp_and_sip_stored_as_fields(self):
+        """Rtp and sip back-references are stored as dataclass fields."""
+        mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
+        mock_sip = MagicMock()
+        call = AudioCall(rtp=mock_rtp, sip=mock_sip)
+        assert call.rtp is mock_rtp
+        assert call.sip is mock_sip
+
+    def test_init__stores_media(self):
+        """Media parameter is stored on the AudioCall instance."""
+        from voip.sdp.types import MediaDescription, RTPPayloadFormat  # noqa: PLC0415
+
+        media = MediaDescription(
+            media="audio",
+            port=49170,
+            proto="RTP/AVP",
+            fmt=[RTPPayloadFormat(payload_type=8, encoding_name="PCMA", sample_rate=8000)],
         )
-        RTP().audio_received(packet)  # must not raise
+        call = make_audio_call(media=media)
+        assert call.media is media
+
+    def test_init__derives_sample_rate_from_media(self):
+        """sample_rate is derived from the RTPPayloadFormat sample_rate."""
+        from voip.sdp.types import MediaDescription, RTPPayloadFormat  # noqa: PLC0415
+
+        media = MediaDescription(
+            media="audio",
+            port=49170,
+            proto="RTP/AVP",
+            fmt=[RTPPayloadFormat(payload_type=9, encoding_name="G722", sample_rate=8000)],
+        )
+        call = make_audio_call(media=media)
+        assert call.sample_rate == 8000
+
+    def test_init__default_sample_rate_without_media(self):
+        """Default sample_rate is 8000 Hz when no MediaDescription is given."""
+        assert make_audio_call().sample_rate == 8000
+
+    def test_init__derives_payload_type_from_media(self):
+        """payload_type is derived from the first fmt entry of the MediaDescription."""
+        from voip.sdp.types import MediaDescription, RTPPayloadFormat  # noqa: PLC0415
+
+        media = MediaDescription(
+            media="audio",
+            port=49170,
+            proto="RTP/AVP",
+            fmt=[RTPPayloadFormat(payload_type=8)],
+        )
+        call = make_audio_call(media=media)
+        assert call.payload_type == 8
+
+    def test_init__default_payload_type_without_media(self):
+        """Default payload_type is 0 when no MediaDescription is given."""
+        assert make_audio_call().payload_type == 0
+
+    def test_init__logs_codec_info(self, caplog):
+        """Log codec name, sample rate and payload type at INFO level on init."""
+        import logging  # noqa: PLC0415
+
+        from voip.sdp.types import MediaDescription, RTPPayloadFormat  # noqa: PLC0415
+
+        media = MediaDescription(
+            media="audio",
+            port=49170,
+            proto="RTP/AVP",
+            fmt=[RTPPayloadFormat(payload_type=8, encoding_name="PCMA", sample_rate=8000)],
+        )
+        with caplog.at_level(logging.INFO, logger="voip.call"):
+            make_audio_call(media=media)
+        assert any("PCMA" in r.message and "8000" in r.message for r in caplog.records)
+
+    def test_chunk_duration__default_is_zero(self):
+        """chunk_duration defaults to 0 (per-packet mode)."""
+        assert AudioCall.chunk_duration == 0
+
+    def test_datagram_received__forwards_audio_payload(self):
+        """datagram_received parses the RTP packet and calls audio_received."""
+        import struct  # noqa: PLC0415
+
+        received: list[list[bytes]] = []
+
+        class ConcreteCall(AudioCall):
+            def audio_received(self, packets: list[bytes]) -> None:
+                received.append(packets)
+
+        rtp_packet = struct.pack(">BBHII", 0x80, 111 & 0x7F, 1, 0, 0) + b"audio"
+        make_audio_call.__wrapped__ = None  # prevent pickling issues
+        call = ConcreteCall(rtp=MagicMock(), sip=MagicMock())
+        call.datagram_received(rtp_packet, ("127.0.0.1", 5004))
+        assert received == [[b"audio"]]
+
+    def test_datagram_received__chunk_duration__buffers_until_threshold(self):
+        """Buffer packets and emit audio_received only when the threshold is reached."""
+        import struct  # noqa: PLC0415
+
+        from voip.sdp.types import MediaDescription, RTPPayloadFormat  # noqa: PLC0415
+
+        received: list[list[bytes]] = []
+        media = MediaDescription(
+            media="audio",
+            port=0,
+            proto="RTP/AVP",
+            fmt=[RTPPayloadFormat(payload_type=8, encoding_name="PCMA", sample_rate=8000)],
+        )
+
+        class ChunkedCall(AudioCall):
+            chunk_duration = 1  # 1 s @ 8 kHz / 160 samples = 50 packets
+
+            def audio_received(self, packets: list[bytes]) -> None:
+                received.append(packets)
+
+        call = ChunkedCall(rtp=MagicMock(), sip=MagicMock(), media=media)
+        assert call._packet_threshold == 50
+        rtp_packet = struct.pack(">BBHII", 0x80, 8 & 0x7F, 1, 0, 0) + b"x"
+        for _ in range(49):
+            call.datagram_received(rtp_packet, ("127.0.0.1", 5004))
+        assert received == []
+        call.datagram_received(
+            struct.pack(">BBHII", 0x80, 8 & 0x7F, 2, 0, 0) + b"last",
+            ("127.0.0.1", 5004),
+        )
+        assert len(received) == 1
+        assert len(received[0]) == 50
+
+
+class TestNegotiateCodec:
+    def _make_media(
+        self, fmts: list[str], rtpmaps: list[str] | None = None
+    ):
+        """Build a MediaDescription with given format list and optional rtpmap attributes."""
+        from voip.sdp.types import MediaDescription, RTPPayloadFormat  # noqa: PLC0415
+
+        rtpmap_by_pt: dict[int, RTPPayloadFormat] = {}
+        for rtpmap in rtpmaps or []:
+            f = RTPPayloadFormat.parse(rtpmap)
+            rtpmap_by_pt[f.payload_type] = f
+        formats = [
+            rtpmap_by_pt.get(int(pt)) or RTPPayloadFormat(payload_type=int(pt))
+            for pt in fmts
+        ]
+        return MediaDescription(media="audio", port=49170, proto="RTP/AVP", fmt=formats)
+
+    def test_negotiate_codec__prefers_opus(self):
+        """Select Opus when offered alongside lower-priority codecs."""
+        media = self._make_media(["0", "8", "111"], ["111 opus/48000/2", "8 PCMA/8000"])
+        result = AudioCall.negotiate_codec(media)
+        assert result.fmt[0].payload_type == 111
+        assert result.fmt[0].sample_rate == 48000
+
+    def test_negotiate_codec__falls_back_to_pcma(self):
+        """Select PCMA when Opus and G.722 are not offered."""
+        media = self._make_media(["0", "8"])
+        result = AudioCall.negotiate_codec(media)
+        assert result.fmt[0].payload_type == 8
+        assert result.fmt[0].sample_rate == 8000
+
+    def test_negotiate_codec__falls_back_to_pcmu(self):
+        """Select PCMU when only PCMU is offered."""
+        media = self._make_media(["0"])
+        result = AudioCall.negotiate_codec(media)
+        assert result.fmt[0].payload_type == 0
+
+    def test_negotiate_codec__empty_fmt__raises(self):
+        """Raise NotImplementedError when the remote side offers no audio formats."""
+        media = self._make_media([])
+        with pytest.raises(NotImplementedError):
+            AudioCall.negotiate_codec(media)
+
+    def test_negotiate_codec__unknown_codec__raises(self):
+        """Raise NotImplementedError when no offered codec matches PREFERRED_CODECS."""
+        media = self._make_media(["126"], ["126 telephone-event/8000"])
+        with pytest.raises(NotImplementedError):
+            AudioCall.negotiate_codec(media)
+
+    def test_negotiate_codec__returns_media_description(self):
+        """negotiate_codec returns a MediaDescription object."""
+        from voip.sdp.types import MediaDescription  # noqa: PLC0415
+
+        media = self._make_media(["0", "8", "111"], ["111 opus/48000/2"])
+        result = AudioCall.negotiate_codec(media)
+        assert isinstance(result, MediaDescription)
+        assert result.media == "audio"
+        assert result.proto == "RTP/AVP"
+
+    def test_negotiate_codec__subclass_can_override_preferences(self):
+        """A subclass with a different PREFERRED_CODECS list uses its own preferences."""
+        from voip.sdp.types import RTPPayloadFormat  # noqa: PLC0415
+
+        class PCMAOnlyCall(AudioCall):
+            PREFERRED_CODECS = [
+                RTPPayloadFormat(payload_type=8, encoding_name="PCMA", sample_rate=8000)
+            ]
+
+        media = self._make_media(["0", "8", "111"])
+        result = PCMAOnlyCall.negotiate_codec(media)
+        assert result.fmt[0].payload_type == 8
 
 
 class TestSIP:
@@ -74,7 +276,7 @@ class TestSIP:
         protocol._transport = make_mock_transport()
         request = make_invite()
         protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
-        await protocol._answer(request, RTP)
+        await protocol._answer(request, AudioCall)
         send.assert_called_once()
         response, addr = send.call_args[0]
         assert response.status_code == 200
@@ -89,7 +291,7 @@ class TestSIP:
         protocol._transport = make_mock_transport()
         request = make_invite()
         protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
-        await protocol._answer(request, RTP)
+        await protocol._answer(request, AudioCall)
         response, _ = send.call_args[0]
         assert b"m=audio" in bytes(response.body)
         assert b"RTP/AVP 0" in bytes(response.body)
@@ -102,7 +304,7 @@ class TestSIP:
         protocol._transport = make_mock_transport()
         request = make_invite()
         protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
-        await protocol._answer(request, RTP)
+        await protocol._answer(request, AudioCall)
         response, _ = send.call_args[0]
         assert response.headers["Via"] == "SIP/2.0/UDP pc33.atlanta.com"
         assert response.headers["To"] == "sip:alice@atlanta.com"
@@ -112,12 +314,12 @@ class TestSIP:
 
     async def test_answer__instantiates_call_class_with_caller(self):
         """The call_class is instantiated with the caller from the From header."""
-        created = []
+        created: list[str] = []
 
-        class MyCall(RTP):
-            def __init__(self, caller: str = "", media=None) -> None:
-                super().__init__(caller=caller, media=media)
-                created.append(self)
+        class MyCall(AudioCall):
+            def __post_init__(self) -> None:
+                super().__post_init__()
+                created.append(self.caller)
 
         protocol = SIP()
         protocol.send = MagicMock()
@@ -125,14 +327,13 @@ class TestSIP:
         request = make_invite()
         protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
         await protocol._answer(request, MyCall)
-        assert len(created) == 1
-        assert created[0].caller == "sip:bob@biloxi.com"
+        assert created == ["sip:bob@biloxi.com"]
 
     async def test_answer__rtp_receives_audio(self):
         """Deliver audio from RTP packets to the call's audio_received via the RTP socket."""
         received_audio = []
 
-        class AudioCapture(RTP):
+        class AudioCapture(AudioCall):
             def audio_received(self, packets: list[bytes]) -> None:
                 received_audio.extend(packets)
 
@@ -169,7 +370,7 @@ class TestSIP:
         """Call audio_received with each RTP payload when multiple packets arrive."""
         received_audio = []
 
-        class AudioCapture(RTP):
+        class AudioCapture(AudioCall):
             def audio_received(self, packets: list[bytes]) -> None:
                 received_audio.extend(packets)
 
@@ -210,7 +411,7 @@ class TestSIP:
         protocol._transport = make_mock_transport()
         request = make_invite()
         protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
-        await protocol._answer(request, RTP)
+        await protocol._answer(request, AudioCall)
         response, _ = send.call_args[0]
         serialized = bytes(response)
         parsed = Message.parse(serialized)
@@ -241,7 +442,7 @@ class TestSIP:
             body=sdp_body1,
         )
         protocol._request_addrs["call-1@test"] = ("1.2.3.4", 5060)
-        await protocol._answer(invite1, RTP)
+        await protocol._answer(invite1, AudioCall)
         rtp_proto_1 = protocol._rtp_protocol
         rtp_transport_1 = protocol._rtp_transport
 
@@ -261,7 +462,7 @@ class TestSIP:
             body=sdp_body2,
         )
         protocol._request_addrs["call-2@test"] = ("5.6.7.8", 5060)
-        await protocol._answer(invite2, RTP)
+        await protocol._answer(invite2, AudioCall)
 
         # The same RTP protocol and transport must be reused.
         assert protocol._rtp_protocol is rtp_proto_1
@@ -282,7 +483,7 @@ class TestSIP:
         protocol._transport = make_mock_transport()
         request = make_invite()
         protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
-        await protocol._answer(request, RTP)
+        await protocol._answer(request, AudioCall)
 
         mux = protocol._rtp_protocol
         # The call is registered under the None wildcard (no SDP in invite).
@@ -315,7 +516,7 @@ class TestSIP:
         request = make_invite()
         protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
         with caplog.at_level(logging.INFO, logger="voip.sip"):
-            await protocol._answer(request, RTP)
+            await protocol._answer(request, AudioCall)
         assert any("call_answered" in r.message for r in caplog.records)
 
     def test_reject__sends_busy_here_by_default(self):
@@ -407,7 +608,7 @@ class TestSIP:
 
         class MySIP(SIP):
             def call_received(self, request):
-                self.answer(request=request, call_class=RTP)
+                self.answer(request=request, call_class=AudioCall)
 
             async def _answer(self, request, call_class):
                 answered.append((request, call_class))
@@ -422,7 +623,7 @@ class TestSIP:
 
         await asyncio.sleep(0.01)
         assert len(answered) == 1
-        assert answered[0][1] is RTP
+        assert answered[0][1] is AudioCall
 
 
 class TestSessionInitiationProtocol:

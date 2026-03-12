@@ -10,11 +10,12 @@ import dataclasses
 import enum
 import json
 import logging
-from typing import ClassVar
+from typing import TYPE_CHECKING
 
-from voip.sdp.types import MediaDescription, RTPPayloadFormat
-from voip.sip.types import CallerID
 from voip.stun import STUNProtocol
+
+if TYPE_CHECKING:
+    from voip.call import Call
 
 __all__ = ["RTP", "RTPPacket", "RTPPayloadType", "RealtimeTransportProtocol"]
 
@@ -67,152 +68,55 @@ class RTPPacket:
 
 
 class RealtimeTransportProtocol(STUNProtocol):
-    """RTP multiplexer and call handler base class (RFC 3550).
+    """RTP multiplexer: routes incoming datagrams to per-call handlers (RFC 3550).
 
-    One instance of this class can manage multiple simultaneous calls on a
-    single UDP socket.  Per-call handlers — subclass instances created by
-    :meth:`~voip.sip.protocol.SessionInitiationProtocol.answer` — are
-    registered with :meth:`register_call` and routed by the remote address
-    reported in each datagram.
+    One instance manages multiple simultaneous calls on a single UDP socket.
+    Register per-call :class:`~voip.call.Call` handlers with
+    :meth:`register_call`; each incoming datagram is dispatched to the
+    matching handler's :meth:`~voip.call.Call.datagram_received` method by
+    remote source address.
 
-    Subclass and override :meth:`audio_received` to process incoming audio::
-
-        class MyCall(RealtimeTransportProtocol):
-            def audio_received(self, packets: list[bytes]) -> None:
-                save(packets)
-
-    Override :meth:`negotiate_codec` to customise codec selection.
-
-    Set :attr:`chunk_duration` to buffer multiple packets before each
-    :meth:`audio_received` call.  The default of ``0`` passes each packet
-    individually as a single-element list.
+    Use ``addr=None`` in :meth:`register_call` as a wildcard catch-all for
+    calls whose remote RTP address is not known in advance (no SDP in INVITE).
     """
 
     #: Fixed RTP header size in bytes (RFC 3550 §5.1).
     rtp_header_size: int = 12
 
-    #: Seconds of audio to buffer before emitting an :meth:`audio_received` event.
-    #: ``0`` (default) emits one event per RTP packet.
-    chunk_duration: ClassVar[int] = 0
-
-    #: Preferred codecs, highest to lowest priority.
-    PREFERRED_CODECS: ClassVar[list[RTPPayloadFormat]] = [
-        RTPPayloadFormat(
-            payload_type=RTPPayloadType.OPUS,
-            encoding_name="opus",
-            sample_rate=48000,
-            channels=2,
-        ),
-        RTPPayloadFormat(payload_type=RTPPayloadType.G722),
-        RTPPayloadFormat(payload_type=RTPPayloadType.PCMA),
-        RTPPayloadFormat(payload_type=RTPPayloadType.PCMU),
-    ]
-
-    def __init__(self, caller: str = "", media: MediaDescription | None = None) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        self.caller = caller
-        self.media = media
-        if media is not None and media.fmt:
-            fmt = media.fmt[0]
-            self.payload_type: int = fmt.payload_type
-            self.sample_rate: int = fmt.sample_rate or 8000
-            caller_id = CallerID(self.caller)
-            logger.info(
-                json.dumps(
-                    {
-                        "event": "call_started",
-                        "caller": repr(caller_id),
-                        "codec": fmt.encoding_name or "unknown",
-                        "sample_rate": fmt.sample_rate or 0,
-                        "channels": fmt.channels,
-                        "payload_type": fmt.payload_type,
-                    }
-                ),
-                extra={
-                    "caller": repr(caller_id),
-                    "codec": fmt.encoding_name,
-                    "payload_type": fmt.payload_type,
-                },
-            )
-            frame_size = fmt.frame_size
-        else:
-            self.payload_type: int = 0
-            self.sample_rate: int = 8000
-            frame_size = 160
-
-        self._audio_buffer: list[bytes] = []
-        self._packet_threshold: int = (
-            self.sample_rate * self.chunk_duration // frame_size
-            if self.chunk_duration
-            else 1
-        )
         #: Per-call handlers keyed by the remote ``(ip, port)`` address.
-        #: ``None`` is used as a wildcard key for calls whose remote address is
-        #: not known in advance (e.g. when the INVITE contains no SDP).
-        self._calls: dict[tuple[str, int] | None, RealtimeTransportProtocol] = {}
-
-    @classmethod
-    def negotiate_codec(cls, remote_media: MediaDescription) -> MediaDescription:
-        """Select the best codec from the offered SDP and return a negotiated MediaDescription.
-
-        Iterates :attr:`PREFERRED_CODECS` in priority order, matching by payload
-        type or encoding name.  Raises :exc:`NotImplementedError` when no codec
-        matches.
-        """
-        if not remote_media.fmt:
-            raise NotImplementedError("Remote SDP offer contains no audio formats")
-
-        remote_fmts = {f.payload_type for f in remote_media.fmt}
-        for preferred in cls.PREFERRED_CODECS:
-            # Match by payload type number.
-            if preferred.payload_type in remote_fmts:
-                remote_fmt = remote_media.get_format(preferred.payload_type)
-                codec = (
-                    remote_fmt if remote_fmt and remote_fmt.encoding_name else preferred
-                )
-                return MediaDescription(
-                    media="audio",
-                    port=0,
-                    proto="RTP/AVP",
-                    fmt=[codec],
-                )
-            # Match by encoding name for dynamic payload types.
-            for remote_fmt in remote_media.fmt:
-                if (
-                    remote_fmt.encoding_name is not None
-                    and remote_fmt.encoding_name.lower()
-                    == preferred.encoding_name.lower()
-                ):
-                    return MediaDescription(
-                        media="audio",
-                        port=0,
-                        proto="RTP/AVP",
-                        fmt=[remote_fmt],
-                    )
-
-        raise NotImplementedError(
-            f"No supported codec found in remote offer "
-            f"{[f.payload_type for f in remote_media.fmt]!r}. "
-            f"Supported: {[c.encoding_name for c in cls.PREFERRED_CODECS]!r}"
-        )
+        #: ``None`` is a wildcard key for calls with an unknown remote address.
+        self._calls: dict[tuple[str, int] | None, Call] = {}
 
     def register_call(
         self,
         addr: tuple[str, int] | None,
-        handler: RealtimeTransportProtocol,
+        handler: Call,
     ) -> None:
         """Register *handler* for RTP traffic arriving from *addr*.
 
         Use ``addr=None`` as a wildcard to handle traffic from any source that
         has no dedicated routing entry (useful when the caller's RTP address is
-        not known in advance).
+        not known in advance from the INVITE SDP).
 
         Args:
             addr: Remote ``(ip, port)`` as it will appear in incoming datagrams,
                 or ``None`` to register a wildcard catch-all handler.
-            handler: A :class:`RealtimeTransportProtocol` instance whose
-                :meth:`audio_received` will be called for matching packets.
+            handler: A :class:`~voip.call.Call` instance whose
+                :meth:`~voip.call.Call.datagram_received` will be called for
+                matching packets.
         """
+        logger.info(
+            json.dumps(
+                {
+                    "event": "rtp_call_registered",
+                    "addr": list(addr) if addr else None,
+                    "handler": type(handler).__name__,
+                }
+            ),
+            extra={"addr": addr},
+        )
         self._calls[addr] = handler
 
     def unregister_call(self, addr: tuple[str, int] | None) -> None:
@@ -222,43 +126,42 @@ class RealtimeTransportProtocol(STUNProtocol):
             addr: The same key that was passed to :meth:`register_call`.
                 Silently ignored when no handler is registered for *addr*.
         """
-        self._calls.pop(addr, None)
+        if addr in self._calls:
+            logger.info(
+                json.dumps(
+                    {
+                        "event": "rtp_call_unregistered",
+                        "addr": list(addr) if addr else None,
+                    }
+                ),
+                extra={"addr": addr},
+            )
+            self._calls.pop(addr)
 
     def packet_received(self, data: bytes, addr: tuple[str, int]) -> None:
-        """Route an incoming RTP datagram to the appropriate per-call handler.
+        """Route an incoming RTP datagram to the matching per-call handler.
 
         Looks up *addr* in the call registry.  Falls back to the wildcard
-        ``None`` handler when no exact match exists.  If neither is found the
-        packet is processed by this instance (stand-alone / mux-level mode).
+        ``None`` handler when no exact match exists.  Drops the packet with a
+        debug log when no handler is registered at all.
         """
         handler = self._calls.get(addr)
         if handler is None:
             handler = self._calls.get(None)
         if handler is not None:
-            handler._process_rtp(data)
+            logger.debug(
+                "Routing RTP packet from %s:%s to %s",
+                addr[0],
+                addr[1],
+                type(handler).__name__,
+            )
+            handler.datagram_received(data, addr)
         else:
-            self._process_rtp(data)
-
-    def _process_rtp(self, data: bytes) -> None:
-        """Parse *data* as an RTP packet and buffer/deliver audio to :meth:`audio_received`."""
-        try:
-            packet = RTPPacket.parse(data)
-        except ValueError:
-            return
-        if not packet.payload:
-            return
-        self._audio_buffer.append(packet.payload)
-        while len(self._audio_buffer) >= self._packet_threshold:
-            packets = self._audio_buffer[: self._packet_threshold]
-            self._audio_buffer = self._audio_buffer[self._packet_threshold :]
-            self.audio_received(packets)
-
-    def audio_received(self, packets: list[bytes]) -> None:
-        """Handle a buffered audio frame. Override in subclasses.
-
-        Called with a list of :attr:`~RealtimeTransportProtocol._packet_threshold`
-        raw RTP payloads representing one audio chunk.
-        """
+            logger.debug(
+                "No call handler registered for %s:%s, dropping RTP packet",
+                addr[0],
+                addr[1],
+            )
 
 
 #: Short alias for :class:`RealtimeTransportProtocol`.

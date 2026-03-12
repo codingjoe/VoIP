@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import io
 import logging
 import os
@@ -13,8 +14,7 @@ import av
 import numpy as np
 from faster_whisper import WhisperModel
 
-from voip.rtp import RealtimeTransportProtocol
-from voip.sdp.types import MediaDescription
+from voip.call import AudioCall
 
 __all__ = ["WhisperCall"]
 
@@ -103,7 +103,8 @@ def _build_ogg_opus(packets: list[bytes]) -> bytes:
     return b"".join(pages)
 
 
-class WhisperCall(RealtimeTransportProtocol):
+@dataclasses.dataclass
+class WhisperCall(AudioCall):
     """RTP call handler that decodes audio and transcribes it with OpenAI Whisper.
 
     Supports Opus, G.722, PCMA (G.711 A-law), and PCMU (G.711 µ-law) based on
@@ -120,15 +121,15 @@ class WhisperCall(RealtimeTransportProtocol):
     #: Maximum seconds to wait for audio decoding to complete.
     decode_timeout_secs: ClassVar[int] = 60
 
-    def __init__(
-        self,
-        caller: str = "",
-        model: str = "base",
-        media: MediaDescription | None = None,
-    ) -> None:
-        super().__init__(caller=caller, media=media)
-        logger.debug("Loading Whisper model %r", model)
-        self._whisper_model = WhisperModel(model, device="auto")
+    #: Whisper model size (e.g. ``"base"``, ``"small"``, ``"large-v3"``).
+    model: str = dataclasses.field(default="base")
+    #: Loaded Whisper model instance (not part of ``__init__``).
+    _whisper_model: WhisperModel = dataclasses.field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        logger.debug("Loading Whisper model %r", self.model)
+        self._whisper_model = WhisperModel(self.model, device="auto")
 
     def audio_received(self, packets: list[bytes]) -> None:
         """Schedule async transcription for a buffered audio chunk."""

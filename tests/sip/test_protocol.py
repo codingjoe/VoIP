@@ -4,6 +4,7 @@ import asyncio
 import errno
 
 import pytest
+from voip.call import AudioCall
 from voip.rtp import RealtimeTransportProtocol
 from voip.sdp.messages import SessionDescription
 from voip.sdp.types import Timing
@@ -469,16 +470,11 @@ class TestAnswer:
 
     async def _run_answer(self, protocol, invite, fake_rtp_transport):
         """Run _answer coroutine with a pre-populated shared RTP mux."""
-        from voip.rtp import RealtimeTransportProtocol as RTPMux  # noqa: PLC0415
-
-        class FakeRTPProtocol(RealtimeTransportProtocol):
-            pass
-
         # Pre-populate the shared RTP mux so _answer() skips socket creation.
-        protocol._rtp_protocol = RTPMux()
+        protocol._rtp_protocol = RealtimeTransportProtocol()
         protocol._rtp_transport = fake_rtp_transport
 
-        await protocol._answer(invite, FakeRTPProtocol)
+        await protocol._answer(invite, AudioCall)
 
     @pytest.mark.asyncio
     async def test_answer__selects_pcma_from_offer(self, fake_rtp_transport):
@@ -586,10 +582,10 @@ class TestAnswer:
         )  # Opus at non-standard PT
 
     def test_preferred_codecs__class_attribute(self):
-        """PREFERRED_CODECS is a class attribute on RTP with Opus first."""
-        from voip.sdp.types import RTPPayloadFormat
+        """PREFERRED_CODECS is a class attribute on AudioCall with Opus first."""
+        from voip.sdp.types import RTPPayloadFormat  # noqa: PLC0415
 
-        codecs = RealtimeTransportProtocol.PREFERRED_CODECS
+        codecs = AudioCall.PREFERRED_CODECS
         assert isinstance(codecs, list)
         assert all(isinstance(c, RTPPayloadFormat) for c in codecs)
         pts = [c.payload_type for c in codecs]
