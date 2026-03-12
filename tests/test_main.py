@@ -64,6 +64,8 @@ class TestParseStunServer:
             "stun.example.com",
             3478,
         )
+
+
 class TestVoIPCommand:
     def test_voip__verbose_flag(self):
         """Accept -v flag without error."""
