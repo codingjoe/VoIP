@@ -146,7 +146,7 @@ def transcribe(ctx, model, server, aor, username, password, local_port, stun_ser
         model: str = _model
 
         def transcription_received(self, text: str) -> None:
-            click.echo(text)
+            click.echo(click.style(text, fg="green", bold=True), nl=False)
 
     # Mix in ConsoleMessageProcessor only at maximum verbosity (-vvv) so that
     # normal operation is not flooded with protocol-level message dumps.

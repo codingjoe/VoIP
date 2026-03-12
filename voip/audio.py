@@ -382,14 +382,14 @@ class WhisperCall(AudioCall):
     chunk_duration: ClassVar[int] = 5
 
     #: Whisper model size (e.g. ``"base"``, ``"small"``, ``"large-v3"``).
-    model: str = dataclasses.field(default="base")
+    model: str = dataclasses.field(default="kyutai/stt-1b-en_fr-trfs")
     #: Loaded Whisper model instance (not part of ``__init__``).
     _whisper_model: WhisperModel = dataclasses.field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         super().__post_init__()
         logger.debug("Loading Whisper model %r", self.model)
-        self._whisper_model = WhisperModel(self.model, device="auto")
+        self._whisper_model = WhisperModel(self.model)
 
     def audio_received(self, audio: np.ndarray) -> None:
         """Schedule async transcription for a decoded audio chunk.
