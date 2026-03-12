@@ -144,16 +144,30 @@ class RealtimeTransportProtocol(STUNProtocol):
             self.calls.pop(addr)
 
     def packet_received(self, data: bytes, addr: tuple[str, int]) -> None:
-        """Route an incoming RTP datagram to the matching per-call handler.
+        """Route an incoming SRTP datagram to the matching per-call handler.
 
         Looks up *addr* in the call registry.  Falls back to the wildcard
         ``None`` handler when no exact match exists.  Drops the packet with a
         debug log when no handler is registered at all.
+
+        When the matched handler carries an SRTP session the packet is
+        authenticated and decrypted before being forwarded; packets that fail
+        authentication are silently discarded.
         """
         handler = self.calls.get(addr)
         if handler is None:
             handler = self.calls.get(None)
         if handler is not None:
+            if handler.srtp is not None:
+                decrypted = handler.srtp.decrypt(data)
+                if decrypted is None:
+                    logger.warning(
+                        "SRTP authentication failed for packet from %s:%s, discarding",
+                        addr[0],
+                        addr[1],
+                    )
+                    return
+                data = decrypted
             logger.debug(
                 "Routing RTP packet from %s:%s to %s",
                 addr[0],
