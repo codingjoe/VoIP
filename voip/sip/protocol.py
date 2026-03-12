@@ -126,18 +126,25 @@ class SessionInitiationProtocol(STUNProtocol):
         self.call_id = f"{uuid.uuid4()}@{socket.gethostname()}"
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
-        """Create :attr:`public_address` future and start STUN discovery."""
+        """Store the transport, create :attr:`public_address`, and start STUN discovery."""
         logger.debug("SIP transport connected")
+        self.transport = transport
         self.public_address = asyncio.get_running_loop().create_future()
         STUNProtocol.connection_made(self, transport)
+        if self.stun_server_address is None:
+            # No STUN: use the local socket address and start up immediately.
+            self.public_address.set_result(transport.get_extra_info("sockname"))
+            try:
+                asyncio.get_running_loop().create_task(self._initialize())
+            except RuntimeError:
+                pass  # no running loop in synchronous test setups
 
     def stun_connection_made(
         self,
         transport: asyncio.DatagramTransport,
         addr: tuple[str, int],
     ) -> None:
-        """Store transport, resolve :attr:`public_address`, and begin initialisation."""
-        self.transport = transport
+        """Resolve :attr:`public_address` and begin initialisation on STUN completion."""
         if not self.public_address.done():
             self.public_address.set_result(addr)
         # Schedule RTP mux creation and (optionally) registration in a single task so

@@ -91,17 +91,20 @@ class RealtimeTransportProtocol(STUNProtocol):
     )
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
-        """Create the :attr:`public_address` future and start STUN discovery."""
+        """Store the transport, create :attr:`public_address`, and start STUN discovery."""
+        self.transport = transport
         self.public_address = asyncio.get_running_loop().create_future()
         STUNProtocol.connection_made(self, transport)
+        if self.stun_server_address is None:
+            # No STUN: resolve immediately with the local socket address.
+            self.public_address.set_result(transport.get_extra_info("sockname"))
 
     def stun_connection_made(
         self,
         transport: asyncio.DatagramTransport,
         addr: tuple[str, int],
     ) -> None:
-        """Store the transport and resolve :attr:`public_address` on STUN completion."""
-        self.transport = transport
+        """Resolve :attr:`public_address` with the public address from STUN."""
         if not self.public_address.done():
             self.public_address.set_result(addr)
 

@@ -67,17 +67,16 @@ class STUNProtocol(asyncio.DatagramProtocol):
     )
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:  # type: ignore[override]
-        """Store the transport internally and start STUN discovery.
+        """Store the transport and send a STUN Binding Request if configured.
 
-        Calls :meth:`stun_connection_made` immediately with the local socket
-        address when STUN is disabled (``stun_server_address=None``), or sends
-        a Binding Request and waits for the server's response otherwise.
+        When ``stun_server_address`` is set a Binding Request is sent
+        immediately; :meth:`stun_connection_made` will be called by
+        :meth:`datagram_received` once the response arrives.  When STUN is
+        disabled the subclass is responsible for any initialisation that would
+        otherwise happen in :meth:`stun_connection_made`.
         """
         self._stun_transport = transport
-        if self.stun_server_address is None:
-            addr = transport.get_extra_info("sockname")
-            self.stun_connection_made(transport, addr)
-        else:
+        if self.stun_server_address is not None:
             self._stun_transaction_id = uuid.uuid4().bytes[:12]
             self._send_stun_request()
 
@@ -86,16 +85,18 @@ class STUNProtocol(asyncio.DatagramProtocol):
         transport: asyncio.DatagramTransport,
         addr: tuple[str, int],
     ) -> None:
-        """Called when the STUN handshake is complete.
+        """Called by :meth:`datagram_received` when the STUN response arrives.
 
-        *addr* is the public ``(ip, port)`` discovered via STUN, or the local
-        socket address when STUN is disabled.  Subclasses override this method
-        to store the transport, record the public address, and trigger any
-        post-connection initialisation.
+        *addr* is the **public** ``(ip, port)`` discovered via the STUN
+        Binding Response — i.e. the address visible to the outside world.
+        Subclasses override this method to record the public address and
+        trigger any post-discovery initialisation.  This method is **not**
+        called when ``stun_server_address=None``; subclasses must handle that
+        case themselves inside their :meth:`connection_made` override.
 
         Args:
             transport: The UDP transport bound to this protocol.
-            addr: Discovered public ``(host, port)``.
+            addr: Public ``(host, port)`` as reported by the STUN server.
         """
 
     def send(self, data: bytes, addr: tuple[str, int]) -> None:
