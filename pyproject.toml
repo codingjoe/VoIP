@@ -56,16 +56,30 @@ name = "voip"
 [dependency-groups]
 dev = [
   { include-group = "test" },
+  { include-group = "docs" },
 ]
 test = [
   "pytest",
   "pytest-cov",
   "pytest-asyncio>=1.3.0",
 ]
+docs = [
+  "mkdocs",
+  "mkdocstrings[python]>=0.18",
+  "mkdocs-material",
+  "markdown-callouts",
+  "Pygments",
+]
 
 [project.urls]
-Project-URL = "https://github.com/codingjoe/VoIP"
+# https://packaging.python.org/en/latest/specifications/well-known-project-urls/#well-known-labels
+Homepage = "https://github.com/codingjoe/VoIP"
 Changelog = "https://github.com/codingjoe/VoIP/releases"
+Source = "https://github.com/codingjoe/VoIP"
+Releasenotes = "https://github.com/codingjoe/VoIP/releases/latest"
+Documentation = "https://codingjoe.dev/VoIP/"
+Issues = "https://github.com/codingjoe/VoIP/issues"
+Funding = "https://github.com/sponsors/codingjoe"
 
 [tool.setuptools_scm]
 write_to = "voip/_version.py"
