@@ -100,6 +100,8 @@ class FakeTransport:
             return self._local_addr
         if key == "peername":
             return self._peer_addr
+        if key == "ssl_object":
+            return object()  # non-None signals TLS
         return default
 
 
@@ -108,8 +110,7 @@ class FakeProtocol(SessionInitiationProtocol):
 
     def __init__(self):
         super().__init__(server_address=("127.0.0.1", 5061), aor="sip:test@example.com")
-        self.transport = FakeTransport()
-        self.local_address = ("127.0.0.1", 5061)
+        self.connection_made(FakeTransport())
         self._sent_responses: list[tuple[Response, None]] = []
 
     def send(self, message):
@@ -967,6 +968,8 @@ def make_mock_transport(
             return (host, port)
         if key == "peername":
             return peer
+        if key == "ssl_object":
+            return object()  # non-None signals TLS
         return default
 
     transport.get_extra_info.side_effect = _get_extra_info
@@ -1081,7 +1084,6 @@ class TestSIPProtocol:
         protocol.connection_made(transport)
         transport.write.reset_mock()  # clear any calls made during connection_made
         response = Response(status_code=200, reason="OK")
-        addr = ("192.0.2.1", 5061)
         protocol.send(response)
         protocol.transport.write.assert_called_once_with(bytes(response))
 
@@ -1148,6 +1150,96 @@ class TestSIPProtocol:
         response, _ = protocol._sent[0]
         assert b"m=audio" in bytes(response.body)
         assert b"RTP/SAVP 0" in bytes(response.body)
+
+    async def _setup_answer_protocol(self):
+        """Return a _CapturingSIP with a live mux, ready to answer an INVITE."""
+        loop = asyncio.get_running_loop()
+        protocol = self._CapturingSIP()
+        protocol.transport = make_mock_transport()
+        protocol.local_address = ("127.0.0.1", 5061)
+        mux = RealtimeTransportProtocol()
+        mux.public_address = loop.create_future()
+        mux.public_address.set_result(("127.0.0.1", 12000))
+        mock_rtp_transport = MagicMock()
+        mock_rtp_transport.get_extra_info.return_value = ("127.0.0.1", 12000)
+        protocol._rtp_protocol = mux
+        protocol._rtp_transport = mock_rtp_transport
+        return protocol
+
+    async def test_answer__rtp_avp_offer_returns_rtp_avp(self):
+        """When the remote offers RTP/AVP, respond with RTP/AVP (no SRTP)."""
+        protocol = await self._setup_answer_protocol()
+
+        # Build an INVITE with a plain RTP/AVP offer (no crypto).
+        invite_bytes = (
+            b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/UDP pc33.atlanta.com\r\n"
+            b"From: sip:alice@atlanta.com\r\n"
+            b"To: sip:bob@biloxi.com\r\n"
+            b"Call-ID: avp-offer-1\r\n"
+            b"CSeq: 1 INVITE\r\n"
+            b"Content-Type: application/sdp\r\n"
+            b"Content-Length: 68\r\n"
+            b"\r\n"
+            b"v=0\r\n"
+            b"o=- 0 0 IN IP4 192.0.2.1\r\n"
+            b"s=-\r\n"
+            b"c=IN IP4 192.0.2.1\r\n"
+            b"t=0 0\r\n"
+            b"m=audio 49170 RTP/AVP 0\r\n"
+        )
+        from voip.sip.messages import Request  # noqa: PLC0415
+
+        request = Request.parse(invite_bytes)
+        protocol._pending_invites.add(request.headers["Call-ID"])
+        from voip.audio import AudioCall  # noqa: PLC0415
+
+        await protocol._answer(request, AudioCall)
+        response, _ = protocol._sent[0]
+        body = bytes(response.body)
+        assert b"RTP/AVP" in body
+        assert b"RTP/SAVP" not in body
+        assert b"crypto" not in body
+
+        # The registered call handler must not have an SRTP session.
+        handler = next(iter(protocol._rtp_protocol.calls.values()))
+        assert handler.srtp is None
+
+    async def test_answer__rtp_savp_offer_returns_rtp_savp(self):
+        """When the remote offers RTP/SAVP, respond with RTP/SAVP (with SRTP)."""
+        protocol = await self._setup_answer_protocol()
+
+        invite_bytes = (
+            b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/UDP pc33.atlanta.com\r\n"
+            b"From: sip:alice@atlanta.com\r\n"
+            b"To: sip:bob@biloxi.com\r\n"
+            b"Call-ID: savp-offer-1\r\n"
+            b"CSeq: 1 INVITE\r\n"
+            b"Content-Type: application/sdp\r\n"
+            b"Content-Length: 69\r\n"
+            b"\r\n"
+            b"v=0\r\n"
+            b"o=- 0 0 IN IP4 192.0.2.1\r\n"
+            b"s=-\r\n"
+            b"c=IN IP4 192.0.2.1\r\n"
+            b"t=0 0\r\n"
+            b"m=audio 49170 RTP/SAVP 0\r\n"
+        )
+        from voip.sip.messages import Request  # noqa: PLC0415
+
+        request = Request.parse(invite_bytes)
+        protocol._pending_invites.add(request.headers["Call-ID"])
+        from voip.audio import AudioCall  # noqa: PLC0415
+
+        await protocol._answer(request, AudioCall)
+        response, _ = protocol._sent[0]
+        body = bytes(response.body)
+        assert b"RTP/SAVP" in body
+        assert b"crypto" in body
+
+        handler = next(iter(protocol._rtp_protocol.calls.values()))
+        assert handler.srtp is not None
 
     async def test_answer__copies_dialog_headers(self):
         """Copy Via, To, From, Call-ID, and CSeq headers into the 200 OK."""
@@ -1520,7 +1612,6 @@ class TestSIPProtocol:
         protocol = MySIP(server_address=("127.0.0.1", 5060), aor="sip:test@example.com")
         protocol.connection_made(MagicMock())
         request = make_invite()
-        addr = ("192.0.2.1", 5060)
         protocol._pending_invites.add(request.headers["Call-ID"])
         protocol.call_received(request)
 
@@ -1572,6 +1663,7 @@ class TestRegistration:
         transport = make_mock_transport()
         p.transport = transport
         p.local_address = ("127.0.0.1", 5061)
+        p._is_tls = True
         await p.register()
         (data,) = transport.write.call_args[0]
         assert b"From: sip:alice@example.com" in data
@@ -1732,6 +1824,7 @@ class TestRegistration:
         p.local_address = ("192.0.2.10", 5061)
         transport = make_mock_transport("192.0.2.10", 5061)
         p.transport = transport
+        p._is_tls = True
         await p.register()
         (data,) = transport.write.call_args[0]
         assert b"Via: SIP/2.0/TLS 192.0.2.10:5061;rport;branch=z9hG4bK" in data
@@ -1760,6 +1853,7 @@ class TestRegistration:
         p.local_address = "10.0.0.5", 5061
         transport = make_mock_transport("10.0.0.5", 5061)
         p.transport = transport
+        p._is_tls = True
         await p.register()
         (data,) = transport.write.call_args[0]
         assert b"Contact: <sips:alice@10.0.0.5:5061>" in data

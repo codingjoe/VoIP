@@ -97,9 +97,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
     #: RFC 3261 §11 – methods supported by this UA (used in Allow header).
     ALLOW: typing.ClassVar[str] = "INVITE, ACK, BYE, CANCEL, OPTIONS"
 
-    _pending_invites: set[str] = dataclasses.field(
-        init=False, default_factory=set
-    )
+    _pending_invites: set[str] = dataclasses.field(init=False, default_factory=set)
     _answered_calls: collections.OrderedDict[str, None] = dataclasses.field(
         init=False, default_factory=collections.OrderedDict
     )
@@ -126,6 +124,8 @@ class SessionInitiationProtocol(asyncio.Protocol):
     #: Local TCP socket address (host, port) — set when connection is established.
     local_address: tuple[str, int] = dataclasses.field(init=False)
     transport: asyncio.Transport | None = dataclasses.field(init=False, default=None)
+    #: True when the underlying transport is TLS-wrapped; False for plain TCP.
+    _is_tls: bool = dataclasses.field(init=False, default=False)
 
     def __post_init__(self):
         self.call_id = f"{uuid.uuid4()}@{socket.gethostname()}"
@@ -134,6 +134,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
         """Store the TLS/TCP transport and start RTP mux + carrier registration."""
         self.transport = transport
         self.local_address = transport.get_extra_info("sockname")
+        self._is_tls = transport.get_extra_info("ssl_object") is not None
         try:
             asyncio.get_running_loop().create_task(self._initialize())
         except RuntimeError:
@@ -337,7 +338,9 @@ class SessionInitiationProtocol(asyncio.Protocol):
                     f"Unsupported SIP request method: {request.method}"
                 )
 
-    def response_received(self, response: Response, addr: tuple[str, int] | None) -> None:
+    def response_received(
+        self, response: Response, addr: tuple[str, int] | None
+    ) -> None:
         """Handle REGISTER responses including digest auth challenges (RFC 3261 §22).
 
         Only processes responses when registration parameters are configured.
@@ -487,7 +490,11 @@ class SessionInitiationProtocol(asyncio.Protocol):
                     "call_id": call_id,
                 }
             ),
-            extra={"caller": repr(caller), "ip": peer[0] if peer else None, "call_id": call_id},
+            extra={
+                "caller": repr(caller),
+                "ip": peer[0] if peer else None,
+                "call_id": call_id,
+            },
         )
         remote_audio = next(
             (
@@ -510,8 +517,9 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 fmt=[RTPPayloadFormat.from_pt(0)],
             )
 
-        # Generate a fresh SRTP session for this call.
-        srtp_session = SRTPSession.generate()
+        # Generate a fresh SRTP session only when the negotiated transport is SRTP.
+        use_srtp = negotiated_media.proto == "RTP/SAVP"
+        srtp_session = SRTPSession.generate() if use_srtp else None
 
         # Instantiate the per-call handler and register it with the shared mux.
         call_handler = call_class(
@@ -528,20 +536,27 @@ class SessionInitiationProtocol(asyncio.Protocol):
         # delivers all unmatched traffic to this handler.
         if remote_audio is not None:
             conn = request.body.connection if request.body else None
-            remote_ip = conn.connection_address if conn else (addr[0] if addr else "0.0.0.0")
+            remote_ip = conn.connection_address if conn else "0.0.0.0"  # noqa: S104
             remote_rtp_addr: tuple[str, int] | None = (remote_ip, remote_audio.port)
         else:
             remote_rtp_addr = None
         self._rtp_protocol.register_call(remote_rtp_addr, call_handler)
         self._call_rtp_addrs[call_id] = remote_rtp_addr
 
+        # NAT hole-punch: send a dummy datagram to the carrier's RTP address so
+        # that our router creates a return-path mapping allowing the carrier's
+        # media packets to reach our UDP socket (RFC 4787 / address-restricted NAT).
+        if remote_rtp_addr is not None:
+            self._rtp_protocol.send(b"\x00", remote_rtp_addr)
+
         record_route = request.headers.get("Record-Route")
         sess_id = str(secrets.randbelow(2**32) + 1)
         rtp_public = await self._rtp_protocol.public_address
-        sdp_media_attributes = [
-            Attribute(name="sendrecv"),
-            Attribute(name="crypto", value=srtp_session.sdes_attribute),
-        ]
+        sdp_media_attributes = [Attribute(name="sendrecv")]
+        if srtp_session is not None:
+            sdp_media_attributes.append(
+                Attribute(name="crypto", value=srtp_session.sdes_attribute)
+            )
         self.send(
             Response(
                 status_code=Status["OK"],
@@ -556,7 +571,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
                         call_id,
                     ),
                     **({"Record-Route": record_route} if record_route else {}),
-                    "Contact": f"<sips:{self.local_address[0]}:{self.local_address[1]}>",
+                    "Contact": f"<{'sips' if self._is_tls else 'sip'}:{self.local_address[0]}:{self.local_address[1]}>",
                     "Allow": self.ALLOW,
                     "Supported": "replaces",
                     "Content-Type": "application/sdp",
@@ -580,7 +595,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
                         MediaDescription(
                             media="audio",
                             port=rtp_public[1],
-                            proto="RTP/SAVP",
+                            proto=negotiated_media.proto,
                             fmt=negotiated_media.fmt,
                             attributes=sdp_media_attributes,
                         )
@@ -716,12 +731,12 @@ class SessionInitiationProtocol(asyncio.Protocol):
         aor_rest = self.aor.partition(":")[2] if self.aor else ""
         user = aor_rest.partition("@")[0] if "@" in aor_rest else aor_rest
         headers = {
-            "Via": f"SIP/2.0/TLS {self.local_address[0]}:{self.local_address[1]};rport;branch={branch}",
+            "Via": f"SIP/2.0/{'TLS' if self._is_tls else 'TCP'} {self.local_address[0]}:{self.local_address[1]};rport;branch={branch}",
             "From": self.aor,
             "To": self.aor,
             "Call-ID": self.call_id,
             "CSeq": f"{self.cseq} REGISTER",
-            "Contact": f"<sips:{user}@{self.local_address[0]}:{self.local_address[1]}>",
+            "Contact": f"<{'sips' if self._is_tls else 'sip'}:{user}@{self.local_address[0]}:{self.local_address[1]}>",
             "Expires": "3600",  # 1 hour
             "Max-Forwards": "70",
         }

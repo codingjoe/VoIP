@@ -87,6 +87,7 @@ def _parse_stun_server(ctx, param, value: str | None) -> tuple[str, int] | None:
         return None
     return _parse_server(ctx, param, value, default_port=3478)
 
+
 @sip.command()
 @click.option(
     "--model",
@@ -124,13 +125,21 @@ def _parse_stun_server(ctx, param, value: str | None) -> tuple[str, int] | None:
     help="STUN server for RTP NAT traversal (use 'none' to disable).",
 )
 @click.option(
+    "--no-tls",
+    is_flag=True,
+    default=False,
+    help="Disable TLS entirely and connect in plain-text (e.g. for port 5060).",
+)
+@click.option(
     "--no-verify-tls",
     is_flag=True,
     default=False,
     help="Disable TLS certificate verification (insecure; for testing only).",
 )
 @click.pass_context
-def transcribe(ctx, model, server, aor, username, password, stun_server, no_verify_tls):
+def transcribe(
+    ctx, model, server, aor, username, password, stun_server, no_tls, no_verify_tls
+):
     """Register with a SIP carrier over TLS and transcribe incoming calls via Whisper."""
     from voip.sip.protocol import SIP
 
@@ -169,10 +178,13 @@ def transcribe(ctx, model, server, aor, username, password, stun_server, no_veri
 
     async def run():
         loop = asyncio.get_running_loop()
-        ssl_context = ssl.create_default_context()
-        if no_verify_tls:
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
+        if no_tls:
+            ssl_context = None
+        else:
+            ssl_context = ssl.create_default_context()
+            if no_verify_tls:
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
         await loop.create_connection(
             lambda: TranscribeSession(
                 server_address=server_addr,
