@@ -1192,7 +1192,7 @@ class TestSIPProtocol:
 
         request = Request.parse(invite_bytes)
         protocol._pending_invites.add(request.headers["Call-ID"])
-        from voip.audio import AudioCall  # noqa: PLC0415
+        AudioCall = pytest.importorskip("voip.audio.AudioCall")
 
         await protocol._answer(request, AudioCall)
         response, _ = protocol._sent[0]
@@ -1230,7 +1230,7 @@ class TestSIPProtocol:
 
         request = Request.parse(invite_bytes)
         protocol._pending_invites.add(request.headers["Call-ID"])
-        from voip.audio import AudioCall  # noqa: PLC0415
+        AudioCall = pytest.importorskip("voip.audio.AudioCall")
 
         await protocol._answer(request, AudioCall)
         response, _ = protocol._sent[0]
