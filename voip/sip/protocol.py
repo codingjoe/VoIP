@@ -134,6 +134,9 @@ class SessionInitiationProtocol(asyncio.Protocol):
     _rtp_transport: asyncio.DatagramTransport | None = dataclasses.field(
         init=False, default=None
     )
+    _initialize_task: asyncio.Task | None = dataclasses.field(
+        init=False, default=None
+    )
     _call_rtp_addrs: dict[str, tuple[str, int] | None] = dataclasses.field(
         init=False, default_factory=dict
     )
@@ -165,7 +168,9 @@ class SessionInitiationProtocol(asyncio.Protocol):
         self.local_address = transport.get_extra_info("sockname")
         self._is_tls = transport.get_extra_info("ssl_object") is not None
         try:
-            asyncio.get_running_loop().create_task(self._initialize())
+            self._initialize_task = asyncio.get_running_loop().create_task(
+                self._initialize()
+            )
         except RuntimeError:
             pass  # no running loop in synchronous test setups
 
@@ -507,6 +512,15 @@ class SessionInitiationProtocol(asyncio.Protocol):
             logger.error("No pending INVITE found for Call-ID %r", call_id)
             return
         self._pending_invites.discard(call_id)
+        # Ensure the RTP mux has been created before answering.  Under normal
+        # operation _initialize() completes before any INVITE arrives, but an
+        # early INVITE must wait for the mux.  Skip if already available.
+        if self._rtp_protocol is None:
+            if self._initialize_task is not None:
+                await self._initialize_task
+            if self._rtp_protocol is None:
+                logger.error("RTP mux not ready; cannot answer call")
+                return
         peer = self.transport.get_extra_info("peername") if self.transport else None
         caller = CallerID(request.headers.get("From", ""))
         logger.info(
@@ -557,14 +571,26 @@ class SessionInitiationProtocol(asyncio.Protocol):
             media=negotiated_media,
             srtp=srtp_session,
         )
-        # Determine the remote RTP address for routing.  If the INVITE SDP
-        # specifies a connection address, use that; otherwise fall back to the
-        # source IP of the SIP message.  When no remote audio port is known
-        # (no SDP), register under the ``None`` wildcard key so that the mux
-        # delivers all unmatched traffic to this handler.
-        if remote_audio is not None:
-            conn = request.body.connection if request.body else None
-            remote_ip = conn.connection_address if conn else "0.0.0.0"  # noqa: S104
+        # Determine the remote RTP address for routing.
+        # Per RFC 4566 §5.7 the effective connection address is taken from the
+        # media-level c= line first, then the session-level c= line, then the
+        # SIP peer IP as last resort.
+        #
+        # When the media port is 0, the stream is inactive (RFC 4566 §5.14);
+        # registering an address and hole-punching are skipped, and we fall
+        # through to ``remote_rtp_addr = None`` so the mux wildcard is used
+        # (if any traffic arrives at all).
+        #
+        # When no SDP was present in the INVITE we also use the wildcard so
+        # the mux delivers all unmatched traffic to this handler.
+        if remote_audio is not None and remote_audio.port != 0:
+            media_conn = remote_audio.connection
+            session_conn = request.body.connection if request.body else None
+            conn = media_conn or session_conn
+            if conn is not None:
+                remote_ip = conn.connection_address
+            else:
+                remote_ip = peer[0] if peer else "0.0.0.0"  # noqa: S104
             remote_rtp_addr: tuple[str, int] | None = (remote_ip, remote_audio.port)
         else:
             remote_rtp_addr = None
@@ -889,15 +915,6 @@ class SessionInitiationProtocol(asyncio.Protocol):
         if qop in (DigestQoP.AUTH, DigestQoP.AUTH_INT):
             return h(f"{ha1}:{nonce}:{nc}:{cnonce}:{qop}:{ha2}")
         return h(f"{ha1}:{nonce}:{ha2}")
-
-    def error_received(self, exc: Exception) -> None:
-        """Handle a transport-level error.
-
-        On Windows, sending to an unreachable TCP port may raise
-        ``ConnectionResetError``; logging and ignoring it keeps the socket
-        alive so subsequent messages are still processed.
-        """
-        logger.warning("TLS transport error (ignored): %s", exc)
 
     def connection_lost(self, exc: Exception | None) -> None:
         """Handle a lost TLS/TCP connection."""

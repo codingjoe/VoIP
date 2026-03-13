@@ -379,20 +379,35 @@ class WhisperCall(AudioCall):
         class MySession(SessionInitiationProtocol):
             def call_received(self, request: Request) -> None:
                 self.answer(request=request, call_class=WhisperCall)
+
+    To share one model instance across multiple calls (recommended to avoid
+    loading it multiple times) pass a pre-loaded :class:`~faster_whisper.WhisperModel`
+    as the *model* argument::
+
+        shared_model = WhisperModel("base")
+
+        class MyCall(WhisperCall):
+            model = shared_model
     """
 
     #: Audio buffered (in seconds) before each transcription is triggered.
     chunk_duration: ClassVar[int] = 5
 
-    #: Whisper model size (e.g. ``"base"``, ``"small"``, ``"large-v3"``).
-    model: str = dataclasses.field(default="kyutai/stt-1b-en_fr-trfs")
+    #: Whisper model.  Either a model name string (e.g. ``"base"``,
+    #: ``"small"``, ``"large-v3"``) that will be loaded on first use, or a
+    #: pre-loaded :class:`~faster_whisper.WhisperModel` instance.  Pass a
+    #: shared instance to avoid loading the model separately for each call.
+    model: str | WhisperModel = dataclasses.field(default="kyutai/stt-1b-en_fr-trfs")
     #: Loaded Whisper model instance (not part of ``__init__``).
     _whisper_model: WhisperModel = dataclasses.field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        logger.debug("Loading Whisper model %r", self.model)
-        self._whisper_model = WhisperModel(self.model)
+        if isinstance(self.model, WhisperModel):
+            self._whisper_model = self.model
+        else:
+            logger.debug("Loading Whisper model %r", self.model)
+            self._whisper_model = WhisperModel(self.model)
 
     def audio_received(self, audio: np.ndarray) -> None:
         """Schedule async transcription for a decoded audio chunk.

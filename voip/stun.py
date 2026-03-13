@@ -70,14 +70,13 @@ class STUNProtocol(asyncio.DatagramProtocol):
     )
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:  # type: ignore[override]
-        """Store the transport, create :attr:`public_address`, and start STUN discovery.
+        """Store the transport and start STUN discovery.
 
         When ``stun_server_address`` is ``None`` the socket is considered
-        ready immediately: :attr:`public_address` is resolved with the local
-        socket address and :meth:`stun_connection_made` is called right away.
-        Otherwise a STUN Binding Request is sent and
-        :meth:`stun_connection_made` will be called by :meth:`datagram_received`
-        once the server's response arrives.
+        ready immediately: :meth:`stun_connection_made` is called right away
+        with the local socket address.  Otherwise a STUN Binding Request is
+        sent and :meth:`stun_connection_made` will be called by
+        :meth:`datagram_received` once the server's response arrives.
         """
         self.transport = transport
         if self.stun_server_address is None:

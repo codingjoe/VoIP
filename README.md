@@ -21,8 +21,7 @@ Python asyncio library for SIP telephony ([RFC 3261](https://tools.ietf.org/html
 All signalling uses **SIP over TLS** (SIPS, RFC 3261 §26) and all media is
 protected with **SRTP** ([RFC 3711](https://tools.ietf.org/html/rfc3711))
 using the `AES_CM_128_HMAC_SHA1_80` cipher suite with SDES key exchange
-([RFC 4568](https://tools.ietf.org/html/rfc4568)). Unencrypted SIP or RTP
-is not supported.
+([RFC 4568](https://tools.ietf.org/html/rfc4568)).
 
 ## Setup
 
