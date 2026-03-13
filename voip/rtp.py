@@ -79,7 +79,7 @@ class RealtimeTransportProtocol(STUNProtocol):
     matching handler's :meth:`~voip.call.Call.datagram_received` method by
     remote source address.
 
-    Use ``addr=None`` in :meth:`register_call` as a wildcard catch-all for
+    Use ``address=None`` in :meth:`register_call` as a wildcard catch-all for
     calls whose remote RTP address is not known in advance (no SDP in INVITE).
     """
 
@@ -91,22 +91,22 @@ class RealtimeTransportProtocol(STUNProtocol):
         init=False, default_factory=asyncio.Future
     )
 
-    def stun_connection_made(self, transport, addr):
-        self.public_address.set_result(addr)
+    def stun_connection_made(self, transport, address):
+        self.public_address.set_result(address)
 
     def register_call(
         self,
-        addr: tuple[str, int] | None,
+        address: tuple[str, int] | None,
         handler: Call,
     ) -> None:
-        """Register *handler* for RTP traffic arriving from *addr*.
+        """Register *handler* for RTP traffic arriving from *address*.
 
-        Use ``addr=None`` as a wildcard to handle traffic from any source that
+        Use ``address=None`` as a wildcard to handle traffic from any source that
         has no dedicated routing entry (useful when the caller's RTP address is
         not known in advance from the INVITE SDP).
 
         Args:
-            addr: Remote ``(ip, port)`` as it will appear in incoming datagrams,
+            address: Remote ``(ip, port)`` as it will appear in incoming datagrams,
                 or ``None`` to register a wildcard catch-all handler.
             handler: A :class:`~voip.call.Call` instance whose
                 :meth:`~voip.call.Call.datagram_received` will be called for
@@ -116,37 +116,37 @@ class RealtimeTransportProtocol(STUNProtocol):
             json.dumps(
                 {
                     "event": "rtp_call_registered",
-                    "addr": list(addr) if addr else None,
+                    "addr": list(address) if address else None,
                     "handler": type(handler).__name__,
                 }
             ),
-            extra={"addr": addr},
+            extra={"addr": address},
         )
-        self.calls[addr] = handler
+        self.calls[address] = handler
 
-    def unregister_call(self, addr: tuple[str, int] | None) -> None:
-        """Remove the handler registered for *addr*.
+    def unregister_call(self, address: tuple[str, int] | None) -> None:
+        """Remove the handler registered for *address*.
 
         Args:
-            addr: The same key that was passed to :meth:`register_call`.
-                Silently ignored when no handler is registered for *addr*.
+            address: The same key that was passed to :meth:`register_call`.
+                Silently ignored when no handler is registered for *address*.
         """
-        if addr in self.calls:
+        if address in self.calls:
             logger.info(
                 json.dumps(
                     {
                         "event": "rtp_call_unregistered",
-                        "addr": list(addr) if addr else None,
+                        "addr": list(address) if address else None,
                     }
                 ),
-                extra={"addr": addr},
+                extra={"addr": address},
             )
-            self.calls.pop(addr)
+            self.calls.pop(address)
 
-    def packet_received(self, data: bytes, addr: tuple[str, int]) -> None:
+    def packet_received(self, data: bytes, address: tuple[str, int]) -> None:
         """Route an incoming SRTP datagram to the matching per-call handler.
 
-        Looks up *addr* in the call registry.  Falls back to the wildcard
+        Looks up *address* in the call registry.  Falls back to the wildcard
         ``None`` handler when no exact match exists.  Drops the packet with a
         debug log when no handler is registered at all.
 
@@ -154,7 +154,7 @@ class RealtimeTransportProtocol(STUNProtocol):
         authenticated and decrypted before being forwarded; packets that fail
         authentication are logged at WARNING level and discarded.
         """
-        handler = self.calls.get(addr)
+        handler = self.calls.get(address)
         if handler is None:
             handler = self.calls.get(None)
         if handler is not None:
@@ -163,23 +163,23 @@ class RealtimeTransportProtocol(STUNProtocol):
                 if decrypted is None:
                     logger.warning(
                         "SRTP authentication failed for packet from %s:%s, discarding",
-                        addr[0],
-                        addr[1],
+                        address[0],
+                        address[1],
                     )
                     return
                 data = decrypted
             logger.debug(
                 "Routing RTP packet from %s:%s to %s",
-                addr[0],
-                addr[1],
+                address[0],
+                address[1],
                 type(handler).__name__,
             )
-            handler.datagram_received(data, addr)
+            handler.datagram_received(data, address)
         else:
             logger.debug(
                 "No call handler registered for %s:%s, dropping RTP packet",
-                addr[0],
-                addr[1],
+                address[0],
+                address[1],
             )
 
 

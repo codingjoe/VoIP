@@ -21,31 +21,31 @@ except ImportError as e:
 class ConsoleMessageProcessor:
     """Protocol mixin that prints messages to stdout."""
 
-    def request_received(self, request: messages.Request, addr: tuple[str, int]):
-        self.pprint(request)
-        super().request_received(request, addr)
+    def request_received(self, request: messages.Request, address: tuple[str, int]):
+        self.pretty_print(request)
+        super().request_received(request, address)
 
-    def response_received(self, response: messages.Response, addr: tuple[str, int]):
-        self.pprint(response)
-        super().response_received(response, addr)
+    def response_received(self, response: messages.Response, address: tuple[str, int]):
+        self.pretty_print(response)
+        super().response_received(response, address)
 
     def send(self, message) -> None:
         """Send a message and print it to stdout."""
-        self.pprint(message)
+        self.pretty_print(message)
         super().send(message)
 
-    def pprint(self, msg):
-        """Pretty print the message."""
+    def pretty_print(self, message):
+        """Pretty-print the message to stdout."""
         transport = getattr(self, "transport", None)
-        addr = transport.get_extra_info("peername") if transport else None
-        if addr:
-            host = f"[{addr[0]}]" if ":" in addr[0] else addr[0]
+        address = transport.get_extra_info("peername") if transport else None
+        if address:
+            host = f"[{address[0]}]" if ":" in address[0] else address[0]
             host = click.style(host, fg="green", bold=True)
-            port = click.style(str(addr[1]), fg="yellow", bold=True)
+            port = click.style(str(address[1]), fg="yellow", bold=True)
             prefix = f"{host}:{port} - - [{time.asctime()}]"
         else:
             prefix = f"[unknown] - - [{time.asctime()}]"
-        pretty_msg = highlight(str(msg), SIPLexer(), formatters.TerminalFormatter())
+        pretty_msg = highlight(str(message), SIPLexer(), formatters.TerminalFormatter())
         click.echo(f"{prefix} {pretty_msg}")
 
 
@@ -218,16 +218,16 @@ def transcribe(
 
     # Determine outbound proxy address: --proxy overrides, otherwise use AOR host.
     if proxy is not None:
-        proxy_addr = _parse_hostport(ctx, None, proxy)
+        proxy_address = _parse_hostport(ctx, None, proxy)
     else:
         # Default port: SIP_TCP_PORT for sip scheme, SIP_TLS_PORT for sips.
         default_port = SIP_TCP_PORT if scheme == "sip" else SIP_TLS_PORT
         port = aor_port if aor_port is not None else default_port
-        proxy_addr = (aor_host, port)
+        proxy_address = (aor_host, port)
 
     # Transport: port 5060 (SIP_TCP_PORT) → plain TCP; any other port → TLS.
     # --no-tls always overrides this auto-detection.
-    use_tls = not no_tls and proxy_addr[1] != SIP_TCP_PORT
+    use_tls = not no_tls and proxy_address[1] != SIP_TCP_PORT
 
     # The AOR stored in the protocol must NOT include the port
     # (AOR is scheme:user@host per RFC 3261 §10).
@@ -270,14 +270,14 @@ def transcribe(
             ssl_context = None
         await loop.create_connection(
             lambda: TranscribeSession(
-                outbound_proxy=proxy_addr,
+                outbound_proxy=proxy_address,
                 aor=normalized_aor,
                 username=effective_username,
                 password=password,
                 rtp_stun_server_address=stun_server,
             ),
-            host=proxy_addr[0],
-            port=proxy_addr[1],
+            host=proxy_address[0],
+            port=proxy_address[1],
             ssl=ssl_context,
         )
         await asyncio.Future()

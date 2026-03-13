@@ -91,11 +91,11 @@ class FakeTransport:
 
     def __init__(
         self,
-        local_addr: tuple[str, int] = ("127.0.0.1", 5061),
-        peer_addr: tuple[str, int] = ("192.0.2.1", 5061),
+        local_address: tuple[str, int] = ("127.0.0.1", 5061),
+        peer_address: tuple[str, int] = ("192.0.2.1", 5061),
     ):
-        self._local_addr = local_addr
-        self._peer_addr = peer_addr
+        self._local_address = local_address
+        self._peer_address = peer_address
         self.sent: list[bytes] = []
 
     def write(self, data: bytes) -> None:
@@ -103,9 +103,9 @@ class FakeTransport:
 
     def get_extra_info(self, key, default=None):
         if key == "sockname":
-            return self._local_addr
+            return self._local_address
         if key == "peername":
-            return self._peer_addr
+            return self._peer_address
         if key == "ssl_object":
             return object()  # non-None signals TLS
         return default
@@ -133,11 +133,11 @@ class ConcreteProtocol(SessionInitiationProtocol):
         self.requests = []
         self.responses = []
 
-    def request_received(self, request, addr):
-        self.requests.append((request, addr))
+    def request_received(self, request, address):
+        self.requests.append((request, address))
 
-    def response_received(self, response, addr):
-        self.responses.append((response, addr))
+    def response_received(self, response, address):
+        self.responses.append((response, address))
 
 
 class TestMaskCaller:
@@ -225,7 +225,7 @@ class TestCallerID:
     def test_data_received__request(self):
         """Dispatch a received SIP request to request_received via TCP stream."""
         protocol = ConcreteProtocol()
-        transport = FakeTransport(peer_addr=("192.0.2.1", 5060))
+        transport = FakeTransport(peer_address=("192.0.2.1", 5060))
         protocol.transport = transport
         data = (
             b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
@@ -234,23 +234,23 @@ class TestCallerID:
         )
         protocol.data_received(data)
         assert len(protocol.requests) == 1
-        request, called_addr = protocol.requests[0]
+        request, called_address = protocol.requests[0]
         assert isinstance(request, Request)
         assert request.method == "INVITE"
-        assert called_addr == ("192.0.2.1", 5060)
+        assert called_address == ("192.0.2.1", 5060)
 
     def test_data_received__response(self):
         """Dispatch a received SIP response to response_received via TCP stream."""
         protocol = ConcreteProtocol()
-        transport = FakeTransport(peer_addr=("192.0.2.1", 5060))
+        transport = FakeTransport(peer_address=("192.0.2.1", 5060))
         protocol.transport = transport
         data = b"SIP/2.0 200 OK\r\nVia: SIP/2.0/TLS pc33.atlanta.com\r\n\r\n"
         protocol.data_received(data)
         assert len(protocol.responses) == 1
-        response, called_addr = protocol.responses[0]
+        response, called_address = protocol.responses[0]
         assert isinstance(response, Response)
         assert response.status_code == 200
-        assert called_addr == ("192.0.2.1", 5060)
+        assert called_address == ("192.0.2.1", 5060)
 
     def test_connection_lost__no_exception(self):
         """Handle a clean connection close without raising."""
@@ -298,7 +298,7 @@ class TestRinging:
     def test_ringing__includes_to_tag(self):
         """Include the To tag in a 180 Ringing response (RFC 3261 §8.2.6.2)."""
         protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
+        address = ("192.0.2.1", 5060)
         request = Request(
             method="INVITE",
             uri="sip:bob@biloxi.com",
@@ -310,7 +310,7 @@ class TestRinging:
                 "CSeq": "1 INVITE",
             },
         )
-        protocol.request_received(request, addr)
+        protocol.request_received(request, address)
         protocol.ringing(request)
         assert len(protocol._sent_responses) == 1
         response, _ = protocol._sent_responses[0]
@@ -336,7 +336,7 @@ class TestReject:
     def test_reject__includes_to_tag(self):
         """Include the To tag in a reject response (RFC 3261 §8.2.6.2)."""
         protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
+        address = ("192.0.2.1", 5060)
         request = Request(
             method="INVITE",
             uri="sip:bob@biloxi.com",
@@ -348,7 +348,7 @@ class TestReject:
                 "CSeq": "1 INVITE",
             },
         )
-        protocol.request_received(request, addr)
+        protocol.request_received(request, address)
         protocol.reject(request)
         assert len(protocol._sent_responses) == 1
         response, _ = protocol._sent_responses[0]
@@ -358,13 +358,13 @@ class TestReject:
     def test_reject__cleans_up_to_tag(self):
         """Remove the To tag after rejecting (no lingering state)."""
         protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
+        address = ("192.0.2.1", 5060)
         request = Request(
             method="INVITE",
             uri="sip:bob@biloxi.com",
             headers={"Call-ID": "reject-cleanup-1", "To": "sip:bob@biloxi.com"},
         )
-        protocol.request_received(request, addr)
+        protocol.request_received(request, address)
         assert "reject-cleanup-1" in protocol._to_tags
         protocol.reject(request)
         assert "reject-cleanup-1" not in protocol._to_tags
@@ -387,7 +387,7 @@ class TestBYEHandler:
     def test_bye__includes_to_tag_when_present(self):
         """Include the stored To tag in a 200 OK BYE response."""
         protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
+        address = ("192.0.2.1", 5060)
         invite = Request(
             method="INVITE",
             uri="sip:bob@biloxi.com",
@@ -399,7 +399,7 @@ class TestBYEHandler:
                 "CSeq": "1 INVITE",
             },
         )
-        protocol.request_received(invite, addr)
+        protocol.request_received(invite, address)
         tag = protocol._to_tags["bye-tag-test-1"]
         bye = Request(
             method="BYE",
@@ -412,7 +412,7 @@ class TestBYEHandler:
                 "CSeq": "2 BYE",
             },
         )
-        protocol.request_received(bye, addr)
+        protocol.request_received(bye, address)
         assert len(protocol._sent_responses) == 1
         response, _ = protocol._sent_responses[0]
         assert response.status_code == 200
@@ -421,26 +421,26 @@ class TestBYEHandler:
     def test_bye__cleans_up_to_tag(self):
         """Remove the To tag from state after processing BYE."""
         protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
+        address = ("192.0.2.1", 5060)
         invite = Request(
             method="INVITE",
             uri="sip:bob@biloxi.com",
             headers={"Call-ID": "bye-cleanup-1", "To": "sip:bob@biloxi.com"},
         )
-        protocol.request_received(invite, addr)
+        protocol.request_received(invite, address)
         assert "bye-cleanup-1" in protocol._to_tags
         bye = Request(
             method="BYE",
             uri="sip:bob@biloxi.com",
             headers={"Call-ID": "bye-cleanup-1", "To": "sip:bob@biloxi.com"},
         )
-        protocol.request_received(bye, addr)
+        protocol.request_received(bye, address)
         assert "bye-cleanup-1" not in protocol._to_tags
 
     def test_bye__without_prior_to_tag(self):
         """Send a 200 OK BYE response without tag when no To tag is stored."""
         protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
+        address = ("192.0.2.1", 5060)
         bye = Request(
             method="BYE",
             uri="sip:bob@biloxi.com",
@@ -450,7 +450,7 @@ class TestBYEHandler:
                 "CSeq": "2 BYE",
             },
         )
-        protocol.request_received(bye, addr)
+        protocol.request_received(bye, address)
         assert len(protocol._sent_responses) == 1
         response, _ = protocol._sent_responses[0]
         assert response.status_code == 200
@@ -503,7 +503,7 @@ class TestAnswer:
     async def test_answer__selects_pcma_from_offer(self, fake_rtp_transport):
         """Select PCMA (8) when the remote SDP offers both PCMA and PCMU."""
         protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
+        address = ("192.0.2.1", 5060)
         sdp_body = SessionDescription.parse(
             b"v=0\r\n"
             b"o=- 0 0 IN IP4 192.0.2.1\r\n"
@@ -513,7 +513,7 @@ class TestAnswer:
             b"m=audio 49170 RTP/AVP 8 0\r\n"
         )
         invite = self._make_invite("answer-pcma-1", sdp_body)
-        protocol.request_received(invite, addr)
+        protocol.request_received(invite, address)
         await self._run_answer(protocol, invite, fake_rtp_transport)
         assert protocol._sent_responses
         response, _ = protocol._sent_responses[-1]
@@ -528,7 +528,7 @@ class TestAnswer:
     async def test_answer__selects_pcmu_when_only_option(self, fake_rtp_transport):
         """Select PCMU (0) when the remote SDP offers only PCMU."""
         protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
+        address = ("192.0.2.1", 5060)
         sdp_body = SessionDescription.parse(
             b"v=0\r\n"
             b"o=- 0 0 IN IP4 192.0.2.1\r\n"
@@ -538,7 +538,7 @@ class TestAnswer:
             b"m=audio 49170 RTP/AVP 0\r\n"
         )
         invite = self._make_invite("answer-pcmu-1", sdp_body)
-        protocol.request_received(invite, addr)
+        protocol.request_received(invite, address)
         await self._run_answer(protocol, invite, fake_rtp_transport)
         response, _ = protocol._sent_responses[-1]
         assert response.body.media[0].fmt[0].payload_type == 0  # PCMU when only option
@@ -547,7 +547,7 @@ class TestAnswer:
     async def test_answer__selects_opus_from_offer(self, fake_rtp_transport):
         """Select Opus (111) when the remote SDP offers Opus alongside PCMA and PCMU."""
         protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
+        address = ("192.0.2.1", 5060)
         sdp_body = SessionDescription.parse(
             b"v=0\r\n"
             b"o=- 0 0 IN IP4 192.0.2.1\r\n"
@@ -558,7 +558,7 @@ class TestAnswer:
             b"a=rtpmap:111 opus/48000/2\r\n"
         )
         invite = self._make_invite("answer-opus-1", sdp_body)
-        protocol.request_received(invite, addr)
+        protocol.request_received(invite, address)
         await self._run_answer(protocol, invite, fake_rtp_transport)
         response, _ = protocol._sent_responses[-1]
         assert response.body.media[0].fmt[0].payload_type == 111
@@ -568,7 +568,7 @@ class TestAnswer:
     async def test_answer__selects_g722_when_no_opus(self, fake_rtp_transport):
         """Select G.722 (9) when the remote SDP offers G.722 and PCMA but not Opus."""
         protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
+        address = ("192.0.2.1", 5060)
         sdp_body = SessionDescription.parse(
             b"v=0\r\n"
             b"o=- 0 0 IN IP4 192.0.2.1\r\n"
@@ -578,7 +578,7 @@ class TestAnswer:
             b"m=audio 49170 RTP/AVP 9 8\r\n"
         )
         invite = self._make_invite("answer-g722-1", sdp_body)
-        protocol.request_received(invite, addr)
+        protocol.request_received(invite, address)
         await self._run_answer(protocol, invite, fake_rtp_transport)
         response, _ = protocol._sent_responses[-1]
         assert response.body.media[0].fmt[0].payload_type == 9  # G.722
@@ -589,7 +589,7 @@ class TestAnswer:
     ):
         """Select Opus by codec name match when remote uses a non-standard payload type."""
         protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
+        address = ("192.0.2.1", 5060)
         sdp_body = SessionDescription.parse(
             b"v=0\r\n"
             b"o=- 0 0 IN IP4 192.0.2.1\r\n"
@@ -600,7 +600,7 @@ class TestAnswer:
             b"a=rtpmap:100 opus/48000/2\r\n"
         )
         invite = self._make_invite("answer-opus-name-1", sdp_body)
-        protocol.request_received(invite, addr)
+        protocol.request_received(invite, address)
         await self._run_answer(protocol, invite, fake_rtp_transport)
         response, _ = protocol._sent_responses[-1]
         assert (
@@ -611,7 +611,7 @@ class TestAnswer:
     async def test_answer__unsupported_codec__raises(self, fake_rtp_transport):
         """Raise NotImplementedError when the INVITE offers only unsupported codecs."""
         protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
+        address = ("192.0.2.1", 5060)
         sdp_body = SessionDescription.parse(
             b"v=0\r\n"
             b"o=- 0 0 IN IP4 192.0.2.1\r\n"
@@ -622,7 +622,7 @@ class TestAnswer:
             b"a=rtpmap:126 telephone-event/8000\r\n"
         )
         invite = self._make_invite("answer-fallback-1", sdp_body)
-        protocol.request_received(invite, addr)
+        protocol.request_received(invite, address)
         with pytest.raises(NotImplementedError):
             await self._run_answer(protocol, invite, fake_rtp_transport)
 
@@ -630,9 +630,9 @@ class TestAnswer:
     async def test_answer__no_sdp_falls_back_to_default(self, fake_rtp_transport):
         """Use payload type 0 (PCMU) with SAVP when the INVITE has no SDP body."""
         protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
+        address = ("192.0.2.1", 5060)
         invite = self._make_invite("answer-no-sdp-1")
-        protocol.request_received(invite, addr)
+        protocol.request_received(invite, address)
         await self._run_answer(protocol, invite, fake_rtp_transport)
         response, _ = protocol._sent_responses[-1]
         assert response.body.media[0].fmt[0].payload_type == 0  # PCMU default
@@ -641,7 +641,7 @@ class TestAnswer:
     async def test_answer__includes_to_tag_in_200_ok(self, fake_rtp_transport):
         """Include the locally generated To tag in the 200 OK response."""
         protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
+        address = ("192.0.2.1", 5060)
         sdp_body = SessionDescription.parse(
             b"v=0\r\n"
             b"o=- 0 0 IN IP4 192.0.2.1\r\n"
@@ -651,7 +651,7 @@ class TestAnswer:
             b"m=audio 49170 RTP/AVP 8\r\n"
         )
         invite = self._make_invite("answer-tag-1", sdp_body)
-        protocol.request_received(invite, addr)
+        protocol.request_received(invite, address)
         stored_tag = protocol._to_tags["answer-tag-1"]
         await self._run_answer(protocol, invite, fake_rtp_transport)
         response, _ = protocol._sent_responses[-1]
@@ -672,9 +672,9 @@ class TestAnswer:
     async def test_answer__includes_contact_header(self, fake_rtp_transport):
         """Include a Contact header with the local SIP address in 200 OK."""
         protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
+        address = ("192.0.2.1", 5060)
         invite = self._make_invite("answer-contact-1")
-        protocol.request_received(invite, addr)
+        protocol.request_received(invite, address)
         await self._run_answer(protocol, invite, fake_rtp_transport)
         response, _ = protocol._sent_responses[-1]
         assert "Contact" in response.headers
@@ -687,9 +687,9 @@ class TestAnswer:
     async def test_answer__includes_allow_header(self, fake_rtp_transport):
         """Include an Allow header listing supported SIP methods in 200 OK."""
         protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
+        address = ("192.0.2.1", 5060)
         invite = self._make_invite("answer-allow-1")
-        protocol.request_received(invite, addr)
+        protocol.request_received(invite, address)
         await self._run_answer(protocol, invite, fake_rtp_transport)
         response, _ = protocol._sent_responses[-1]
         assert "Allow" in response.headers
@@ -700,9 +700,9 @@ class TestAnswer:
     async def test_answer__includes_supported_header(self, fake_rtp_transport):
         """Include a Supported header in the 200 OK response."""
         protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
+        address = ("192.0.2.1", 5060)
         invite = self._make_invite("answer-supported-1")
-        protocol.request_received(invite, addr)
+        protocol.request_received(invite, address)
         await self._run_answer(protocol, invite, fake_rtp_transport)
         response, _ = protocol._sent_responses[-1]
         assert "Supported" in response.headers
@@ -711,10 +711,10 @@ class TestAnswer:
     async def test_answer__echoes_record_route(self, fake_rtp_transport):
         """Echo the Record-Route header from the INVITE in the 200 OK."""
         protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
+        address = ("192.0.2.1", 5060)
         route = "<sip:proxy.example.com;lr>"
         invite = self._make_invite("answer-rr-1", record_route=route)
-        protocol.request_received(invite, addr)
+        protocol.request_received(invite, address)
         await self._run_answer(protocol, invite, fake_rtp_transport)
         response, _ = protocol._sent_responses[-1]
         assert response.headers.get("Record-Route") == route
@@ -723,9 +723,9 @@ class TestAnswer:
     async def test_answer__omits_record_route_when_absent(self, fake_rtp_transport):
         """Omit the Record-Route header when the INVITE contains none."""
         protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
+        address = ("192.0.2.1", 5060)
         invite = self._make_invite("answer-no-rr-1")
-        protocol.request_received(invite, addr)
+        protocol.request_received(invite, address)
         await self._run_answer(protocol, invite, fake_rtp_transport)
         response, _ = protocol._sent_responses[-1]
         assert "Record-Route" not in response.headers
@@ -735,7 +735,7 @@ class TestCANCELHandler:
     def test_cancel__sends_200_ok_for_cancel(self):
         """Send a 200 OK response to the CANCEL request (RFC 3261 §9.2)."""
         protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
+        address = ("192.0.2.1", 5060)
         invite = Request(
             method="INVITE",
             uri="sip:bob@biloxi.com",
@@ -747,7 +747,7 @@ class TestCANCELHandler:
                 "CSeq": "1 INVITE",
             },
         )
-        protocol.request_received(invite, addr)
+        protocol.request_received(invite, address)
         cancel = Request(
             method="CANCEL",
             uri="sip:bob@biloxi.com",
@@ -759,7 +759,7 @@ class TestCANCELHandler:
                 "CSeq": "1 CANCEL",
             },
         )
-        protocol.request_received(cancel, addr)
+        protocol.request_received(cancel, address)
         ok_response = next(
             (r for r, _ in protocol._sent_responses if r.status_code == 200), None
         )
@@ -768,7 +768,7 @@ class TestCANCELHandler:
     def test_cancel__sends_487_request_terminated_for_invite(self):
         """Send a 487 Request Terminated for the pending INVITE (RFC 3261 §9.2)."""
         protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
+        address = ("192.0.2.1", 5060)
         invite = Request(
             method="INVITE",
             uri="sip:bob@biloxi.com",
@@ -780,7 +780,7 @@ class TestCANCELHandler:
                 "CSeq": "1 INVITE",
             },
         )
-        protocol.request_received(invite, addr)
+        protocol.request_received(invite, address)
         cancel = Request(
             method="CANCEL",
             uri="sip:bob@biloxi.com",
@@ -792,7 +792,7 @@ class TestCANCELHandler:
                 "CSeq": "1 CANCEL",
             },
         )
-        protocol.request_received(cancel, addr)
+        protocol.request_received(cancel, address)
         terminated = next(
             (r for r, _ in protocol._sent_responses if r.status_code == 487), None
         )
@@ -802,7 +802,7 @@ class TestCANCELHandler:
     def test_cancel__487_includes_to_tag(self):
         """Include the stored To tag in the 487 Request Terminated response."""
         protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
+        address = ("192.0.2.1", 5060)
         invite = Request(
             method="INVITE",
             uri="sip:bob@biloxi.com",
@@ -814,7 +814,7 @@ class TestCANCELHandler:
                 "CSeq": "1 INVITE",
             },
         )
-        protocol.request_received(invite, addr)
+        protocol.request_received(invite, address)
         tag = protocol._to_tags["cancel-tag-1"]
         cancel = Request(
             method="CANCEL",
@@ -827,7 +827,7 @@ class TestCANCELHandler:
                 "CSeq": "1 CANCEL",
             },
         )
-        protocol.request_received(cancel, addr)
+        protocol.request_received(cancel, address)
         terminated = next(
             (r for r, _ in protocol._sent_responses if r.status_code == 487), None
         )
@@ -837,7 +837,7 @@ class TestCANCELHandler:
     def test_cancel__cleans_up_state(self):
         """Remove Call-ID from _answered_calls, _pending_invites, and _to_tags."""
         protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
+        address = ("192.0.2.1", 5060)
         invite = Request(
             method="INVITE",
             uri="sip:bob@biloxi.com",
@@ -849,7 +849,7 @@ class TestCANCELHandler:
                 "CSeq": "1 INVITE",
             },
         )
-        protocol.request_received(invite, addr)
+        protocol.request_received(invite, address)
         assert "cancel-cleanup-1" in protocol._answered_calls
         assert "cancel-cleanup-1" in protocol._to_tags
         cancel = Request(
@@ -863,7 +863,7 @@ class TestCANCELHandler:
                 "CSeq": "1 CANCEL",
             },
         )
-        protocol.request_received(cancel, addr)
+        protocol.request_received(cancel, address)
         assert "cancel-cleanup-1" not in protocol._answered_calls
         assert "cancel-cleanup-1" not in protocol._pending_invites
         assert "cancel-cleanup-1" not in protocol._to_tags
@@ -871,7 +871,7 @@ class TestCANCELHandler:
     def test_cancel__no_pending_invite_skips_487(self):
         """Skip sending 487 when no pending INVITE address is found."""
         protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
+        address = ("192.0.2.1", 5060)
         cancel = Request(
             method="CANCEL",
             uri="sip:bob@biloxi.com",
@@ -883,7 +883,7 @@ class TestCANCELHandler:
                 "CSeq": "1 CANCEL",
             },
         )
-        protocol.request_received(cancel, addr)
+        protocol.request_received(cancel, address)
         assert all(r.status_code != 487 for r, _ in protocol._sent_responses)
         ok_responses = [r for r, _ in protocol._sent_responses if r.status_code == 200]
         assert len(ok_responses) == 1
@@ -891,7 +891,7 @@ class TestCANCELHandler:
     def test_cancel__calls_cancel_received_hook(self):
         """Invoke cancel_received hook after handling a CANCEL request."""
         protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
+        address = ("192.0.2.1", 5060)
         received = []
         protocol.cancel_received = lambda req: received.append(req)
         cancel = Request(
@@ -905,7 +905,7 @@ class TestCANCELHandler:
                 "CSeq": "1 CANCEL",
             },
         )
-        protocol.request_received(cancel, addr)
+        protocol.request_received(cancel, address)
         assert len(received) == 1
         assert received[0].method == "CANCEL"
 
@@ -1091,8 +1091,8 @@ class TestSIPProtocol:
         protocol = MySIP(outbound_proxy=("127.0.0.1", 5060), aor="sip:test@example.com")
         protocol.connection_made(MagicMock())
         request = make_invite()
-        addr = ("192.0.2.1", 5060)
-        protocol.request_received(request, addr)
+        address = ("192.0.2.1", 5060)
+        protocol.request_received(request, address)
         assert len(received) == 1
         assert received[0] is request
         assert request.headers["Call-ID"] in protocol._pending_invites
@@ -1288,7 +1288,7 @@ class TestSIPProtocol:
 
         @dataclasses.dataclass
         class DatagramCapture(Call):
-            def datagram_received(self, data: bytes, addr) -> None:
+            def datagram_received(self, data: bytes, address) -> None:
                 # RTP fixed header is 12 bytes; extract raw payload.
                 received_payloads.append(data[12:])
 
@@ -1335,7 +1335,7 @@ class TestSIPProtocol:
 
         @dataclasses.dataclass
         class DatagramCapture(Call):
-            def datagram_received(self, data: bytes, addr) -> None:
+            def datagram_received(self, data: bytes, address) -> None:
                 received_payloads.append(data[12:])
 
         loop = asyncio.get_running_loop()
@@ -1853,7 +1853,7 @@ class TestRegistration:
         branch2 = re.search(rb"branch=(z9hG4bK[0-9a-f]{32})", data2).group(1)
         assert branch1 != branch2
 
-    async def test_register__contact_uses_local_addr(self):
+    async def test_register__contact_uses_local_address(self):
         """Contact header uses sip:;transport=tls when AOR is sip: over TLS."""
         p = make_register_session()
         p.local_address = "10.0.0.5", 5061
@@ -1910,7 +1910,7 @@ class TestRegistration:
         received = []
 
         class ConcreteSession(SessionInitiationProtocol):
-            def response_received(self, response, addr):
+            def response_received(self, response, address):
                 received.append(response)
 
         p = ConcreteSession(

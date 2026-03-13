@@ -54,12 +54,12 @@ class STUNProtocol(asyncio.DatagramProtocol):
             def stun_connection_made(
                 self,
                 transport: asyncio.DatagramTransport,
-                addr: tuple[str, int],
+                address: tuple[str, int],
             ) -> None:
-                # socket is ready; addr is the reachable (public or local) address
+                # socket is ready; address is the reachable (public or local) address
                 ...
 
-            def packet_received(self, data: bytes, addr: tuple[str, int]) -> None:
+            def packet_received(self, data: bytes, address: tuple[str, int]) -> None:
                 process(data)
     """
 
@@ -88,14 +88,14 @@ class STUNProtocol(asyncio.DatagramProtocol):
     def stun_connection_made(
         self,
         transport: asyncio.DatagramTransport,
-        addr: tuple[str, int],
+        address: tuple[str, int],
     ) -> None:
         """Called when the socket is ready and the reachable address is known.
 
-        When STUN is configured, *addr* is the **public** ``(ip, port)``
+        When STUN is configured, *address* is the **public** ``(ip, port)``
         discovered from the STUN Binding Response and this method is called
         by :meth:`datagram_received`.  When ``stun_server_address=None``,
-        *addr* is the local socket address and this method is called
+        *address* is the local socket address and this method is called
         synchronously from :meth:`connection_made`.
 
         Subclasses override this method to trigger protocol-specific
@@ -103,26 +103,26 @@ class STUNProtocol(asyncio.DatagramProtocol):
 
         Args:
             transport: The UDP transport bound to this protocol.
-            addr: Reachable ``(host, port)`` — public when STUN is used,
+            address: Reachable ``(host, port)`` — public when STUN is used,
                 local otherwise.
         """  # noqa: D401
 
-    def send(self, data: bytes, addr: tuple[str, int]) -> None:
+    def send(self, data: bytes, address: tuple[str, int]) -> None:
         """Send a raw datagram through the shared UDP socket.
 
         Args:
             data: Raw bytes to transmit.
-            addr: Destination ``(host, port)``.
+            address: Destination ``(host, port)``.
         """
         if self.transport is not None:
-            self.transport.sendto(data, addr)
+            self.transport.sendto(data, address)
 
     def close(self) -> None:
         """Close the underlying UDP transport."""
         if self.transport is not None:
             self.transport.close()
 
-    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+    def datagram_received(self, data: bytes, address: tuple[str, int]) -> None:
         """Demultiplex STUN responses (RFC 7983) from other traffic.
 
         Datagrams with first byte in ``[0, 3]`` are dispatched to the STUN
@@ -137,7 +137,7 @@ class STUNProtocol(asyncio.DatagramProtocol):
             ):
                 self._parse_stun_response(data)
             return
-        self.packet_received(data, addr)
+        self.packet_received(data, address)
 
     def connection_lost(self, exc: Exception | None) -> None:
         """Clear the internal transport reference on disconnect."""
@@ -153,12 +153,12 @@ class STUNProtocol(asyncio.DatagramProtocol):
         """
         logger.warning("UDP transport error (ignored): %s", exc)
 
-    def packet_received(self, data: bytes, addr: tuple[str, int]) -> None:
+    def packet_received(self, data: bytes, address: tuple[str, int]) -> None:
         """Override in subclasses to handle non-STUN datagrams.
 
         Args:
             data: Raw datagram payload (first byte ≥ 4, not a STUN packet).
-            addr: Source ``(host, port)`` of the datagram.
+            address: Source ``(host, port)`` of the datagram.
         """
 
     def _send_stun_request(self) -> None:

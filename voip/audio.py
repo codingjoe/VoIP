@@ -249,7 +249,7 @@ class AudioCall(Call):
             f"Supported: {[c.encoding_name for c in cls.PREFERRED_CODECS]!r}"
         )
 
-    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+    def datagram_received(self, data: bytes, address: tuple[str, int]) -> None:
         """Buffer *data* as an RTP packet; emit when the chunk threshold is reached."""
         try:
             packet = RTPPacket.parse(data)

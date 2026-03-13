@@ -55,7 +55,7 @@ class TestWhisperCall:
 
         assert issubclass(WhisperCall, AudioCall)
 
-    def test_class_attrs__chunk_duration(self):
+    def test_chunk_duration__default_value(self):
         """chunk_duration controls how many seconds are buffered before transcription."""
         assert WhisperCall.chunk_duration == 5
 

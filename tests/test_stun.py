@@ -70,12 +70,12 @@ class TestSTUNProtocol:
         assert issubclass(STUNProtocol, asyncio.DatagramProtocol)
 
     async def test_connection_made__stun_disabled__calls_stun_connection_made(self):
-        """When stun_server_address is None, stun_connection_made is called with the local addr."""
+        """When stun_server_address is None, stun_connection_made is called with the local address."""
         received: list[tuple] = []
 
         class ConcreteProto(STUNProtocol):
-            def stun_connection_made(self, transport, addr):
-                received.append((transport, addr))
+            def stun_connection_made(self, transport, address):
+                received.append((transport, address))
 
         proto = ConcreteProto(stun_server_address=None)
         transport = unittest.mock.MagicMock(spec=asyncio.DatagramTransport)
@@ -103,7 +103,7 @@ class TestSTUNProtocol:
         received: list[bytes] = []
 
         class ConcreteProto(STUNProtocol):
-            def packet_received(self, data, addr):
+            def packet_received(self, data, address):
                 received.append(data)
 
         transport = unittest.mock.MagicMock(spec=asyncio.DatagramTransport)
@@ -118,7 +118,7 @@ class TestSTUNProtocol:
         received: list[bytes] = []
 
         class ConcreteProto(STUNProtocol):
-            def packet_received(self, data, addr):
+            def packet_received(self, data, address):
                 received.append(data)
 
         transport = unittest.mock.MagicMock(spec=asyncio.DatagramTransport)
@@ -137,7 +137,7 @@ class TestSTUNProtocol:
                 nonlocal server_transport
                 server_transport = transport
 
-            def datagram_received(self, data, addr):
+            def datagram_received(self, data, address):
                 received_requests.append(data)
                 tid = data[8:20]
                 ip_int = (203 << 24) | (0 << 16) | (113 << 8) | 5
@@ -156,22 +156,22 @@ class TestSTUNProtocol:
                     )
                     + attr
                 )
-                server_transport.sendto(response, addr)
+                server_transport.sendto(response, address)
 
         loop = asyncio.get_running_loop()
         server_t, _ = await loop.create_datagram_endpoint(
             _StubSTUNServer, local_addr=("127.0.0.1", 0)
         )
-        server_addr = server_t.get_extra_info("sockname")
+        server_address = server_t.get_extra_info("sockname")
 
         done: asyncio.Future[tuple[str, int]] = loop.create_future()
 
         class TrackingProto(STUNProtocol):
-            def stun_connection_made(self, transport, addr):
+            def stun_connection_made(self, transport, address):
                 if not done.done():
-                    done.set_result(addr)
+                    done.set_result(address)
 
-        proto = TrackingProto(stun_server_address=server_addr)
+        proto = TrackingProto(stun_server_address=server_address)
         client_t, _ = await loop.create_datagram_endpoint(
             lambda: proto, local_addr=("127.0.0.1", 0)
         )

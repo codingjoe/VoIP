@@ -68,21 +68,21 @@ class Call:
     #: SRTP session for encrypting and decrypting media (set by the SIP layer).
     srtp: SRTPSession | None = None
 
-    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+    def datagram_received(self, data: bytes, address: tuple[str, int]) -> None:
         """Handle a raw RTP datagram.  Override in subclasses to process media."""
 
-    def send_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
+    def send_datagram(self, data: bytes, address: tuple[str, int]) -> None:
         """Send a datagram through the shared RTP socket.
 
         Encrypts the datagram with the call's SRTP session when one is set.
 
         Args:
             data: Raw RTP bytes to send.
-            addr: Destination ``(host, port)``.
+            address: Destination ``(host, port)``.
         """
         if self.srtp is not None:
             data = self.srtp.encrypt(data)
-        self.rtp.send(data, addr)
+        self.rtp.send(data, address)
 
     async def hang_up(self) -> None:
         """Terminate the call by sending a SIP BYE request.

@@ -109,19 +109,19 @@ class TestRealtimeTransportProtocol:
 
     @pytest.mark.asyncio
     async def test_datagram_received__routes_to_handler(self):
-        """Non-STUN datagrams from registered addr are forwarded to the handler."""
+        """Non-STUN datagrams from registered address are forwarded to the handler."""
         routed: list[bytes] = []
 
         class RecordCall(Call):
-            def datagram_received(self, data: bytes, addr):
+            def datagram_received(self, data: bytes, address):
                 routed.append(data)
 
         mux = RealtimeTransportProtocol()
         handler = RecordCall(rtp=mux, sip=MagicMock())
-        remote_addr = ("127.0.0.1", 5004)
-        mux.register_call(remote_addr, handler)
+        remote_address = ("127.0.0.1", 5004)
+        mux.register_call(remote_address, handler)
         rtp_packet = make_rtp_packet(payload=b"audio")
-        mux.datagram_received(rtp_packet, remote_addr)
+        mux.datagram_received(rtp_packet, remote_address)
         assert routed == [rtp_packet]
 
     @pytest.mark.asyncio
@@ -136,7 +136,7 @@ class TestRealtimeTransportProtocol:
         routed: list[bytes] = []
 
         class RecordCall(Call):
-            def datagram_received(self, data: bytes, addr):
+            def datagram_received(self, data: bytes, address):
                 routed.append(data)
 
         mux = RealtimeTransportProtocol()
@@ -159,7 +159,7 @@ class TestRealtimeTransportProtocol:
                 nonlocal server_transport
                 server_transport = transport
 
-            def datagram_received(self, data, addr):
+            def datagram_received(self, data, address):
                 received_requests.append(data)
                 tid = data[8:20]
                 # Build XOR-MAPPED-ADDRESS for 203.0.113.5:54321 (TEST-NET-3, RFC 5737)
@@ -179,15 +179,15 @@ class TestRealtimeTransportProtocol:
                     )
                     + attr
                 )
-                server_transport.sendto(response, addr)
+                server_transport.sendto(response, address)
 
         loop = asyncio.get_running_loop()
         server_t, _ = await loop.create_datagram_endpoint(
             _StubSTUNServer, local_addr=("127.0.0.1", 0)
         )
-        server_addr = server_t.get_extra_info("sockname")
+        server_address = server_t.get_extra_info("sockname")
 
-        proto = RealtimeTransportProtocol(stun_server_address=server_addr)
+        proto = RealtimeTransportProtocol(stun_server_address=server_address)
         rtp_t, _ = await loop.create_datagram_endpoint(
             lambda: proto, local_addr=("127.0.0.1", 0)
         )
@@ -201,37 +201,37 @@ class TestRealtimeTransportProtocol:
 
     @pytest.mark.asyncio
     async def test_register_call__routes_by_addr(self):
-        """Packets from a registered remote addr are forwarded to the registered handler."""
+        """Packets from a registered remote address are forwarded to the registered handler."""
         received_wildcard: list[bytes] = []
         received_call: list[bytes] = []
 
         class WildcardCall(Call):
-            def datagram_received(self, data: bytes, addr):
+            def datagram_received(self, data: bytes, address):
                 received_wildcard.append(data)
 
         class SpecificCall(Call):
-            def datagram_received(self, data: bytes, addr):
+            def datagram_received(self, data: bytes, address):
                 received_call.append(data)
 
         mux = RealtimeTransportProtocol()
-        specific_addr = ("1.2.3.4", 5004)
+        specific_address = ("1.2.3.4", 5004)
         wildcard_handler = WildcardCall(rtp=mux, sip=MagicMock())
         specific_handler = SpecificCall(rtp=mux, sip=MagicMock())
         mux.register_call(None, wildcard_handler)
-        mux.register_call(specific_addr, specific_handler)
+        mux.register_call(specific_address, specific_handler)
 
         rtp_packet = make_rtp_packet(payload=b"call-audio")
-        mux.datagram_received(rtp_packet, specific_addr)
+        mux.datagram_received(rtp_packet, specific_address)
         assert received_call == [rtp_packet]
         assert received_wildcard == []
 
     @pytest.mark.asyncio
     async def test_register_call__unmatched_addr_uses_wildcard_handler(self):
-        """Packets from an unknown addr reach the None-key wildcard handler."""
+        """Packets from an unknown address reach the None-key wildcard handler."""
         received: list[bytes] = []
 
         class WildcardCall(Call):
-            def datagram_received(self, data: bytes, addr):
+            def datagram_received(self, data: bytes, address):
                 received.append(data)
 
         mux = RealtimeTransportProtocol()
@@ -244,20 +244,20 @@ class TestRealtimeTransportProtocol:
 
     @pytest.mark.asyncio
     async def test_unregister_call__removes_handler(self):
-        """After unregister_call, packets from that addr are no longer routed to handler."""
+        """After unregister_call, packets from that address are no longer routed to handler."""
         received: list[bytes] = []
 
         class RecordCall(Call):
-            def datagram_received(self, data: bytes, addr):
+            def datagram_received(self, data: bytes, address):
                 received.append(data)
 
         mux = RealtimeTransportProtocol()
         handler = RecordCall(rtp=mux, sip=MagicMock())
-        remote_addr = ("5.6.7.8", 5004)
-        mux.register_call(remote_addr, handler)
-        mux.unregister_call(remote_addr)
+        remote_address = ("5.6.7.8", 5004)
+        mux.register_call(remote_address, handler)
+        mux.unregister_call(remote_address)
 
-        mux.datagram_received(make_rtp_packet(payload=b"gone"), remote_addr)
+        mux.datagram_received(make_rtp_packet(payload=b"gone"), remote_address)
         assert received == []
 
     @pytest.mark.asyncio
@@ -278,10 +278,10 @@ class TestRealtimeTransportProtocol:
 
         mux = RealtimeTransportProtocol()
         handler = Call(rtp=mux, sip=MagicMock())
-        addr = ("1.2.3.4", 5004)
-        mux.register_call(addr, handler)
+        address = ("1.2.3.4", 5004)
+        mux.register_call(address, handler)
         with caplog.at_level(logging.INFO, logger="voip.rtp"):
-            mux.unregister_call(addr)
+            mux.unregister_call(address)
         assert any("rtp_call_unregistered" in r.message for r in caplog.records)
 
     @pytest.mark.asyncio
@@ -290,7 +290,7 @@ class TestRealtimeTransportProtocol:
         import logging  # noqa: PLC0415
 
         class NoopCall(Call):
-            def datagram_received(self, data, addr): ...
+            def datagram_received(self, data, address): ...
 
         mux = RealtimeTransportProtocol()
         handler = NoopCall(rtp=mux, sip=MagicMock())
@@ -328,7 +328,7 @@ class TestSRTPIntegration:
 
         @dataclasses.dataclass
         class SRTPCapture(Call):
-            def datagram_received(self, data: bytes, addr) -> None:
+            def datagram_received(self, data: bytes, address) -> None:
                 received.append(data)
 
         mux = RealtimeTransportProtocol()
@@ -353,7 +353,7 @@ class TestSRTPIntegration:
 
         @dataclasses.dataclass
         class SRTPCapture(Call):
-            def datagram_received(self, data: bytes, addr) -> None:
+            def datagram_received(self, data: bytes, address) -> None:
                 received.append(data)
 
         mux = RealtimeTransportProtocol()

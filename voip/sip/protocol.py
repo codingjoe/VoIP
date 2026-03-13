@@ -135,7 +135,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
         init=False, default=None
     )
     _initialize_task: asyncio.Task | None = dataclasses.field(init=False, default=None)
-    _call_rtp_addrs: dict[str, tuple[str, int] | None] = dataclasses.field(
+    _call_rtp_addresses: dict[str, tuple[str, int] | None] = dataclasses.field(
         init=False, default_factory=dict
     )
     _buffer: bytearray = dataclasses.field(init=False, default_factory=bytearray)
@@ -216,21 +216,23 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 break
             message_data = bytes(self._buffer[:message_end])
             del self._buffer[:message_end]
-            addr = self.transport.get_extra_info("peername") if self.transport else None
-            self.packet_received(message_data, addr)
+            address = (
+                self.transport.get_extra_info("peername") if self.transport else None
+            )
+            self.packet_received(message_data, address)
 
-    def packet_received(self, data: bytes, addr: tuple[str, int] | None) -> None:
+    def packet_received(self, data: bytes, address: tuple[str, int] | None) -> None:
         """Handle RFC 5626 keepalive pings, then dispatch SIP messages."""
         if data == b"\r\n\r\n":  # RFC 5626 §4.4.1 double-CRLF keepalive ping
-            logger.debug("RFC 5626 keepalive from %s, sending pong", addr)
+            logger.debug("RFC 5626 keepalive from %s, sending pong", address)
             if self.transport:
                 self.transport.write(b"\r\n")
             return
         match Message.parse(data):
             case Request() as request:
-                self.request_received(request, addr)
+                self.request_received(request, address)
             case Response() as response:
-                self.response_received(response, addr)
+                self.response_received(response, address)
 
     def send(self, message: Response | Request) -> None:
         """Serialize and send a SIP message over the TLS/TCP connection."""
@@ -247,8 +249,8 @@ class SessionInitiationProtocol(asyncio.Protocol):
 
     def _cleanup_rtp_call(self, call_id: str) -> None:
         """Remove the call handler registered with the shared RTP mux, if any."""
-        if call_id in self._call_rtp_addrs and self._rtp_protocol is not None:
-            self._rtp_protocol.unregister_call(self._call_rtp_addrs.pop(call_id))
+        if call_id in self._call_rtp_addresses and self._rtp_protocol is not None:
+            self._rtp_protocol.unregister_call(self._call_rtp_addresses.pop(call_id))
 
     def _mark_call_answered(self, call_id: str) -> None:
         """Record *call_id* as answered, evicting the oldest entry if the LRU is full."""
@@ -259,10 +261,10 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 self._answered_calls.popitem(last=False)
             self._answered_calls[call_id] = None
 
-    def request_received(self, request: Request, addr: tuple[str, int]) -> None:
+    def request_received(self, request: Request, address: tuple[str, int]) -> None:
         """Dispatch a received SIP request to the appropriate handler."""
         call_id = request.headers.get("Call-ID", "")
-        peer_ip = addr[0] if addr else None
+        peer_ip = address[0] if address else None
         match request.method:
             case "INVITE":
                 caller = CallerID(request.headers.get("From", ""))
@@ -371,7 +373,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 )
 
     def response_received(
-        self, response: Response, addr: tuple[str, int] | None
+        self, response: Response, address: tuple[str, int] | None
     ) -> None:
         """Handle REGISTER responses including digest auth challenges (RFC 3261 §22).
 
@@ -576,7 +578,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
         #
         # When the media port is 0, the stream is inactive (RFC 4566 §5.14);
         # registering an address and hole-punching are skipped, and we fall
-        # through to ``remote_rtp_addr = None`` so the mux wildcard is used
+        # through to ``remote_rtp_address = None`` so the mux wildcard is used
         # (if any traffic arrives at all).
         #
         # When no SDP was present in the INVITE we also use the wildcard so
@@ -589,17 +591,17 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 remote_ip = conn.connection_address
             else:
                 remote_ip = peer[0] if peer else "0.0.0.0"  # noqa: S104
-            remote_rtp_addr: tuple[str, int] | None = (remote_ip, remote_audio.port)
+            remote_rtp_address: tuple[str, int] | None = (remote_ip, remote_audio.port)
         else:
-            remote_rtp_addr = None
-        self._rtp_protocol.register_call(remote_rtp_addr, call_handler)
-        self._call_rtp_addrs[call_id] = remote_rtp_addr
+            remote_rtp_address = None
+        self._rtp_protocol.register_call(remote_rtp_address, call_handler)
+        self._call_rtp_addresses[call_id] = remote_rtp_address
 
         # NAT hole-punch: send a dummy datagram to the carrier's RTP address so
         # that our router creates a return-path mapping allowing the carrier's
         # media packets to reach our UDP socket (RFC 4787 / address-restricted NAT).
-        if remote_rtp_addr is not None:
-            self._rtp_protocol.send(b"\x00", remote_rtp_addr)
+        if remote_rtp_address is not None:
+            self._rtp_protocol.send(b"\x00", remote_rtp_address)
 
         record_route = request.headers.get("Record-Route")
         sess_id = str(secrets.randbelow(2**32) + 1)
@@ -681,11 +683,11 @@ class SessionInitiationProtocol(asyncio.Protocol):
         """
         aor_scheme = self.aor.partition(":")[0]  # "sip" or "sips"
         host_port = f"{self.local_address[0]}:{self.local_address[1]}"
-        addr = f"{user}@{host_port}" if user else host_port
+        address = f"{user}@{host_port}" if user else host_port
         if aor_scheme == "sips":
-            return f"<sips:{addr}>"
+            return f"<sips:{address}>"
         tls_param = ";transport=tls" if self._is_tls else ""
-        return f"<sip:{addr}{tls_param}>"
+        return f"<sip:{address}{tls_param}>"
 
     def ringing(self, request: Request) -> None:
         """Send a 180 Ringing provisional response to the caller.
