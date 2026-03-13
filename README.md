@@ -11,23 +11,12 @@
   <a href="https://github.com/sponsors/codingjoe">Funding</a> ♥
 </p>
 
-# Python VoIP library
+# Python VoIP
+
+Async VoIP Python library for the AI age.
 
 > [!WARNING]
 > This library is in early development and may contain breaking changes. Use with caution.
-
-Python asyncio library for SIP telephony ([RFC 3261](https://tools.ietf.org/html/rfc3261)).
-
-All signalling uses **SIP over TLS** (SIPS, RFC 3261 §26) and all media is
-protected with **SRTP** ([RFC 3711](https://tools.ietf.org/html/rfc3711))
-using the `AES_CM_128_HMAC_SHA1_80` cipher suite with SDES key exchange
-([RFC 4568](https://tools.ietf.org/html/rfc4568)).
-
-## Setup
-
-```console
-pip install voip[audio,cli,pygments]
-```
 
 ## Usage
 
@@ -36,10 +25,14 @@ pip install voip[audio,cli,pygments]
 Answer calls and transcribe them live from the terminal:
 
 ```console
-voip sip transcribe sips:alice@sip.example.com --password secret
+uvx voip sip transcribe sips:alice@sip.example.com --password secret
 ```
 
 ### Python API
+
+```console
+pip install voip[audio,cli,pygments]
+```
 
 Subclass `WhisperCall` and override `transcription_received` to handle results.
 Pass it as `call_class` when answering an incoming call:
