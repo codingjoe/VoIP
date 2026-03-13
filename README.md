@@ -37,11 +37,9 @@ pip install voip[audio,cli,pygments]
 Answer calls and transcribe them live from the terminal:
 
 ```console
-voip sip transcribe --server sip.example.com --username alice --password secret
+voip sip transcribe sips:alice@sip.example.com --password secret
 ```
 
-The CLI connects to the SIP server on port **5061** (TLS) by default. Pass
-`--server host:port` to override.
 
 ### Python API
 
@@ -70,7 +68,6 @@ async def main():
     ssl_context = ssl.create_default_context()
     await loop.create_connection(
         lambda: MySession(
-            server_address=("sip.example.com", 5061),
             aor="sips:alice@example.com",
             username="alice",
             password="secret",

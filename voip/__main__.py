@@ -71,24 +71,63 @@ def sip():
 
 main = voip
 
+#: Standard SIP/TCP port — plain text, no TLS (RFC 3261 §18.2).
+SIP_TCP_PORT = 5060
+#: Standard SIP/TLS port (RFC 3261 §26.2.2).
+SIP_TLS_PORT = 5061
 
-def _parse_server(ctx, param, value: str, default_port=5061) -> tuple[str, int]:
-    """Parse 'HOST[:PORT]' option into a (host, port) tuple."""
+
+def _parse_aor(value: str) -> tuple[str, str, str, int | None]:
+    """Parse a SIP URI into ``(scheme, user, host, port)``.
+
+    The port is ``None`` when not present in the URI.
+
+    Examples::
+
+        >>> _parse_aor("sip:alice@example.com")
+        ('sip', 'alice', 'example.com', None)
+        >>> _parse_aor("sips:+15551234567@carrier.com:5061")
+        ('sips', '+15551234567', 'carrier.com', 5061)
+    """
+    scheme, _, rest = value.partition(":")
+    if not scheme or not rest:
+        raise click.BadParameter(f"Invalid SIP URI: {value!r}. Expected sip[s]:user@host[:port].")
+    user_part, _, hostport = rest.partition("@")
+    if not hostport:
+        raise click.BadParameter(
+            f"Invalid SIP URI: {value!r}. Missing user@host part."
+        )
+    host, _, port_str = hostport.partition(":")
+    if not host:
+        raise click.BadParameter(f"Invalid SIP URI: {value!r}. Missing host.")
+    port: int | None = int(port_str) if port_str else None
+    return scheme, user_part, host, port
+
+
+def _parse_hostport(ctx, param, value: str, default_port: int = 5061) -> tuple[str, int]:
+    """Parse ``HOST[:PORT]`` into a ``(host, port)`` tuple."""
+    host, _, port_str = value.rpartition(":")
+    if not host:
+        return value, default_port
     try:
-        host, port_str = value.rsplit(":", 1)
+        return host, int(port_str)
     except ValueError:
-        host, port_str = value, default_port
-    return host, int(port_str)
+        raise click.BadParameter(f"Invalid port in {value!r}.", param=param) from None
 
 
 def _parse_stun_server(ctx, param, value: str | None) -> tuple[str, int] | None:
     """Parse the --stun-server option; return None when the value is 'none'."""
     if value is None or value.lower() == "none":
         return None
-    return _parse_server(ctx, param, value, default_port=3478)
+    return _parse_hostport(ctx, param, value, default_port=3478)
+
+
+# Keep the old name as an alias so existing internal callers still work.
+_parse_server = _parse_hostport
 
 
 @sip.command()
+@click.argument("aor", metavar="AOR", envvar="SIP_AOR")
 @click.option(
     "--model",
     default="base",
@@ -97,23 +136,28 @@ def _parse_stun_server(ctx, param, value: str | None) -> tuple[str, int] | None:
     help="Whisper model size.",
 )
 @click.option(
-    "--server",
-    envvar="SIP_SERVER",
+    "--password",
+    envvar="SIP_PASSWORD",
     required=True,
-    metavar="HOST[:PORT]",
-    callback=_parse_server,
-    help="SIP server address (TLS, default port 5061).",
+    help="SIP password (not parsed from AOR for security).",
 )
 @click.option(
-    "--aor",
-    envvar="SIP_AOR",
-    required=False,
+    "--username",
+    envvar="SIP_USERNAME",
     default=None,
-    metavar="SIP_AOR",
-    help="SIP Address of Record (defaults to sips:{username}@{server_host}).",
+    help="Override SIP username (defaults to user part of AOR).",
 )
-@click.option("--username", envvar="SIP_USERNAME", required=True, help="SIP username.")
-@click.option("--password", envvar="SIP_PASSWORD", help="SIP password.")
+@click.option(
+    "--proxy",
+    envvar="SIP_PROXY",
+    default=None,
+    metavar="HOST[:PORT]",
+    help=(
+        "Outbound proxy address (RFC 3261 §8.1.2). "
+        "Defaults to the host and port from AOR. "
+        "Use this when the proxy differs from the registrar domain."
+    ),
+)
 @click.option(
     "--stun-server",
     envvar="STUN_SERVER",
@@ -128,7 +172,10 @@ def _parse_stun_server(ctx, param, value: str | None) -> tuple[str, int] | None:
     "--no-tls",
     is_flag=True,
     default=False,
-    help="Disable TLS entirely and connect in plain-text (e.g. for port 5060).",
+    help=(
+        "Force plain TCP — skips TLS. "
+        "Auto-selected when port 5060 is used; explicit flag overrides any port."
+    ),
 )
 @click.option(
     "--no-verify-tls",
@@ -137,18 +184,50 @@ def _parse_stun_server(ctx, param, value: str | None) -> tuple[str, int] | None:
     help="Disable TLS certificate verification (insecure; for testing only).",
 )
 @click.pass_context
-def transcribe(
-    ctx, model, server, aor, username, password, stun_server, no_tls, no_verify_tls
-):
-    """Register with a SIP carrier over TLS and transcribe incoming calls via Whisper."""
+def transcribe(ctx, aor, model, password, username, proxy, stun_server, no_tls, no_verify_tls):
+    """Register with a SIP carrier and transcribe incoming calls via Whisper.
+
+    AOR is a SIP Address of Record URI identifying the account to register,
+    e.g. ``sips:alice@carrier.example.com`` or ``sip:alice@carrier.example.com:5060``.
+
+    \b
+    Transport selection (overridable with --no-tls):
+      sips: URI or port 5061  →  TLS (default)
+      sip:  URI or port 5060  →  plain TCP
+
+    \b
+    Examples:
+      voip sip transcribe sips:alice@sip.example.com --password secret
+      voip sip transcribe sip:alice@sip.example.com:5060 --password secret
+      voip sip transcribe sips:alice@carrier.com --proxy proxy.carrier.com --password secret
+    """
     from voip.sip.protocol import SIP
 
     from .audio import WhisperCall  # noqa: PLC0415
 
-    server_addr = server
-    host = server_addr[0]
-    if aor is None:
-        aor = f"sips:{username}@{host}"
+    try:
+        scheme, aor_user, aor_host, aor_port = _parse_aor(aor)
+    except click.BadParameter as exc:
+        raise click.BadParameter(str(exc), param_hint="AOR") from exc
+
+    effective_username = username or aor_user
+
+    # Determine outbound proxy address: --proxy overrides, otherwise use AOR host.
+    if proxy is not None:
+        proxy_addr = _parse_hostport(ctx, None, proxy)
+    else:
+        # Default port: SIP_TCP_PORT for sip scheme, SIP_TLS_PORT for sips.
+        default_port = SIP_TCP_PORT if scheme == "sip" else SIP_TLS_PORT
+        port = aor_port if aor_port is not None else default_port
+        proxy_addr = (aor_host, port)
+
+    # Transport: port 5060 (SIP_TCP_PORT) → plain TCP; any other port → TLS.
+    # --no-tls always overrides this auto-detection.
+    use_tls = not no_tls and proxy_addr[1] != SIP_TCP_PORT
+
+    # The AOR stored in the protocol must NOT include the port
+    # (AOR is scheme:user@host per RFC 3261 §10).
+    normalized_aor = f"{scheme}:{effective_username}@{aor_host}"
 
     verbose = ctx.obj.get("verbose", 0)
 
@@ -178,23 +257,23 @@ def transcribe(
 
     async def run():
         loop = asyncio.get_running_loop()
-        if no_tls:
-            ssl_context = None
-        else:
+        if use_tls:
             ssl_context = ssl.create_default_context()
             if no_verify_tls:
                 ssl_context.check_hostname = False
                 ssl_context.verify_mode = ssl.CERT_NONE
+        else:
+            ssl_context = None
         await loop.create_connection(
             lambda: TranscribeSession(
-                server_address=server_addr,
-                aor=aor,
-                username=username,
+                outbound_proxy=proxy_addr,
+                aor=normalized_aor,
+                username=effective_username,
                 password=password,
                 rtp_stun_server_address=stun_server,
             ),
-            host=server_addr[0],
-            port=server_addr[1],
+            host=proxy_addr[0],
+            port=proxy_addr[1],
             ssl=ssl_context,
         )
         await asyncio.Future()

@@ -111,7 +111,7 @@ class FakeProtocol(SessionInitiationProtocol):
     """Fake SIP protocol that captures sent messages."""
 
     def __init__(self):
-        super().__init__(server_address=("127.0.0.1", 5061), aor="sip:test@example.com")
+        super().__init__(outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com")
         self.connection_made(FakeTransport())
         self._sent_responses: list[tuple[Response, None]] = []
 
@@ -125,7 +125,7 @@ class ConcreteProtocol(SessionInitiationProtocol):
     """Concrete subclass for testing that records received messages."""
 
     def __init__(self):
-        super().__init__(server_address=("127.0.0.1", 5061), aor="sip:test@example.com")
+        super().__init__(outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com")
         self.requests = []
         self.responses = []
 
@@ -251,7 +251,7 @@ class TestCallerID:
     def test_error_received__blocking_io(self):
         """Log blocking IO errors without re-raising."""
         protocol = SessionInitiationProtocol(
-            server_address=("127.0.0.1", 5061), aor="sip:test@example.com"
+            outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
         )
         exc = OSError(errno.EAGAIN, "Resource temporarily unavailable")
         protocol.error_received(exc)  # should not raise
@@ -259,7 +259,7 @@ class TestCallerID:
     def test_error_received__reraises(self):
         """Log unexpected transport errors without re-raising (delegates to base)."""
         protocol = SessionInitiationProtocol(
-            server_address=("127.0.0.1", 5061), aor="sip:test@example.com"
+            outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
         )
         exc = OSError("Unexpected error")
         protocol.error_received(exc)  # should not raise
@@ -267,14 +267,14 @@ class TestCallerID:
     def test_connection_lost__no_exception(self):
         """Handle a clean connection close without raising."""
         protocol = SessionInitiationProtocol(
-            server_address=("127.0.0.1", 5061), aor="sip:test@example.com"
+            outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
         )
         protocol.connection_lost(None)  # should not raise
 
     def test_connection_lost__with_exception(self):
         """Log an exception on connection lost without re-raising."""
         protocol = SessionInitiationProtocol(
-            server_address=("127.0.0.1", 5061), aor="sip:test@example.com"
+            outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
         )
         protocol.connection_lost(Exception("Connection reset"))  # should not raise
 
@@ -283,7 +283,7 @@ class TestWithToTag:
     def test__with_to_tag__adds_tag(self):
         """Append the To tag to the To header for a known Call-ID."""
         protocol = SessionInitiationProtocol(
-            server_address=("127.0.0.1", 5061), aor="sip:test@example.com"
+            outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
         )
         protocol._to_tags["call-1"] = "abc123"
         result = protocol._with_to_tag({"To": "sip:bob@biloxi.com"}, "call-1")
@@ -292,7 +292,7 @@ class TestWithToTag:
     def test__with_to_tag__unknown_call_id(self):
         """Leave the To header unchanged when the Call-ID has no stored tag."""
         protocol = SessionInitiationProtocol(
-            server_address=("127.0.0.1", 5061), aor="sip:test@example.com"
+            outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
         )
         result = protocol._with_to_tag({"To": "sip:bob@biloxi.com"}, "unknown")
         assert result["To"] == "sip:bob@biloxi.com"
@@ -300,7 +300,7 @@ class TestWithToTag:
     def test__with_to_tag__missing_to_header(self):
         """Return an empty To header when none is present and no tag exists."""
         protocol = SessionInitiationProtocol(
-            server_address=("127.0.0.1", 5061), aor="sip:test@example.com"
+            outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
         )
         result = protocol._with_to_tag({}, "unknown")
         assert result["To"] == ""
@@ -948,7 +948,7 @@ def make_register_session(
 ) -> SessionInitiationProtocol:
     """Return a SessionInitiationProtocol session without triggering connection_made."""
     return SessionInitiationProtocol(
-        server_address=server_addr,
+        outbound_proxy=server_addr,
         aor=aor,
         username=username,
         password=password,
@@ -1056,7 +1056,7 @@ class TestSIPProtocol:
 
         def __init__(self):
             super().__init__(
-                server_address=("127.0.0.1", 5061),
+                outbound_proxy=("127.0.0.1", 5061),
                 aor="sip:test@example.com",
             )
             self._sent: list[tuple] = []
@@ -1067,7 +1067,7 @@ class TestSIPProtocol:
     async def test_connection_made__stores_transport(self):
         """Store the transport when a connection is established."""
         protocol = SIP(
-            server_address=("127.0.0.1", 5061),
+            outbound_proxy=("127.0.0.1", 5061),
             aor="sip:test@example.com",
             rtp_stun_server_address=None,
         )
@@ -1078,7 +1078,7 @@ class TestSIPProtocol:
     async def test_send__serializes_and_forwards_to_transport(self):
         """Serialize the message and forward it to the underlying TCP transport."""
         protocol = SIP(
-            server_address=("127.0.0.1", 5061),
+            outbound_proxy=("127.0.0.1", 5061),
             aor="sip:test@example.com",
             rtp_stun_server_address=None,
         )
@@ -1097,7 +1097,7 @@ class TestSIPProtocol:
             def call_received(self, request):
                 received.append(request)
 
-        protocol = MySIP(server_address=("127.0.0.1", 5060), aor="sip:test@example.com")
+        protocol = MySIP(outbound_proxy=("127.0.0.1", 5060), aor="sip:test@example.com")
         protocol.connection_made(MagicMock())
         request = make_invite()
         addr = ("192.0.2.1", 5060)
@@ -1108,7 +1108,7 @@ class TestSIPProtocol:
 
     async def test_call_received__noop_by_default(self):
         """call_received is a no-op in the base class."""
-        protocol = SIP(server_address=("127.0.0.1", 5060), aor="sip:test@example.com")
+        protocol = SIP(outbound_proxy=("127.0.0.1", 5060), aor="sip:test@example.com")
         protocol.connection_made(MagicMock())
         protocol.call_received(make_invite())  # must not raise
 
@@ -1580,7 +1580,7 @@ class TestSIPProtocol:
     async def test_data_received__keepalive__sends_pong(self):
         """Double-CRLF keepalive (RFC 5626 §4.4.1) is answered with a single-CRLF pong."""
         protocol = SIP(
-            server_address=("127.0.0.1", 5061),
+            outbound_proxy=("127.0.0.1", 5061),
             aor="sip:test@example.com",
             rtp_stun_server_address=None,
         )
@@ -1592,7 +1592,7 @@ class TestSIPProtocol:
 
     async def test_request_received__unsupported_method__raises(self):
         """Raise NotImplementedError for any non-INVITE SIP request method."""
-        protocol = SIP(server_address=("127.0.0.1", 5060), aor="sip:test@example.com")
+        protocol = SIP(outbound_proxy=("127.0.0.1", 5060), aor="sip:test@example.com")
         protocol.connection_made(MagicMock())
         request = Request(method="OPTIONS", uri="sip:alice@atlanta.com")
         with pytest.raises(NotImplementedError, match="OPTIONS"):
@@ -1611,7 +1611,7 @@ class TestSIPProtocol:
             async def _answer(self, request, call_class):
                 answered.append((request, call_class))
 
-        protocol = MySIP(server_address=("127.0.0.1", 5060), aor="sip:test@example.com")
+        protocol = MySIP(outbound_proxy=("127.0.0.1", 5060), aor="sip:test@example.com")
         protocol.connection_made(MagicMock())
         request = make_invite()
         protocol._pending_invites.add(request.headers["Call-ID"])
@@ -1647,7 +1647,7 @@ class TestRegistration:
                 await self.register()
 
         p = _SessionNoRTP(
-            server_address=("192.0.2.2", 5061),
+            outbound_proxy=("192.0.2.2", 5061),
             aor="sip:alice@example.com",
             username="alice",
             password="secret",  # noqa: S106
@@ -1713,7 +1713,7 @@ class TestRegistration:
                 calls.append(True)
 
         p = ConcreteSession(
-            server_address=("192.0.2.2", 5060),
+            outbound_proxy=("192.0.2.2", 5060),
             aor="sip:alice@example.com",
             username="a",
             password="b",  # noqa: S106
@@ -1869,7 +1869,7 @@ class TestRegistration:
                 received.append(response)
 
         p = ConcreteSession(
-            server_address=("192.0.2.2", 5061),
+            outbound_proxy=("192.0.2.2", 5061),
             aor="sip:alice@example.com",
             username="a",
             password="b",  # noqa: S106
@@ -1889,7 +1889,7 @@ class TestRegistration:
                 received.append(request)
 
         p = ConcreteSession(
-            server_address=("192.0.2.2", 5060),
+            outbound_proxy=("192.0.2.2", 5060),
             aor="sip:alice@example.com",
             username="a",
             password="b",  # noqa: S106

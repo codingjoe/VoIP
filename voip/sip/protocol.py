@@ -69,11 +69,27 @@ def _mask_caller(header: str) -> str:
 
 @dataclasses.dataclass(kw_only=True, slots=True)
 class SessionInitiationProtocol(asyncio.Protocol):
-    """SIP session handler over TLS/TCP (RFC 3261 + RFC 3261 §26.2.2).
+    """SIP User Agent Client (UAC) over TLS/TCP (RFC 3261).
 
     Handles incoming calls and, optionally, carrier registration with digest
-    auth (RFC 3261 §22).  All signalling is sent over a single persistent
-    TLS/TCP connection to the SIP server.
+    authentication (RFC 3261 §22).  All signalling is sent over a single
+    persistent TLS/TCP connection.
+
+    RFC 3261 topology overview
+    --------------------------
+    *Outbound proxy* (§8.1.2): the SIP server this UA sends all requests to.
+    It may be a carrier edge proxy whose address differs from the registrar.
+
+    *Registrar* (§10): the server that maintains location bindings for a
+    domain.  Its URI is derived automatically from the :attr:`aor` by
+    stripping the user part (e.g. ``sips:alice@example.com`` →
+    ``sips:example.com``).  When no :attr:`outbound_proxy` is configured,
+    the UA is expected to connect directly to the registrar server.
+
+    When an :attr:`outbound_proxy` is configured it acts as the first SIP
+    hop and may differ from the registrar domain — for example when a carrier
+    provides a dedicated proxy at ``proxy.carrier.com`` while the AOR domain
+    (and thus the registrar Request-URI) is ``carrier.com``.
 
     Subclass and override :meth:`call_received` to handle incoming calls::
 
@@ -84,10 +100,11 @@ class SessionInitiationProtocol(asyncio.Protocol):
     To register with a carrier on startup, pass the registration parameters::
 
         session = SessionInitiationProtocol(
-            server_address=("sip.example.com", 5061),
             aor="sips:alice@example.com",
             username="alice",
             password="secret",
+            # Optional: connect via a separate outbound proxy
+            # outbound_proxy=("proxy.carrier.com", 5061),
         )
     """
 
@@ -113,7 +130,11 @@ class SessionInitiationProtocol(asyncio.Protocol):
         init=False, default_factory=dict
     )
     _buffer: bytearray = dataclasses.field(init=False, default_factory=bytearray)
-    server_address: tuple[str, int]
+    #: RFC 3261 §8.1.2 — outbound SIP proxy address ``(host, port)``.
+    #: When ``None`` the caller connects directly to the registrar server.
+    #: The address may differ from the registrar domain derived from
+    #: :attr:`aor` (e.g. ``proxy.carrier.com`` vs ``carrier.com``).
+    outbound_proxy: tuple[str, int] | None = None
     aor: str
     username: str | None = None
     password: str | None = None
@@ -719,14 +740,28 @@ class SessionInitiationProtocol(asyncio.Protocol):
         authorization: str | None = None,
         proxy_authorization: str | None = None,
     ) -> None:
-        """Send a REGISTER request to the carrier, optionally with credentials."""
+        """Send a REGISTER request to the registrar, optionally with credentials.
+
+        The REGISTER Request-URI is the registrar URI derived from :attr:`aor`
+        (RFC 3261 §10.2).  When an :attr:`outbound_proxy` is configured, the
+        request is sent over the existing TLS/TCP connection to that proxy,
+        which routes it to the registrar on our behalf.
+        """
         self.cseq += 1
-        logger.debug(
-            "Sending REGISTER to %s:%s (CSeq %s)",
-            self.server_address[0],
-            self.server_address[1],
-            self.cseq,
-        )
+        if self.outbound_proxy:
+            logger.debug(
+                "Sending REGISTER via outbound proxy %s:%s to registrar %s (CSeq %s)",
+                self.outbound_proxy[0],
+                self.outbound_proxy[1],
+                self.registrar_uri,
+                self.cseq,
+            )
+        else:
+            logger.debug(
+                "Sending REGISTER to registrar %s (CSeq %s)",
+                self.registrar_uri,
+                self.cseq,
+            )
         branch = f"{self.VIA_BRANCH_PREFIX}{secrets.token_hex(16)}"
         logger.debug("REGISTER Via branch: %s", branch)
         # Extract SIP user part from AOR (e.g. "sips:alice@example.com" -> "alice")

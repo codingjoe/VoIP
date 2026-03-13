@@ -26,18 +26,61 @@ def make_runner():
     return CliRunner()
 
 
-class TestParseServer:
-    def test_parse_server__without_port(self):
-        """Return port 5061 when no port is specified (SIP/TLS default)."""
-        from voip.__main__ import _parse_server
+class TestParseAOR:
+    def test_parse_aor__sips_no_port(self):
+        """Parse scheme, user and host from a sips URI without port."""
+        from voip.__main__ import _parse_aor
 
-        assert _parse_server(None, None, "sip.example.com") == ("sip.example.com", 5061)
+        assert _parse_aor("sips:alice@example.com") == ("sips", "alice", "example.com", None)
 
-    def test_parse_server__with_port(self):
+    def test_parse_aor__sip_with_port(self):
+        """Parse scheme, user, host and port from a sip URI with port."""
+        from voip.__main__ import _parse_aor
+
+        assert _parse_aor("sip:alice@example.com:5060") == ("sip", "alice", "example.com", 5060)
+
+    def test_parse_aor__sips_with_port(self):
+        """Parse all components including an explicit port."""
+        from voip.__main__ import _parse_aor
+
+        assert _parse_aor("sips:+15551234567@carrier.com:5061") == (
+            "sips",
+            "+15551234567",
+            "carrier.com",
+            5061,
+        )
+
+    def test_parse_aor__invalid_no_at(self):
+        """Raise BadParameter when user@host part is missing."""
+        import click
+
+        from voip.__main__ import _parse_aor
+
+        with pytest.raises(click.BadParameter):
+            _parse_aor("sip:example.com")
+
+    def test_parse_aor__invalid_no_scheme(self):
+        """Raise BadParameter when scheme is missing."""
+        import click
+
+        from voip.__main__ import _parse_aor
+
+        with pytest.raises(click.BadParameter):
+            _parse_aor("alice@example.com")
+
+
+class TestParseHostport:
+    def test_parse_hostport__without_port(self):
+        """Return default port 5061 when no port is specified."""
+        from voip.__main__ import _parse_hostport
+
+        assert _parse_hostport(None, None, "sip.example.com") == ("sip.example.com", 5061)
+
+    def test_parse_hostport__with_port(self):
         """Parse host and port from HOST:PORT format."""
-        from voip.__main__ import _parse_server
+        from voip.__main__ import _parse_hostport
 
-        assert _parse_server(None, None, "sip.example.com:5080") == (
+        assert _parse_hostport(None, None, "sip.example.com:5080") == (
             "sip.example.com",
             5080,
         )
@@ -76,22 +119,132 @@ class TestVoIPCommand:
 
 
 class TestTranscribeCLI:
-    def test_transcribe__missing_server_exits_with_error(self):
-        """Exit with an error when SIP_SERVER is not provided."""
+    def test_transcribe__missing_aor_exits_with_error(self):
+        """Exit with error when the AOR positional argument is not provided."""
         from voip.__main__ import voip
 
-        runner = make_runner()
-        result = runner.invoke(
-            voip, ["sip", "transcribe", "--aor=sip:u@h", "--username=u", "--password=p"]
+        result = make_runner().invoke(voip, ["sip", "transcribe", "--password=p"])
+        assert result.exit_code != 0
+
+    def test_transcribe__invalid_aor_exits_with_error(self):
+        """Exit with error when the AOR has no user@host part."""
+        from voip.__main__ import voip
+
+        result = make_runner().invoke(
+            voip, ["sip", "transcribe", "not-a-sip-uri", "--password=p"]
         )
         assert result.exit_code != 0
-        assert "server" in result.output.lower() or "SIP_SERVER" in result.output
 
-    def test_transcribe__missing_aor_defaults_to_username_at_host(self):
-        """Default AOR to sips:{username}@{server_host} when SIP_AOR is not provided."""
+    def test_transcribe__sips_aor_uses_tls(self):
+        """sips: AOR without explicit port defaults to TLS on port 5061."""
         from voip.__main__ import voip
 
-        runner = make_runner()
+        captured = {}
+
+        async def fake_connection(factory, *, host, port, ssl):
+            captured["host"] = host
+            captured["port"] = port
+            captured["ssl"] = ssl
+            raise KeyboardInterrupt
+
+        with (
+            patch.dict(sys.modules, _WHISPER_STUBS),
+            patch("asyncio.get_event_loop"),
+            patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
+        ):
+            mock_loop.return_value.create_connection = fake_connection
+            make_runner().invoke(
+                voip,
+                ["sip", "transcribe", "sips:alice@sip.example.com", "--password=secret"],
+                catch_exceptions=False,
+            )
+        assert captured.get("host") == "sip.example.com"
+        assert captured.get("port") == 5061
+        assert captured.get("ssl") is not None
+
+    def test_transcribe__port_5060_uses_tcp(self):
+        """Port 5060 in the AOR triggers plain TCP (no TLS)."""
+        from voip.__main__ import voip
+
+        captured = {}
+
+        async def fake_connection(factory, *, host, port, ssl):
+            captured["ssl"] = ssl
+            captured["port"] = port
+            raise KeyboardInterrupt
+
+        with (
+            patch.dict(sys.modules, _WHISPER_STUBS),
+            patch("asyncio.get_event_loop"),
+            patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
+        ):
+            mock_loop.return_value.create_connection = fake_connection
+            make_runner().invoke(
+                voip,
+                ["sip", "transcribe", "sip:alice@example.com:5060", "--password=secret"],
+                catch_exceptions=False,
+            )
+        assert captured.get("ssl") is None
+        assert captured.get("port") == 5060
+
+    def test_transcribe__sip_aor_defaults_to_port_5060(self):
+        """sip: AOR without explicit port defaults to port 5060 and plain TCP."""
+        from voip.__main__ import voip
+
+        captured = {}
+
+        async def fake_connection(factory, *, host, port, ssl):
+            captured["ssl"] = ssl
+            captured["port"] = port
+            raise KeyboardInterrupt
+
+        with (
+            patch.dict(sys.modules, _WHISPER_STUBS),
+            patch("asyncio.get_event_loop"),
+            patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
+        ):
+            mock_loop.return_value.create_connection = fake_connection
+            make_runner().invoke(
+                voip,
+                ["sip", "transcribe", "sip:alice@example.com", "--password=secret"],
+                catch_exceptions=False,
+            )
+        assert captured.get("ssl") is None
+        assert captured.get("port") == 5060
+
+    def test_transcribe__no_tls_forces_tcp_on_sips_aor(self):
+        """--no-tls forces plain TCP even when the AOR uses sips:."""
+        from voip.__main__ import voip
+
+        captured = {}
+
+        async def fake_connection(factory, *, host, port, ssl):
+            captured["ssl"] = ssl
+            raise KeyboardInterrupt
+
+        with (
+            patch.dict(sys.modules, _WHISPER_STUBS),
+            patch("asyncio.get_event_loop"),
+            patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
+        ):
+            mock_loop.return_value.create_connection = fake_connection
+            make_runner().invoke(
+                voip,
+                [
+                    "sip",
+                    "transcribe",
+                    "sips:alice@example.com",
+                    "--password=secret",
+                    "--no-tls",
+                ],
+                catch_exceptions=False,
+            )
+        assert captured.get("ssl") is None
+
+    def test_transcribe__aor_sets_protocol_aor(self):
+        """The AOR positional argument sets the normalized aor on the protocol."""
+        from voip.__main__ import voip
+
         captured = {}
 
         async def fake_connection(factory, *, host, port, ssl):
@@ -105,29 +258,57 @@ class TestTranscribeCLI:
             patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
         ):
             mock_loop.return_value.create_connection = fake_connection
-            runner.invoke(
+            make_runner().invoke(
+                voip,
+                ["sip", "transcribe", "sips:alice@carrier.example.com", "--password=p"],
+                catch_exceptions=False,
+            )
+        # AOR stored on protocol must NOT include port (RFC 3261 §10)
+        assert captured.get("aor") == "sips:alice@carrier.example.com"
+
+    def test_transcribe__username_override(self):
+        """--username overrides the user part from the AOR."""
+        from voip.__main__ import voip
+
+        captured = {}
+
+        async def fake_connection(factory, *, host, port, ssl):
+            protocol = factory()
+            captured["aor"] = protocol.aor
+            captured["username"] = protocol.username
+            raise KeyboardInterrupt
+
+        with (
+            patch.dict(sys.modules, _WHISPER_STUBS),
+            patch("asyncio.get_event_loop"),
+            patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
+        ):
+            mock_loop.return_value.create_connection = fake_connection
+            make_runner().invoke(
                 voip,
                 [
                     "sip",
                     "transcribe",
-                    "--server=sip.example.com",
-                    "--username=u",
+                    "sips:alice@carrier.example.com",
+                    "--username=bob",
                     "--password=p",
                 ],
                 catch_exceptions=False,
             )
-        assert captured.get("aor") == "sips:u@sip.example.com"
+        assert captured.get("username") == "bob"
+        assert captured.get("aor") == "sips:bob@carrier.example.com"
 
-    def test_transcribe__server_with_port_is_parsed(self):
-        """Parse host and port from SIP_SERVER when a colon is present."""
+    def test_transcribe__proxy_overrides_outbound_proxy(self):
+        """--proxy overrides the outbound proxy address derived from AOR."""
         from voip.__main__ import voip
 
-        runner = make_runner()
         captured = {}
 
         async def fake_connection(factory, *, host, port, ssl):
             protocol = factory()
-            captured["server_addr"] = protocol.server_address
+            captured["proxy"] = protocol.outbound_proxy
+            captured["host"] = host
+            captured["port"] = port
             raise KeyboardInterrupt
 
         with (
@@ -136,30 +317,30 @@ class TestTranscribeCLI:
             patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
         ):
             mock_loop.return_value.create_connection = fake_connection
-            runner.invoke(
+            make_runner().invoke(
                 voip,
                 [
                     "sip",
                     "transcribe",
-                    "--server=sip.carrier.example:5080",
-                    "--aor=sip:user@carrier.example",
-                    "--username=user",
-                    "--password=pass",
+                    "sips:alice@carrier.com",
+                    "--proxy=proxy.carrier.com:5061",
+                    "--password=p",
                 ],
                 catch_exceptions=False,
             )
-        assert captured.get("server_addr") == ("sip.carrier.example", 5080)
+        assert captured.get("proxy") == ("proxy.carrier.com", 5061)
+        assert captured.get("host") == "proxy.carrier.com"
+        assert captured.get("port") == 5061
 
-    def test_transcribe__server_without_port_defaults_to_5061(self):
-        """Use port 5061 when SIP_SERVER has no port (SIP/TLS default)."""
+    def test_transcribe__aor_with_port_parsed_as_outbound_proxy(self):
+        """Port in AOR sets the outbound proxy port on the protocol."""
         from voip.__main__ import voip
 
-        runner = make_runner()
         captured = {}
 
         async def fake_connection(factory, *, host, port, ssl):
             protocol = factory()
-            captured["server_addr"] = protocol.server_address
+            captured["proxy"] = protocol.outbound_proxy
             raise KeyboardInterrupt
 
         with (
@@ -168,25 +349,22 @@ class TestTranscribeCLI:
             patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
         ):
             mock_loop.return_value.create_connection = fake_connection
-            runner.invoke(
+            make_runner().invoke(
                 voip,
                 [
                     "sip",
                     "transcribe",
-                    "--server=sip.carrier.example",
-                    "--aor=sip:user@carrier.example",
-                    "--username=user",
-                    "--password=pass",
+                    "sips:alice@carrier.example.com:5080",
+                    "--password=p",
                 ],
                 catch_exceptions=False,
             )
-        assert captured.get("server_addr") == ("sip.carrier.example", 5061)
+        assert captured.get("proxy") == ("carrier.example.com", 5080)
 
     def test_transcribe__stun_none_disables_stun(self):
         """Disable RTP STUN when --stun-server=none is passed."""
         from voip.__main__ import voip
 
-        runner = make_runner()
         captured = {}
 
         async def fake_connection(factory, *, host, port, ssl):
@@ -200,14 +378,12 @@ class TestTranscribeCLI:
             patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
         ):
             mock_loop.return_value.create_connection = fake_connection
-            runner.invoke(
+            make_runner().invoke(
                 voip,
                 [
                     "sip",
                     "transcribe",
-                    "--server=sip.example.com",
-                    "--aor=sip:u@example.com",
-                    "--username=u",
+                    "sips:alice@example.com",
                     "--password=p",
                     "--stun-server=none",
                 ],
@@ -219,7 +395,6 @@ class TestTranscribeCLI:
         """Log and echo a message when registration succeeds."""
         from voip.__main__ import voip
 
-        runner = make_runner()
         protocol_holder = {}
 
         async def fake_connection(factory, *, host, port, ssl):
@@ -233,14 +408,12 @@ class TestTranscribeCLI:
             patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
         ):
             mock_loop.return_value.create_connection = fake_connection
-            runner.invoke(
+            make_runner().invoke(
                 voip,
                 [
                     "sip",
                     "transcribe",
-                    "--server=sip.example.com",
-                    "--aor=sip:u@example.com",
-                    "--username=u",
+                    "sips:alice@example.com",
                     "--password=p",
                     "--stun-server=none",
                 ],
@@ -254,7 +427,6 @@ class TestTranscribeCLI:
         """Answer the call when call_received is invoked."""
         from voip.__main__ import voip
 
-        runner = make_runner()
         protocol_holder = {}
 
         async def fake_connection(factory, *, host, port, ssl):
@@ -268,14 +440,12 @@ class TestTranscribeCLI:
             patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
         ):
             mock_loop.return_value.create_connection = fake_connection
-            runner.invoke(
+            make_runner().invoke(
                 voip,
                 [
                     "sip",
                     "transcribe",
-                    "--server=sip.example.com",
-                    "--aor=sip:u@example.com",
-                    "--username=u",
+                    "sips:alice@example.com",
                     "--password=p",
                     "--stun-server=none",
                 ],
@@ -304,7 +474,6 @@ class TestTranscribeCLI:
         """call_received answers with a WhisperCall subclass."""
         from voip.__main__ import voip
 
-        runner = make_runner()
         protocol_holder = {}
 
         async def fake_connection(factory, *, host, port, ssl):
@@ -324,14 +493,12 @@ class TestTranscribeCLI:
         ):
             wm.load_model.return_value = MagicMock()
             mock_loop.return_value.create_connection = fake_connection
-            runner.invoke(
+            make_runner().invoke(
                 voip,
                 [
                     "sip",
                     "transcribe",
-                    "--server=sip.example.com",
-                    "--aor=sip:u@example.com",
-                    "--username=u",
+                    "sips:alice@example.com",
                     "--password=p",
                     "--stun-server=none",
                 ],
