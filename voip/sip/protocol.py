@@ -805,9 +805,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
             raise ValueError(f"Unsupported digest algorithm: {algorithm!r}") from None
         is_sess = algorithm.endswith("-sess")
         if is_sess and cnonce is None:
-            raise ValueError(
-                f"algorithm={algorithm!r} requires a cnonce value"
-            )
+            raise ValueError(f"algorithm={algorithm!r} requires a cnonce value")
 
         def h(data: str) -> str:
             return hashlib.new(hash_name, data.encode()).hexdigest()
