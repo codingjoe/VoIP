@@ -40,15 +40,6 @@ Answer calls and transcribe them live from the terminal:
 voip sip transcribe sips:alice@sip.example.com --password secret
 ```
 
-The AOR (`sips:alice@sip.example.com`) encodes both the SIP identity and the
-connection target.  The scheme and port determine the transport:
-
-- `sips:` URI or port **5061** → TLS (default)
-- `sip:` URI or port **5060** → plain TCP
-
-Pass `--proxy host[:port]` when the outbound proxy address differs from the
-registrar domain, e.g. when the carrier uses `proxy.carrier.com` but your AOR
-is `sips:alice@carrier.com`.
 
 ### Python API
 
