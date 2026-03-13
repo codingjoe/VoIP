@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import dataclasses
+import hmac as _hmac_stdlib
 import os
 import struct
 
@@ -77,7 +78,12 @@ class SRTPSession:
     _session_key: bytes = dataclasses.field(init=False)
     _session_auth_key: bytes = dataclasses.field(init=False)
     _session_salt: bytes = dataclasses.field(init=False)
-    _roc: int = dataclasses.field(init=False, default=0)
+    #: Rollover counter and highest sent sequence number for encryption.
+    _send_roc: int = dataclasses.field(init=False, default=0)
+    _last_send_seq: int = dataclasses.field(init=False, default=-1)
+    #: Rollover counter and highest received sequence number for decryption.
+    _recv_roc: int = dataclasses.field(init=False, default=0)
+    _last_recv_seq: int = dataclasses.field(init=False, default=-1)
 
     def __post_init__(self) -> None:
         self._session_key = _prf(self.master_key, 0x00, self.master_salt, _KEY_SIZE)
@@ -118,18 +124,48 @@ class SRTPSession:
         )
         return iv_int.to_bytes(16, "big")
 
-    def _auth_tag(self, packet_no_tag: bytes) -> bytes:
+    def _auth_tag(self, packet_no_tag: bytes, roc: int) -> bytes:
         """Compute the 10-byte HMAC-SHA1 authentication tag (RFC 3711 §4.2)."""
-        roc_bytes = struct.pack(">I", self._roc)
+        roc_bytes = struct.pack(">I", roc)
         mac = hmac.HMAC(self._session_auth_key, hashes.SHA1())  # noqa: S303
         mac.update(packet_no_tag + roc_bytes)
         return mac.finalize()[:_AUTH_TAG_SIZE]
+
+    def _estimate_recv_index(self, seq: int) -> tuple[int, int]:
+        """Estimate the packet index and new ROC for a received sequence number.
+
+        Implements the index estimation algorithm from RFC 3711 §3.3.1.
+
+        Args:
+            seq: The 16-bit sequence number from the received RTP header.
+
+        Returns:
+            A ``(index, roc_guess)`` tuple where ``index`` is the estimated
+            48-bit packet index and ``roc_guess`` is the ROC value used.
+        """
+        s_l = self._last_recv_seq
+        roc = self._recv_roc
+        if s_l < 0:
+            # No packets received yet; use the current ROC.
+            return (roc << 16) | seq, roc
+        if s_l < 0x8000:  # s_l < 2^15
+            if seq - s_l > 0x8000:
+                roc_guess = (roc - 1) % (1 << 32)
+            else:
+                roc_guess = roc
+        else:  # s_l >= 2^15
+            if s_l - seq > 0x8000:
+                roc_guess = (roc + 1) % (1 << 32)
+            else:
+                roc_guess = roc
+        return (roc_guess << 16) | seq, roc_guess
 
     def encrypt(self, packet: bytes) -> bytes:
         """Encrypt an RTP packet to produce an SRTP packet.
 
         Encrypts the RTP payload with AES-CM and appends an 80-bit
-        HMAC-SHA1 authentication tag.
+        HMAC-SHA1 authentication tag.  Tracks sequence number rollover per
+        RFC 3711 §3.3.1 to ensure the packet index remains unique.
 
         Args:
             packet: Raw RTP packet bytes (at least 12 bytes).
@@ -143,21 +179,29 @@ class SRTPSession:
         payload = packet[12:]
         ssrc = struct.unpack(">I", header[8:12])[0]
         seq = struct.unpack(">H", header[2:4])[0]
-        index = (self._roc << 16) | seq
 
+        # Detect rollover: the sequence number wrapped from ~65535 back to ~0.
+        # For the send side, sequence numbers always increase monotonically so
+        # any decrease indicates a rollover.
+        if self._last_send_seq >= 0 and seq < self._last_send_seq:
+            self._send_roc = (self._send_roc + 1) % (1 << 32)
+        self._last_send_seq = seq
+
+        index = (self._send_roc << 16) | seq
         iv = self._compute_iv(ssrc, index)
         cipher = Cipher(algorithms.AES(self._session_key), modes.CTR(iv))
         enc = cipher.encryptor()
         encrypted_payload = enc.update(payload) + enc.finalize()
 
         srtp_no_tag = header + encrypted_payload
-        return srtp_no_tag + self._auth_tag(srtp_no_tag)
+        return srtp_no_tag + self._auth_tag(srtp_no_tag, self._send_roc)
 
     def decrypt(self, packet: bytes) -> bytes | None:
         """Decrypt and authenticate an SRTP packet.
 
         Verifies the HMAC-SHA1-80 authentication tag and, if valid, decrypts
-        the payload with AES-CM.
+        the payload with AES-CM.  The packet index is estimated per
+        RFC 3711 §3.3.1, tracking rollovers across the 16-bit sequence space.
 
         Args:
             packet: Raw SRTP packet bytes (at least 12 + 10 bytes).
@@ -174,11 +218,21 @@ class SRTPSession:
         header = packet[:12]
         ssrc = struct.unpack(">I", header[8:12])[0]
         seq = struct.unpack(">H", header[2:4])[0]
-        index = (self._roc << 16) | seq
 
-        expected_tag = self._auth_tag(srtp_no_tag)
-        if received_tag != expected_tag:
+        index, roc_guess = self._estimate_recv_index(seq)
+
+        expected_tag = self._auth_tag(srtp_no_tag, roc_guess)
+        if not _hmac_stdlib.compare_digest(received_tag, expected_tag):
             return None
+
+        # Authentication passed — update the highest received sequence number
+        # and ROC per RFC 3711 §3.3.1.
+        if roc_guess == self._recv_roc:
+            if self._last_recv_seq < 0 or seq > self._last_recv_seq:
+                self._last_recv_seq = seq
+        elif roc_guess == (self._recv_roc + 1) % (1 << 32):
+            self._recv_roc = roc_guess
+            self._last_recv_seq = seq
 
         encrypted_payload = srtp_no_tag[12:]
         iv = self._compute_iv(ssrc, index)

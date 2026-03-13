@@ -152,7 +152,7 @@ class RealtimeTransportProtocol(STUNProtocol):
 
         When the matched handler carries an SRTP session the packet is
         authenticated and decrypted before being forwarded; packets that fail
-        authentication are silently discarded.
+        authentication are logged at WARNING level and discarded.
         """
         handler = self.calls.get(addr)
         if handler is None:

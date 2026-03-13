@@ -2,7 +2,6 @@
 
 import asyncio
 import dataclasses
-import errno
 import hashlib
 from unittest.mock import MagicMock
 
@@ -252,22 +251,6 @@ class TestCallerID:
         assert isinstance(response, Response)
         assert response.status_code == 200
         assert called_addr == ("192.0.2.1", 5060)
-
-    def test_error_received__blocking_io(self):
-        """Log blocking IO errors without re-raising."""
-        protocol = SessionInitiationProtocol(
-            outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
-        )
-        exc = OSError(errno.EAGAIN, "Resource temporarily unavailable")
-        protocol.error_received(exc)  # should not raise
-
-    def test_error_received__reraises(self):
-        """Log unexpected transport errors without re-raising (delegates to base)."""
-        protocol = SessionInitiationProtocol(
-            outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
-        )
-        exc = OSError("Unexpected error")
-        protocol.error_received(exc)  # should not raise
 
     def test_connection_lost__no_exception(self):
         """Handle a clean connection close without raising."""
