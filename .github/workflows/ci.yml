@@ -15,6 +15,12 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           path: dist/*
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+      - run: uv run --group docs mkdocs build --strict
   pytest:
     name: pytest
     strategy:
