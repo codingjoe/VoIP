@@ -682,7 +682,7 @@ class TestAnswer:
 
     @pytest.mark.asyncio
     async def test_answer__includes_contact_header(self, fake_rtp_transport):
-        """Include a Contact header with the local SIP address in 200 OK."""
+        """Include a Contact header with the local SIPS address in 200 OK."""
         protocol = FakeProtocol()
         addr = ("192.0.2.1", 5060)
         invite = self._make_invite("answer-contact-1")
@@ -690,7 +690,8 @@ class TestAnswer:
         await self._run_answer(protocol, invite, fake_rtp_transport)
         response, _ = protocol._sent_responses[-1]
         assert "Contact" in response.headers
-        assert response.headers["Contact"].startswith("<sip:")
+        # FakeProtocol uses FakeTransport (TLS, not downgraded) → sips:
+        assert response.headers["Contact"].startswith("<sips:")
 
     @pytest.mark.asyncio
     async def test_answer__includes_allow_header(self, fake_rtp_transport):
@@ -1631,6 +1632,7 @@ class TestRegistration:
     def test_registrar_uri__strips_user_from_aor(self):
         """Derive registrar URI from AOR by stripping the user part."""
         p = make_register_session(aor="sip:alice@example.com")
+        # _is_tls=False by default (no connection_made called)
         assert p.registrar_uri == "sip:example.com"
 
     def test_registrar_uri__preserves_port(self):
@@ -1638,9 +1640,23 @@ class TestRegistration:
         p = make_register_session(aor="sip:alice@example.com:5080")
         assert p.registrar_uri == "sip:example.com:5080"
 
-    def test_registrar_uri__normalises_sips_to_sip(self):
-        """sips: AOR is normalised to sip: in the registrar URI (RFC 5630 §4)."""
+    def test_registrar_uri__uses_sips_when_tls(self):
+        """Prefer sips: scheme over TLS before any downgrade (RFC 5630 §4)."""
+        p = make_register_session(aor="sip:alice@example.com")
+        p._is_tls = True
+        assert p.registrar_uri == "sips:example.com"
+
+    def test_registrar_uri__uses_sip_when_downgraded(self):
+        """Fall back to sip: after a sips: rejection (RFC 5630 §4 downgrade)."""
+        p = make_register_session(aor="sip:alice@example.com")
+        p._is_tls = True
+        p._sips_downgraded = True
+        assert p.registrar_uri == "sip:example.com"
+
+    def test_registrar_uri__normalises_sips_aor_when_not_tls(self):
+        """sips: AOR normalised to sip: in the registrar URI when not on TLS."""
         p = make_register_session(aor="sips:alice@example.com")
+        # _is_tls=False → always sip:
         assert p.registrar_uri == "sip:example.com"
 
     async def test_connection_made__sends_register(self):
@@ -1662,7 +1678,8 @@ class TestRegistration:
         await asyncio.sleep(0.05)
         transport.write.assert_called()
         (data,) = transport.write.call_args[0]
-        assert b"REGISTER sip:example.com SIP/2.0" in data
+        # make_mock_transport() simulates TLS → sips: is preferred first attempt.
+        assert b"REGISTER sips:example.com SIP/2.0" in data
 
     async def test_register__includes_required_headers(self):
         """REGISTER request includes From, To, Call-ID, CSeq, Contact and Expires."""
@@ -1675,7 +1692,8 @@ class TestRegistration:
         (data,) = transport.write.call_args[0]
         assert b"From: sip:alice@example.com" in data
         assert b"To: sip:alice@example.com" in data
-        assert b"Contact: <sip:alice@127.0.0.1:5061;transport=tls>" in data
+        # TLS and not downgraded → sips: Contact
+        assert b"Contact: <sips:alice@127.0.0.1:5061>" in data
         assert b"Expires: 3600" in data
 
     async def test_register__increments_cseq(self):
@@ -1855,7 +1873,7 @@ class TestRegistration:
         assert branch1 != branch2
 
     async def test_register__contact_uses_local_addr(self):
-        """Contact header uses sip: URI with transport=tls and the local socket address."""
+        """Contact header uses sips: URI when TLS is active (RFC 5630 §4, first attempt)."""
         p = make_register_session()
         p.local_address = "10.0.0.5", 5061
         transport = make_mock_transport("10.0.0.5", 5061)
@@ -1863,7 +1881,59 @@ class TestRegistration:
         p._is_tls = True
         await p.register()
         (data,) = transport.write.call_args[0]
+        assert b"Contact: <sips:alice@10.0.0.5:5061>" in data
+
+    async def test_register__contact_uses_sip_transport_tls_when_downgraded(self):
+        """Contact header falls back to sip:;transport=tls after a 403 downgrade."""
+        p = make_register_session()
+        p.local_address = "10.0.0.5", 5061
+        transport = make_mock_transport("10.0.0.5", 5061)
+        p.transport = transport
+        p._is_tls = True
+        p._sips_downgraded = True
+        await p.register()
+        (data,) = transport.write.call_args[0]
         assert b"Contact: <sip:alice@10.0.0.5:5061;transport=tls>" in data
+
+    async def test_response_received__403_for_sips_retries_with_sip(self):
+        """403 Forbidden on REGISTER when using sips: triggers a sip:;transport=tls retry."""
+        p = make_register_session(username="alice", password="secret")  # noqa: S106
+        transport = make_mock_transport()
+        p.transport = transport
+        p.local_address = ("127.0.0.1", 5061)
+        p._is_tls = True
+        p.response_received(
+            Response(
+                status_code=403,
+                reason="Forbidden (sips URI unsupported)",
+                headers={"CSeq": "1 REGISTER"},
+            ),
+            ("192.0.2.2", 5061),
+        )
+        await asyncio.sleep(0.05)
+        (data,) = transport.write.call_args[0]
+        # After downgrade, REGISTER request-URI must use sip: scheme.
+        assert b"REGISTER sip:" in data
+        # Contact must use sip: with transport=tls, not sips:.
+        assert b"Contact: <sip:alice@127.0.0.1:5061;transport=tls>" in data
+
+    async def test_response_received__403_not_retriggered_after_downgrade(self):
+        """A second 403 after downgrading does not loop — raises NotImplementedError."""
+        p = make_register_session()
+        transport = make_mock_transport()
+        p.transport = transport
+        p.local_address = ("127.0.0.1", 5061)
+        p._is_tls = True
+        p._sips_downgraded = True  # already downgraded
+        with pytest.raises(NotImplementedError):
+            p.response_received(
+                Response(
+                    status_code=403,
+                    reason="Forbidden",
+                    headers={"CSeq": "1 REGISTER"},
+                ),
+                ("192.0.2.2", 5061),
+            )
 
     async def test_data_received__sip_response__calls_response_received(self):
         """data_received routes SIP messages to response_received via TCP stream."""

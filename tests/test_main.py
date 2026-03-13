@@ -88,7 +88,7 @@ class TestTranscribeCLI:
         assert "server" in result.output.lower() or "SIP_SERVER" in result.output
 
     def test_transcribe__missing_aor_defaults_to_username_at_host(self):
-        """Default AOR to sips:{username}@{server_host} when SIP_AOR is not provided."""
+        """Default AOR to sip:{username}@{server_host} when SIP_AOR is not provided."""
         from voip.__main__ import voip
 
         runner = make_runner()
