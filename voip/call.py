@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING
 from voip.rtp import RealtimeTransportProtocol
 from voip.sdp.types import MediaDescription
 from voip.sip.types import CallerID
+from voip.srtp import SRTPSession
 
 if TYPE_CHECKING:
     from voip.sip.protocol import SessionInitiationProtocol
@@ -64,6 +65,8 @@ class Call:
     caller: CallerID = dataclasses.field(default_factory=lambda: CallerID(""))
     #: Negotiated SDP media description for this call leg.
     media: MediaDescription | None = None
+    #: SRTP session for encrypting and decrypting media (set by the SIP layer).
+    srtp: SRTPSession | None = None
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         """Handle a raw RTP datagram.  Override in subclasses to process media."""
@@ -71,10 +74,14 @@ class Call:
     def send_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
         """Send a datagram through the shared RTP socket.
 
+        Encrypts the datagram with the call's SRTP session when one is set.
+
         Args:
-            data: Raw bytes to send.
+            data: Raw RTP bytes to send.
             addr: Destination ``(host, port)``.
         """
+        if self.srtp is not None:
+            data = self.srtp.encrypt(data)
         self.rtp.send(data, addr)
 
     async def hang_up(self) -> None:

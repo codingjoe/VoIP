@@ -28,10 +28,10 @@ def make_runner():
 
 class TestParseServer:
     def test_parse_server__without_port(self):
-        """Return port 5060 when no port is specified."""
+        """Return port 5061 when no port is specified (SIP/TLS default)."""
         from voip.__main__ import _parse_server
 
-        assert _parse_server(None, None, "sip.example.com") == ("sip.example.com", 5060)
+        assert _parse_server(None, None, "sip.example.com") == ("sip.example.com", 5061)
 
     def test_parse_server__with_port(self):
         """Parse host and port from HOST:PORT format."""
@@ -88,13 +88,13 @@ class TestTranscribeCLI:
         assert "server" in result.output.lower() or "SIP_SERVER" in result.output
 
     def test_transcribe__missing_aor_defaults_to_username_at_host(self):
-        """Default AOR to sip:{username}@{server_host} when SIP_AOR is not provided."""
+        """Default AOR to sips:{username}@{server_host} when SIP_AOR is not provided."""
         from voip.__main__ import voip
 
         runner = make_runner()
         captured = {}
 
-        async def fake_endpoint(factory, *, local_addr):
+        async def fake_connection(factory, *, host, port, ssl):
             protocol = factory()
             captured["aor"] = protocol.aor
             raise KeyboardInterrupt
@@ -104,7 +104,7 @@ class TestTranscribeCLI:
             patch("asyncio.get_event_loop"),
             patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
         ):
-            mock_loop.return_value.create_datagram_endpoint = fake_endpoint
+            mock_loop.return_value.create_connection = fake_connection
             runner.invoke(
                 voip,
                 [
@@ -116,7 +116,7 @@ class TestTranscribeCLI:
                 ],
                 catch_exceptions=False,
             )
-        assert captured.get("aor") == "sip:u@sip.example.com"
+        assert captured.get("aor") == "sips:u@sip.example.com"
 
     def test_transcribe__server_with_port_is_parsed(self):
         """Parse host and port from SIP_SERVER when a colon is present."""
@@ -125,7 +125,7 @@ class TestTranscribeCLI:
         runner = make_runner()
         captured = {}
 
-        async def fake_endpoint(factory, *, local_addr):
+        async def fake_connection(factory, *, host, port, ssl):
             protocol = factory()
             captured["server_addr"] = protocol.server_address
             raise KeyboardInterrupt
@@ -135,7 +135,7 @@ class TestTranscribeCLI:
             patch("asyncio.get_event_loop"),
             patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
         ):
-            mock_loop.return_value.create_datagram_endpoint = fake_endpoint
+            mock_loop.return_value.create_connection = fake_connection
             runner.invoke(
                 voip,
                 [
@@ -150,14 +150,14 @@ class TestTranscribeCLI:
             )
         assert captured.get("server_addr") == ("sip.carrier.example", 5080)
 
-    def test_transcribe__server_without_port_defaults_to_5060(self):
-        """Use port 5060 when SIP_SERVER has no port."""
+    def test_transcribe__server_without_port_defaults_to_5061(self):
+        """Use port 5061 when SIP_SERVER has no port (SIP/TLS default)."""
         from voip.__main__ import voip
 
         runner = make_runner()
         captured = {}
 
-        async def fake_endpoint(factory, *, local_addr):
+        async def fake_connection(factory, *, host, port, ssl):
             protocol = factory()
             captured["server_addr"] = protocol.server_address
             raise KeyboardInterrupt
@@ -167,7 +167,7 @@ class TestTranscribeCLI:
             patch("asyncio.get_event_loop"),
             patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
         ):
-            mock_loop.return_value.create_datagram_endpoint = fake_endpoint
+            mock_loop.return_value.create_connection = fake_connection
             runner.invoke(
                 voip,
                 [
@@ -180,18 +180,18 @@ class TestTranscribeCLI:
                 ],
                 catch_exceptions=False,
             )
-        assert captured.get("server_addr") == ("sip.carrier.example", 5060)
+        assert captured.get("server_addr") == ("sip.carrier.example", 5061)
 
     def test_transcribe__stun_none_disables_stun(self):
-        """Disable STUN when --stun-server=none is passed."""
+        """Disable RTP STUN when --stun-server=none is passed."""
         from voip.__main__ import voip
 
         runner = make_runner()
         captured = {}
 
-        async def fake_endpoint(factory, *, local_addr):
+        async def fake_connection(factory, *, host, port, ssl):
             protocol = factory()
-            captured["stun"] = protocol.stun_server_address
+            captured["stun"] = protocol.rtp_stun_server_address
             raise KeyboardInterrupt
 
         with (
@@ -199,7 +199,7 @@ class TestTranscribeCLI:
             patch("asyncio.get_event_loop"),
             patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
         ):
-            mock_loop.return_value.create_datagram_endpoint = fake_endpoint
+            mock_loop.return_value.create_connection = fake_connection
             runner.invoke(
                 voip,
                 [
@@ -222,7 +222,7 @@ class TestTranscribeCLI:
         runner = make_runner()
         protocol_holder = {}
 
-        async def fake_endpoint(factory, *, local_addr):
+        async def fake_connection(factory, *, host, port, ssl):
             protocol = factory()
             protocol_holder["protocol"] = protocol
             raise KeyboardInterrupt
@@ -232,7 +232,7 @@ class TestTranscribeCLI:
             patch("asyncio.get_event_loop"),
             patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
         ):
-            mock_loop.return_value.create_datagram_endpoint = fake_endpoint
+            mock_loop.return_value.create_connection = fake_connection
             runner.invoke(
                 voip,
                 [
@@ -257,7 +257,7 @@ class TestTranscribeCLI:
         runner = make_runner()
         protocol_holder = {}
 
-        async def fake_endpoint(factory, *, local_addr):
+        async def fake_connection(factory, *, host, port, ssl):
             protocol = factory()
             protocol_holder["protocol"] = protocol
             raise KeyboardInterrupt
@@ -267,7 +267,7 @@ class TestTranscribeCLI:
             patch("asyncio.get_event_loop"),
             patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
         ):
-            mock_loop.return_value.create_datagram_endpoint = fake_endpoint
+            mock_loop.return_value.create_connection = fake_connection
             runner.invoke(
                 voip,
                 [
@@ -294,10 +294,7 @@ class TestTranscribeCLI:
             async def run():
                 with patch.object(protocol, "answer") as mock_answer:
                     protocol.connection_made(MagicMock())
-                    protocol._request_addrs[request.headers["Call-ID"]] = (
-                        "192.0.2.1",
-                        5060,
-                    )
+                    protocol._pending_invites.add(request.headers["Call-ID"])
                     protocol.call_received(request)
                     mock_answer.assert_called_once()
 
@@ -310,7 +307,7 @@ class TestTranscribeCLI:
         runner = make_runner()
         protocol_holder = {}
 
-        async def fake_endpoint(factory, *, local_addr):
+        async def fake_connection(factory, *, host, port, ssl):
             protocol = factory()
             protocol_holder["protocol"] = protocol
             raise KeyboardInterrupt
@@ -326,7 +323,7 @@ class TestTranscribeCLI:
             patch("voip.audio.whisper") as wm,
         ):
             wm.load_model.return_value = MagicMock()
-            mock_loop.return_value.create_datagram_endpoint = fake_endpoint
+            mock_loop.return_value.create_connection = fake_connection
             runner.invoke(
                 voip,
                 [
@@ -353,10 +350,7 @@ class TestTranscribeCLI:
             async def _run_whisper():
                 with patch.object(protocol, "answer") as mock_answer:
                     protocol.connection_made(MagicMock())
-                    protocol._request_addrs[request.headers["Call-ID"]] = (
-                        "192.0.2.1",
-                        5060,
-                    )
+                    protocol._pending_invites.add(request.headers["Call-ID"])
                     protocol.call_received(request)
                     mock_answer.assert_called_once()
                     _, kwargs = mock_answer.call_args

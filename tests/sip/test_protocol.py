@@ -81,38 +81,49 @@ INVITE_NO_SDP = (
 
 
 class FakeTransport:
-    """Fake UDP transport for testing."""
+    """Fake TCP/TLS transport for testing."""
 
-    def __init__(self, local_addr=("127.0.0.1", 5060)):
+    def __init__(
+        self,
+        local_addr: tuple[str, int] = ("127.0.0.1", 5061),
+        peer_addr: tuple[str, int] = ("192.0.2.1", 5061),
+    ):
         self._local_addr = local_addr
-        self.sent = []
+        self._peer_addr = peer_addr
+        self.sent: list[bytes] = []
 
-    def sendto(self, data, addr):
-        self.sent.append((data, addr))
+    def write(self, data: bytes) -> None:
+        self.sent.append(data)
 
     def get_extra_info(self, key, default=None):
-        return self._local_addr if key == "sockname" else default
+        if key == "sockname":
+            return self._local_addr
+        if key == "peername":
+            return self._peer_addr
+        if key == "ssl_object":
+            return object()  # non-None signals TLS
+        return default
 
 
 class FakeProtocol(SessionInitiationProtocol):
     """Fake SIP protocol that captures sent messages."""
 
     def __init__(self):
-        super().__init__(server_address=("127.0.0.1", 5060), aor="sip:test@example.com")
-        self.transport = FakeTransport()
-        self._sent_responses: list[tuple[Response, tuple]] = []
+        super().__init__(server_address=("127.0.0.1", 5061), aor="sip:test@example.com")
+        self.connection_made(FakeTransport())
+        self._sent_responses: list[tuple[Response, None]] = []
 
-    def send(self, message, addr):
+    def send(self, message):
         if isinstance(message, Response):
-            self._sent_responses.append((message, addr))
-        super().send(message, addr)
+            self._sent_responses.append((message, None))
+        super().send(message)
 
 
 class ConcreteProtocol(SessionInitiationProtocol):
     """Concrete subclass for testing that records received messages."""
 
     def __init__(self):
-        super().__init__(server_address=("127.0.0.1", 5060), aor="sip:test@example.com")
+        super().__init__(server_address=("127.0.0.1", 5061), aor="sip:test@example.com")
         self.requests = []
         self.responses = []
 
@@ -205,46 +216,48 @@ class TestCallerID:
         """CallerID compares equal to a plain str with the same value."""
         assert CallerID("sip:alice@example.com") == "sip:alice@example.com"
 
-    def test_datagram_received__request(self):
-        """Dispatch a received SIP request datagram to request_received."""
+    def test_data_received__request(self):
+        """Dispatch a received SIP request to request_received via TCP stream."""
         protocol = ConcreteProtocol()
+        transport = FakeTransport(peer_addr=("192.0.2.1", 5060))
+        protocol.transport = transport
         data = (
             b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
-            b"Via: SIP/2.0/UDP pc33.atlanta.com\r\n"
+            b"Via: SIP/2.0/TLS pc33.atlanta.com\r\n"
             b"\r\n"
         )
-        addr = ("192.0.2.1", 5060)
-        protocol.datagram_received(data, addr)
+        protocol.data_received(data)
         assert len(protocol.requests) == 1
         request, called_addr = protocol.requests[0]
         assert isinstance(request, Request)
         assert request.method == "INVITE"
-        assert called_addr == addr
+        assert called_addr == ("192.0.2.1", 5060)
 
-    def test_datagram_received__response(self):
-        """Dispatch a received SIP response datagram to response_received."""
+    def test_data_received__response(self):
+        """Dispatch a received SIP response to response_received via TCP stream."""
         protocol = ConcreteProtocol()
-        data = b"SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP pc33.atlanta.com\r\n\r\n"
-        addr = ("192.0.2.1", 5060)
-        protocol.datagram_received(data, addr)
+        transport = FakeTransport(peer_addr=("192.0.2.1", 5060))
+        protocol.transport = transport
+        data = b"SIP/2.0 200 OK\r\nVia: SIP/2.0/TLS pc33.atlanta.com\r\n\r\n"
+        protocol.data_received(data)
         assert len(protocol.responses) == 1
         response, called_addr = protocol.responses[0]
         assert isinstance(response, Response)
         assert response.status_code == 200
-        assert called_addr == addr
+        assert called_addr == ("192.0.2.1", 5060)
 
     def test_error_received__blocking_io(self):
         """Log blocking IO errors without re-raising."""
         protocol = SessionInitiationProtocol(
-            server_address=("127.0.0.1", 5060), aor="sip:test@example.com"
+            server_address=("127.0.0.1", 5061), aor="sip:test@example.com"
         )
         exc = OSError(errno.EAGAIN, "Resource temporarily unavailable")
         protocol.error_received(exc)  # should not raise
 
     def test_error_received__reraises(self):
-        """Log unexpected transport errors without re-raising (delegates to STUNProtocol)."""
+        """Log unexpected transport errors without re-raising (delegates to base)."""
         protocol = SessionInitiationProtocol(
-            server_address=("127.0.0.1", 5060), aor="sip:test@example.com"
+            server_address=("127.0.0.1", 5061), aor="sip:test@example.com"
         )
         exc = OSError("Unexpected error")
         protocol.error_received(exc)  # should not raise
@@ -252,14 +265,14 @@ class TestCallerID:
     def test_connection_lost__no_exception(self):
         """Handle a clean connection close without raising."""
         protocol = SessionInitiationProtocol(
-            server_address=("127.0.0.1", 5060), aor="sip:test@example.com"
+            server_address=("127.0.0.1", 5061), aor="sip:test@example.com"
         )
         protocol.connection_lost(None)  # should not raise
 
     def test_connection_lost__with_exception(self):
         """Log an exception on connection lost without re-raising."""
         protocol = SessionInitiationProtocol(
-            server_address=("127.0.0.1", 5060), aor="sip:test@example.com"
+            server_address=("127.0.0.1", 5061), aor="sip:test@example.com"
         )
         protocol.connection_lost(Exception("Connection reset"))  # should not raise
 
@@ -268,7 +281,7 @@ class TestWithToTag:
     def test__with_to_tag__adds_tag(self):
         """Append the To tag to the To header for a known Call-ID."""
         protocol = SessionInitiationProtocol(
-            server_address=("127.0.0.1", 5060), aor="sip:test@example.com"
+            server_address=("127.0.0.1", 5061), aor="sip:test@example.com"
         )
         protocol._to_tags["call-1"] = "abc123"
         result = protocol._with_to_tag({"To": "sip:bob@biloxi.com"}, "call-1")
@@ -277,7 +290,7 @@ class TestWithToTag:
     def test__with_to_tag__unknown_call_id(self):
         """Leave the To header unchanged when the Call-ID has no stored tag."""
         protocol = SessionInitiationProtocol(
-            server_address=("127.0.0.1", 5060), aor="sip:test@example.com"
+            server_address=("127.0.0.1", 5061), aor="sip:test@example.com"
         )
         result = protocol._with_to_tag({"To": "sip:bob@biloxi.com"}, "unknown")
         assert result["To"] == "sip:bob@biloxi.com"
@@ -285,7 +298,7 @@ class TestWithToTag:
     def test__with_to_tag__missing_to_header(self):
         """Return an empty To header when none is present and no tag exists."""
         protocol = SessionInitiationProtocol(
-            server_address=("127.0.0.1", 5060), aor="sip:test@example.com"
+            server_address=("127.0.0.1", 5061), aor="sip:test@example.com"
         )
         result = protocol._with_to_tag({}, "unknown")
         assert result["To"] == ""
@@ -316,7 +329,7 @@ class TestRinging:
         assert ";tag=" in to_header
 
     def test_ringing__no_address(self, caplog):
-        """Log an error and send nothing when no address is stored for the Call-ID."""
+        """Log an error and send nothing when no pending INVITE is stored for the Call-ID."""
         protocol = FakeProtocol()
         request = Request(
             method="INVITE",
@@ -326,7 +339,7 @@ class TestRinging:
         with caplog.at_level("ERROR"):
             protocol.ringing(request)
         assert not protocol._sent_responses
-        assert "No address found" in caplog.text
+        assert "No pending INVITE found" in caplog.text
 
 
 class TestReject:
@@ -367,7 +380,7 @@ class TestReject:
         assert "reject-cleanup-1" not in protocol._to_tags
 
     def test_reject__no_address(self, caplog):
-        """Log an error and send nothing when no address is stored for the Call-ID."""
+        """Log an error and send nothing when no pending INVITE is stored for the Call-ID."""
         protocol = FakeProtocol()
         request = Request(
             method="INVITE",
@@ -377,7 +390,7 @@ class TestReject:
         with caplog.at_level("ERROR"):
             protocol.reject(request)
         assert not protocol._sent_responses
-        assert "No address found" in caplog.text
+        assert "No pending INVITE found" in caplog.text
 
 
 class TestBYEHandler:
@@ -492,8 +505,8 @@ class TestAnswer:
         mux.public_address.set_result(("127.0.0.1", 12000))
         protocol._rtp_protocol = mux
         protocol._rtp_transport = fake_rtp_transport
-        # Resolve the SIP protocol's own public address (for Contact header).
-        protocol.public_address = ("127.0.0.1", 5060)
+        # Resolve the SIP protocol's own local address (for Contact header).
+        protocol.local_address = ("127.0.0.1", 5061)
         await protocol._answer(invite, _CodecAwareCall)
 
     @pytest.mark.asyncio
@@ -625,7 +638,7 @@ class TestAnswer:
 
     @pytest.mark.asyncio
     async def test_answer__no_sdp_falls_back_to_default(self, fake_rtp_transport):
-        """Use payload type 0 (PCMU) when the INVITE has no SDP body."""
+        """Use payload type 0 (PCMU) with SAVP when the INVITE has no SDP body."""
         protocol = FakeProtocol()
         addr = ("192.0.2.1", 5060)
         invite = self._make_invite("answer-no-sdp-1")
@@ -656,18 +669,18 @@ class TestAnswer:
 
     @pytest.mark.asyncio
     async def test_answer__no_address_logs_error(self, caplog):
-        """Log an error and return early when no address is stored for the Call-ID."""
+        """Log an error and return early when no pending INVITE is tracked for the Call-ID."""
         protocol = FakeProtocol()
         invite = self._make_invite("no-addr-answer-1")
 
         with caplog.at_level("ERROR"):
-            await protocol._answer(invite, asyncio.DatagramProtocol)
-        assert "No address found" in caplog.text
+            await protocol._answer(invite, Call)
+        assert "No pending INVITE found" in caplog.text
         assert not protocol._sent_responses
 
     @pytest.mark.asyncio
     async def test_answer__includes_contact_header(self, fake_rtp_transport):
-        """Include a Contact header with the local SIP address in 200 OK."""
+        """Include a Contact header with the local SIPS address in 200 OK."""
         protocol = FakeProtocol()
         addr = ("192.0.2.1", 5060)
         invite = self._make_invite("answer-contact-1")
@@ -675,7 +688,7 @@ class TestAnswer:
         await self._run_answer(protocol, invite, fake_rtp_transport)
         response, _ = protocol._sent_responses[-1]
         assert "Contact" in response.headers
-        assert response.headers["Contact"].startswith("<sip:")
+        assert response.headers["Contact"].startswith("<sips:")
 
     @pytest.mark.asyncio
     async def test_answer__includes_allow_header(self, fake_rtp_transport):
@@ -829,7 +842,7 @@ class TestCANCELHandler:
         assert f";tag={tag}" in terminated.headers.get("To", "")
 
     def test_cancel__cleans_up_state(self):
-        """Remove Call-ID from _answered_calls, _request_addrs, and _to_tags."""
+        """Remove Call-ID from _answered_calls, _pending_invites, and _to_tags."""
         protocol = FakeProtocol()
         addr = ("192.0.2.1", 5060)
         invite = Request(
@@ -859,7 +872,7 @@ class TestCANCELHandler:
         )
         protocol.request_received(cancel, addr)
         assert "cancel-cleanup-1" not in protocol._answered_calls
-        assert "cancel-cleanup-1" not in protocol._request_addrs
+        assert "cancel-cleanup-1" not in protocol._pending_invites
         assert "cancel-cleanup-1" not in protocol._to_tags
 
     def test_cancel__no_pending_invite_skips_487(self):
@@ -940,12 +953,26 @@ def make_register_session(
     )
 
 
-def make_mock_transport(host: str = "127.0.0.1", port: int = 5060):
-    """Return a MagicMock transport with get_extra_info('sockname') configured."""
+def make_mock_transport(
+    host: str = "127.0.0.1",
+    port: int = 5061,
+    peer: tuple[str, int] = ("192.0.2.1", 5061),
+):
+    """Return a MagicMock transport with get_extra_info configured for TLS."""
     from unittest.mock import MagicMock  # noqa: PLC0415
 
     transport = MagicMock()
-    transport.get_extra_info.return_value = (host, port)
+
+    def _get_extra_info(key, default=None):
+        if key == "sockname":
+            return (host, port)
+        if key == "peername":
+            return peer
+        if key == "ssl_object":
+            return object()  # non-None signals TLS
+        return default
+
+    transport.get_extra_info.side_effect = _get_extra_info
     return transport
 
 
@@ -1027,44 +1054,41 @@ class TestSIPProtocol:
 
         def __init__(self):
             super().__init__(
-                server_address=("127.0.0.1", 5060),
+                server_address=("127.0.0.1", 5061),
                 aor="sip:test@example.com",
             )
             self._sent: list[tuple] = []
 
-        def send(self, message, addr):
-            self._sent.append((message, addr))
+        def send(self, message):
+            self._sent.append((message, None))
 
     async def test_connection_made__stores_transport(self):
-        """Store the transport when a connection is established (STUN disabled)."""
+        """Store the transport when a connection is established."""
         protocol = SIP(
-            server_address=("127.0.0.1", 5060),
+            server_address=("127.0.0.1", 5061),
             aor="sip:test@example.com",
-            stun_server_address=None,
+            rtp_stun_server_address=None,
         )
-        transport = MagicMock()
-        transport.get_extra_info.return_value = ("127.0.0.1", 5060)
+        transport = make_mock_transport()
         protocol.connection_made(transport)
         assert protocol.transport is transport
 
     async def test_send__serializes_and_forwards_to_transport(self):
-        """Serialize the message and forward it to the underlying transport."""
+        """Serialize the message and forward it to the underlying TCP transport."""
         protocol = SIP(
-            server_address=("127.0.0.1", 5060),
+            server_address=("127.0.0.1", 5061),
             aor="sip:test@example.com",
-            stun_server_address=None,
+            rtp_stun_server_address=None,
         )
-        transport = MagicMock()
-        transport.get_extra_info.return_value = ("127.0.0.1", 5060)
+        transport = make_mock_transport()
         protocol.connection_made(transport)
-        transport.sendto.reset_mock()  # clear any calls made during connection_made
+        transport.write.reset_mock()  # clear any calls made during connection_made
         response = Response(status_code=200, reason="OK")
-        addr = ("192.0.2.1", 5060)
-        protocol.send(response, addr)
-        protocol.transport.sendto.assert_called_once_with(bytes(response), addr)
+        protocol.send(response)
+        protocol.transport.write.assert_called_once_with(bytes(response))
 
-    async def test_request_received__invite__stores_addr_and_calls_call_received(self):
-        """Dispatch an INVITE to call_received and store the addr by Call-ID."""
+    async def test_request_received__invite__tracks_pending_call(self):
+        """Dispatch an INVITE to call_received and track the Call-ID as pending."""
         received = []
 
         class MySIP(SIP):
@@ -1078,7 +1102,7 @@ class TestSIPProtocol:
         protocol.request_received(request, addr)
         assert len(received) == 1
         assert received[0] is request
-        assert protocol._request_addrs.get(request.headers["Call-ID"]) == addr
+        assert request.headers["Call-ID"] in protocol._pending_invites
 
     async def test_call_received__noop_by_default(self):
         """call_received is a no-op in the base class."""
@@ -1091,7 +1115,7 @@ class TestSIPProtocol:
         loop = asyncio.get_running_loop()
         protocol = self._CapturingSIP()
         protocol.transport = make_mock_transport()
-        protocol.public_address = ("127.0.0.1", 5060)
+        protocol.local_address = ("127.0.0.1", 5061)
         mux = RealtimeTransportProtocol()
         mux.public_address = loop.create_future()
         mux.public_address.set_result(("127.0.0.1", 12000))
@@ -1100,20 +1124,19 @@ class TestSIPProtocol:
         protocol._rtp_protocol = mux
         protocol._rtp_transport = mock_rtp_transport
         request = make_invite()
-        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        protocol._pending_invites.add(request.headers["Call-ID"])
         await protocol._answer(request, Call)
         assert len(protocol._sent) == 1
-        response, addr = protocol._sent[0]
+        response, _ = protocol._sent[0]
         assert response.status_code == 200
         assert response.reason == "OK"
-        assert addr == ("192.0.2.1", 5060)
 
     async def test_answer__sdp_contains_opus_audio_line(self):
         """Include an audio media line in the SDP body of the 200 OK."""
         loop = asyncio.get_running_loop()
         protocol = self._CapturingSIP()
         protocol.transport = make_mock_transport()
-        protocol.public_address = ("127.0.0.1", 5060)
+        protocol.local_address = ("127.0.0.1", 5061)
         mux = RealtimeTransportProtocol()
         mux.public_address = loop.create_future()
         mux.public_address.set_result(("127.0.0.1", 12000))
@@ -1122,18 +1145,108 @@ class TestSIPProtocol:
         protocol._rtp_protocol = mux
         protocol._rtp_transport = mock_rtp_transport
         request = make_invite()
-        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        protocol._pending_invites.add(request.headers["Call-ID"])
         await protocol._answer(request, Call)
         response, _ = protocol._sent[0]
         assert b"m=audio" in bytes(response.body)
-        assert b"RTP/AVP 0" in bytes(response.body)
+        assert b"RTP/SAVP 0" in bytes(response.body)
+
+    async def _setup_answer_protocol(self):
+        """Return a _CapturingSIP with a live mux, ready to answer an INVITE."""
+        loop = asyncio.get_running_loop()
+        protocol = self._CapturingSIP()
+        protocol.transport = make_mock_transport()
+        protocol.local_address = ("127.0.0.1", 5061)
+        mux = RealtimeTransportProtocol()
+        mux.public_address = loop.create_future()
+        mux.public_address.set_result(("127.0.0.1", 12000))
+        mock_rtp_transport = MagicMock()
+        mock_rtp_transport.get_extra_info.return_value = ("127.0.0.1", 12000)
+        protocol._rtp_protocol = mux
+        protocol._rtp_transport = mock_rtp_transport
+        return protocol
+
+    async def test_answer__rtp_avp_offer_returns_rtp_avp(self):
+        """When the remote offers RTP/AVP, respond with RTP/AVP (no SRTP)."""
+        protocol = await self._setup_answer_protocol()
+
+        # Build an INVITE with a plain RTP/AVP offer (no crypto).
+        invite_bytes = (
+            b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/UDP pc33.atlanta.com\r\n"
+            b"From: sip:alice@atlanta.com\r\n"
+            b"To: sip:bob@biloxi.com\r\n"
+            b"Call-ID: avp-offer-1\r\n"
+            b"CSeq: 1 INVITE\r\n"
+            b"Content-Type: application/sdp\r\n"
+            b"Content-Length: 68\r\n"
+            b"\r\n"
+            b"v=0\r\n"
+            b"o=- 0 0 IN IP4 192.0.2.1\r\n"
+            b"s=-\r\n"
+            b"c=IN IP4 192.0.2.1\r\n"
+            b"t=0 0\r\n"
+            b"m=audio 49170 RTP/AVP 0\r\n"
+        )
+        from voip.sip.messages import Request  # noqa: PLC0415
+
+        request = Request.parse(invite_bytes)
+        protocol._pending_invites.add(request.headers["Call-ID"])
+        AudioCall = pytest.importorskip("voip.audio.AudioCall")
+
+        await protocol._answer(request, AudioCall)
+        response, _ = protocol._sent[0]
+        body = bytes(response.body)
+        assert b"RTP/AVP" in body
+        assert b"RTP/SAVP" not in body
+        assert b"crypto" not in body
+
+        # The registered call handler must not have an SRTP session.
+        handler = next(iter(protocol._rtp_protocol.calls.values()))
+        assert handler.srtp is None
+
+    async def test_answer__rtp_savp_offer_returns_rtp_savp(self):
+        """When the remote offers RTP/SAVP, respond with RTP/SAVP (with SRTP)."""
+        protocol = await self._setup_answer_protocol()
+
+        invite_bytes = (
+            b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/UDP pc33.atlanta.com\r\n"
+            b"From: sip:alice@atlanta.com\r\n"
+            b"To: sip:bob@biloxi.com\r\n"
+            b"Call-ID: savp-offer-1\r\n"
+            b"CSeq: 1 INVITE\r\n"
+            b"Content-Type: application/sdp\r\n"
+            b"Content-Length: 69\r\n"
+            b"\r\n"
+            b"v=0\r\n"
+            b"o=- 0 0 IN IP4 192.0.2.1\r\n"
+            b"s=-\r\n"
+            b"c=IN IP4 192.0.2.1\r\n"
+            b"t=0 0\r\n"
+            b"m=audio 49170 RTP/SAVP 0\r\n"
+        )
+        from voip.sip.messages import Request  # noqa: PLC0415
+
+        request = Request.parse(invite_bytes)
+        protocol._pending_invites.add(request.headers["Call-ID"])
+        AudioCall = pytest.importorskip("voip.audio.AudioCall")
+
+        await protocol._answer(request, AudioCall)
+        response, _ = protocol._sent[0]
+        body = bytes(response.body)
+        assert b"RTP/SAVP" in body
+        assert b"crypto" in body
+
+        handler = next(iter(protocol._rtp_protocol.calls.values()))
+        assert handler.srtp is not None
 
     async def test_answer__copies_dialog_headers(self):
         """Copy Via, To, From, Call-ID, and CSeq headers into the 200 OK."""
         loop = asyncio.get_running_loop()
         protocol = self._CapturingSIP()
         protocol.transport = make_mock_transport()
-        protocol.public_address = ("127.0.0.1", 5060)
+        protocol.local_address = ("127.0.0.1", 5061)
         mux = RealtimeTransportProtocol()
         mux.public_address = loop.create_future()
         mux.public_address.set_result(("127.0.0.1", 12000))
@@ -1142,7 +1255,7 @@ class TestSIPProtocol:
         protocol._rtp_protocol = mux
         protocol._rtp_transport = mock_rtp_transport
         request = make_invite()
-        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        protocol._pending_invites.add(request.headers["Call-ID"])
         await protocol._answer(request, Call)
         response, _ = protocol._sent[0]
         assert response.headers["Via"] == "SIP/2.0/UDP pc33.atlanta.com"
@@ -1163,7 +1276,7 @@ class TestSIPProtocol:
         loop = asyncio.get_running_loop()
         protocol = self._CapturingSIP()
         protocol.transport = make_mock_transport()
-        protocol.public_address = ("127.0.0.1", 5060)
+        protocol.local_address = ("127.0.0.1", 5061)
         mux = RealtimeTransportProtocol()
         mux.public_address = loop.create_future()
         mux.public_address.set_result(("127.0.0.1", 12000))
@@ -1172,12 +1285,12 @@ class TestSIPProtocol:
         protocol._rtp_protocol = mux
         protocol._rtp_transport = mock_rtp_transport
         request = make_invite()
-        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        protocol._pending_invites.add(request.headers["Call-ID"])
         await protocol._answer(request, MyCall)
         assert created == ["sip:bob@biloxi.com"]
 
     async def test_answer__rtp_receives_audio(self):
-        """Deliver RTP payloads to the call handler's datagram_received."""
+        """Deliver SRTP payloads to the call handler's datagram_received (decrypted)."""
         received_payloads: list[bytes] = []
 
         @dataclasses.dataclass
@@ -1189,7 +1302,7 @@ class TestSIPProtocol:
         loop = asyncio.get_running_loop()
         protocol = self._CapturingSIP()
         protocol.transport = make_mock_transport()
-        protocol.public_address = ("127.0.0.1", 5060)
+        protocol.local_address = ("127.0.0.1", 5061)
         mux = RealtimeTransportProtocol(stun_server_address=None)
         rtp_transport, _ = await loop.create_datagram_endpoint(
             lambda: mux, local_addr=("127.0.0.1", 0)
@@ -1197,7 +1310,7 @@ class TestSIPProtocol:
         protocol._rtp_protocol = mux
         protocol._rtp_transport = rtp_transport
         request = make_invite()
-        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        protocol._pending_invites.add(request.headers["Call-ID"])
         try:
             await protocol._answer(request, DatagramCapture)
             response, _ = protocol._sent[0]
@@ -1212,8 +1325,11 @@ class TestSIPProtocol:
                 asyncio.DatagramProtocol,
                 remote_addr=("127.0.0.1", rtp_port),
             )
+            # Get the SRTP session from the registered call handler and encrypt.
+            call_handler = mux.calls.get(None)
             rtp_packet = b"\x80\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00audio"
-            send_transport.sendto(rtp_packet)
+            srtp_packet = call_handler.srtp.encrypt(rtp_packet)
+            send_transport.sendto(srtp_packet)
             await asyncio.sleep(0.05)
             send_transport.close()
             assert received_payloads == [b"audio"]
@@ -1221,7 +1337,7 @@ class TestSIPProtocol:
             rtp_transport.close()
 
     async def test_answer__rtp_receives_multiple_packets(self):
-        """Call datagram_received for each RTP packet that arrives."""
+        """Call datagram_received for each SRTP packet that arrives (decrypted)."""
         received_payloads: list[bytes] = []
 
         @dataclasses.dataclass
@@ -1232,7 +1348,7 @@ class TestSIPProtocol:
         loop = asyncio.get_running_loop()
         protocol = self._CapturingSIP()
         protocol.transport = make_mock_transport()
-        protocol.public_address = ("127.0.0.1", 5060)
+        protocol.local_address = ("127.0.0.1", 5061)
         mux = RealtimeTransportProtocol(stun_server_address=None)
         rtp_transport, _ = await loop.create_datagram_endpoint(
             lambda: mux, local_addr=("127.0.0.1", 0)
@@ -1240,7 +1356,7 @@ class TestSIPProtocol:
         protocol._rtp_protocol = mux
         protocol._rtp_transport = rtp_transport
         request = make_invite()
-        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        protocol._pending_invites.add(request.headers["Call-ID"])
         try:
             await protocol._answer(request, DatagramCapture)
             response, _ = protocol._sent[0]
@@ -1255,9 +1371,11 @@ class TestSIPProtocol:
                 asyncio.DatagramProtocol,
                 remote_addr=("127.0.0.1", rtp_port),
             )
+            # Get the SRTP session from the registered call handler and encrypt.
+            call_handler = mux.calls.get(None)
             header = b"\x80\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00"
-            send_transport.sendto(header + b"chunk1")
-            send_transport.sendto(header + b"chunk2")
+            send_transport.sendto(call_handler.srtp.encrypt(header + b"chunk1"))
+            send_transport.sendto(call_handler.srtp.encrypt(header + b"chunk2"))
             await asyncio.sleep(0.05)
             send_transport.close()
             assert received_payloads == [b"chunk1", b"chunk2"]
@@ -1269,7 +1387,7 @@ class TestSIPProtocol:
         loop = asyncio.get_running_loop()
         protocol = self._CapturingSIP()
         protocol.transport = make_mock_transport()
-        protocol.public_address = ("127.0.0.1", 5060)
+        protocol.local_address = ("127.0.0.1", 5061)
         mux = RealtimeTransportProtocol()
         mux.public_address = loop.create_future()
         mux.public_address.set_result(("127.0.0.1", 12000))
@@ -1278,7 +1396,7 @@ class TestSIPProtocol:
         protocol._rtp_protocol = mux
         protocol._rtp_transport = mock_rtp_transport
         request = make_invite()
-        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        protocol._pending_invites.add(request.headers["Call-ID"])
         await protocol._answer(request, Call)
         response, _ = protocol._sent[0]
         serialized = bytes(response)
@@ -1293,7 +1411,7 @@ class TestSIPProtocol:
         loop = asyncio.get_running_loop()
         protocol = self._CapturingSIP()
         protocol.transport = make_mock_transport()
-        protocol.public_address = ("127.0.0.1", 5060)
+        protocol.local_address = ("127.0.0.1", 5061)
         mux = RealtimeTransportProtocol(stun_server_address=None)
         rtp_transport, _ = await loop.create_datagram_endpoint(
             lambda: mux, local_addr=("127.0.0.1", 0)
@@ -1316,7 +1434,7 @@ class TestSIPProtocol:
             },
             body=sdp_body1,
         )
-        protocol._request_addrs["call-1@test"] = ("1.2.3.4", 5060)
+        protocol._pending_invites.add("call-1@test")
         await protocol._answer(invite1, _MinimalCall)
         rtp_proto_1 = protocol._rtp_protocol
         rtp_transport_1 = protocol._rtp_transport
@@ -1336,7 +1454,7 @@ class TestSIPProtocol:
             },
             body=sdp_body2,
         )
-        protocol._request_addrs["call-2@test"] = ("5.6.7.8", 5060)
+        protocol._pending_invites.add("call-2@test")
         await protocol._answer(invite2, _MinimalCall)
 
         assert protocol._rtp_protocol is rtp_proto_1
@@ -1351,7 +1469,7 @@ class TestSIPProtocol:
         loop = asyncio.get_running_loop()
         protocol = self._CapturingSIP()
         protocol.transport = make_mock_transport()
-        protocol.public_address = ("127.0.0.1", 5060)
+        protocol.local_address = ("127.0.0.1", 5061)
         mux = RealtimeTransportProtocol(stun_server_address=None)
         rtp_transport, _ = await loop.create_datagram_endpoint(
             lambda: mux, local_addr=("127.0.0.1", 0)
@@ -1359,7 +1477,7 @@ class TestSIPProtocol:
         protocol._rtp_protocol = mux
         protocol._rtp_transport = rtp_transport
         request = make_invite()
-        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        protocol._pending_invites.add(request.headers["Call-ID"])
         try:
             await protocol._answer(request, Call)
             assert None in mux.calls
@@ -1387,7 +1505,7 @@ class TestSIPProtocol:
         loop = asyncio.get_running_loop()
         protocol = self._CapturingSIP()
         protocol.transport = make_mock_transport()
-        protocol.public_address = ("127.0.0.1", 5060)
+        protocol.local_address = ("127.0.0.1", 5061)
         mux = RealtimeTransportProtocol()
         mux.public_address = loop.create_future()
         mux.public_address.set_result(("127.0.0.1", 12000))
@@ -1396,7 +1514,7 @@ class TestSIPProtocol:
         protocol._rtp_protocol = mux
         protocol._rtp_transport = mock_rtp_transport
         request = make_invite()
-        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        protocol._pending_invites.add(request.headers["Call-ID"])
         with caplog.at_level(logging.INFO, logger="voip.sip"):
             await protocol._answer(request, Call)
         assert any("call_answered" in r.message for r in caplog.records)
@@ -1405,20 +1523,19 @@ class TestSIPProtocol:
         """Send a 486 Busy Here response when no status code is given."""
         protocol = self._CapturingSIP()
         request = make_invite()
-        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        protocol._pending_invites.add(request.headers["Call-ID"])
         protocol.reject(request)
         assert len(protocol._sent) == 1
-        response, addr = protocol._sent[0]
+        response, _ = protocol._sent[0]
         assert isinstance(response, Response)
         assert response.status_code == 486
         assert response.reason == "Busy Here"
-        assert addr == ("192.0.2.1", 5060)
 
     def test_reject__custom_status(self):
         """Send the specified status code and reason."""
         protocol = self._CapturingSIP()
         request = make_invite()
-        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        protocol._pending_invites.add(request.headers["Call-ID"])
         protocol.reject(request, status_code=603, reason="Decline")
         response, _ = protocol._sent[0]
         assert response.status_code == 603
@@ -1428,7 +1545,7 @@ class TestSIPProtocol:
         """Copy Via, To, From, Call-ID, and CSeq headers into the response."""
         protocol = self._CapturingSIP()
         request = make_invite()
-        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        protocol._pending_invites.add(request.headers["Call-ID"])
         protocol.reject(request)
         response, _ = protocol._sent[0]
         assert response.headers["Via"] == "SIP/2.0/UDP pc33.atlanta.com"
@@ -1442,7 +1559,7 @@ class TestSIPProtocol:
         """Exclude non-dialog headers from the reject response."""
         protocol = self._CapturingSIP()
         request = make_invite({extra_header: "value"})
-        protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+        protocol._pending_invites.add(request.headers["Call-ID"])
         protocol.reject(request)
         response, _ = protocol._sent[0]
         assert extra_header not in response.headers
@@ -1454,24 +1571,22 @@ class TestSIPProtocol:
         with caplog.at_level(logging.INFO, logger="voip.sip"):
             protocol = self._CapturingSIP()
             request = make_invite()
-            protocol._request_addrs[request.headers["Call-ID"]] = ("192.0.2.1", 5060)
+            protocol._pending_invites.add(request.headers["Call-ID"])
             protocol.reject(request)
         assert any("call_rejected" in r.message for r in caplog.records)
 
-    async def test_datagram_received__keepalive__sends_pong(self):
+    async def test_data_received__keepalive__sends_pong(self):
         """Double-CRLF keepalive (RFC 5626 §4.4.1) is answered with a single-CRLF pong."""
         protocol = SIP(
-            server_address=("127.0.0.1", 5060),
+            server_address=("127.0.0.1", 5061),
             aor="sip:test@example.com",
-            stun_server_address=None,
+            rtp_stun_server_address=None,
         )
-        transport = MagicMock()
-        transport.get_extra_info.return_value = ("127.0.0.1", 5060)
+        transport = make_mock_transport()
         protocol.connection_made(transport)
-        transport.sendto.reset_mock()
-        addr = ("192.0.2.1", 5060)
-        protocol.datagram_received(b"\r\n\r\n", addr)
-        transport.sendto.assert_called_once_with(b"\r\n", addr)
+        transport.write.reset_mock()
+        protocol.data_received(b"\r\n\r\n")
+        transport.write.assert_called_once_with(b"\r\n")
 
     async def test_request_received__unsupported_method__raises(self):
         """Raise NotImplementedError for any non-INVITE SIP request method."""
@@ -1497,8 +1612,7 @@ class TestSIPProtocol:
         protocol = MySIP(server_address=("127.0.0.1", 5060), aor="sip:test@example.com")
         protocol.connection_made(MagicMock())
         request = make_invite()
-        addr = ("192.0.2.1", 5060)
-        protocol._request_addrs[request.headers["Call-ID"]] = addr
+        protocol._pending_invites.add(request.headers["Call-ID"])
         protocol.call_received(request)
 
         await asyncio.sleep(0.01)
@@ -1523,44 +1637,44 @@ class TestRegistration:
         assert p.registrar_uri == "sip:example.com:5080"
 
     async def test_connection_made__sends_register(self):
-        """Send a REGISTER request when STUN completes after connection is established."""
+        """Send a REGISTER request when the connection is established."""
 
         class _SessionNoRTP(SessionInitiationProtocol):
-            async def _start_rtp_mux(self):
-                pass  # Avoid real socket + STUN in unit test
+            async def _initialize(self):
+                # Skip real socket creation and just register directly.
+                await self.register()
 
         p = _SessionNoRTP(
-            server_address=("192.0.2.2", 5060),
+            server_address=("192.0.2.2", 5061),
             aor="sip:alice@example.com",
             username="alice",
             password="secret",  # noqa: S106
-            stun_server_address=None,  # immediately triggers stun_connection_made
         )
         transport = make_mock_transport()
         p.connection_made(transport)
         await asyncio.sleep(0.05)
-        transport.sendto.assert_called()
-        data, addr = transport.sendto.call_args[0]
+        transport.write.assert_called()
+        (data,) = transport.write.call_args[0]
         assert b"REGISTER sip:example.com SIP/2.0" in data
-        assert addr == ("192.0.2.2", 5060)
 
     async def test_register__includes_required_headers(self):
         """REGISTER request includes From, To, Call-ID, CSeq, Contact and Expires."""
         p = make_register_session()
         transport = make_mock_transport()
         p.transport = transport
-        p.public_address = ("127.0.0.1", 5060)
+        p.local_address = ("127.0.0.1", 5061)
+        p._is_tls = True
         await p.register()
-        data, _ = transport.sendto.call_args[0]
+        (data,) = transport.write.call_args[0]
         assert b"From: sip:alice@example.com" in data
         assert b"To: sip:alice@example.com" in data
-        assert b"Contact: <sip:alice@127.0.0.1:5060>" in data
+        assert b"Contact: <sips:alice@127.0.0.1:5061>" in data
         assert b"Expires: 3600" in data
 
     async def test_register__increments_cseq(self):
         """CSeq increments with each REGISTER sent."""
         p = make_register_session()
-        p.public_address = ("127.0.0.1", 5060)
+        p.local_address = ("127.0.0.1", 5061)
         p.transport = make_mock_transport()
         await p.register()
         assert p.cseq == 1
@@ -1573,9 +1687,9 @@ class TestRegistration:
         p = make_register_session()
         transport = make_mock_transport()
         p.transport = transport
-        p.public_address = "127.0.0.1", 5060
+        p.local_address = "127.0.0.1", 5061
         await p.register(authorization='Digest username="alice"')
-        data, _ = transport.sendto.call_args[0]
+        (data,) = transport.write.call_args[0]
         assert b'Authorization: Digest username="alice"' in data
 
     async def test_register__with_proxy_authorization(self):
@@ -1583,9 +1697,9 @@ class TestRegistration:
         p = make_register_session()
         transport = make_mock_transport()
         p.transport = transport
-        p.public_address = "127.0.0.1", 5060
+        p.local_address = "127.0.0.1", 5061
         await p.register(proxy_authorization='Digest username="alice"')
-        data, _ = transport.sendto.call_args[0]
+        (data,) = transport.write.call_args[0]
         assert b'Proxy-Authorization: Digest username="alice"' in data
 
     async def test_response_received__200_ok_calls_registered(self):
@@ -1624,7 +1738,7 @@ class TestRegistration:
         p = make_register_session(username="alice", password="secret")  # noqa: S106
         transport = make_mock_transport()
         p.transport = transport
-        p.public_address = ("127.0.0.1", 5060)
+        p.local_address = ("127.0.0.1", 5061)
         challenge = 'Digest realm="example.com", nonce="abc123"'
         p.response_received(
             Response(
@@ -1632,10 +1746,10 @@ class TestRegistration:
                 reason="Unauthorized",
                 headers={"WWW-Authenticate": challenge, "CSeq": "1 REGISTER"},
             ),
-            ("192.0.2.2", 5060),
+            ("192.0.2.2", 5061),
         )
         await asyncio.sleep(0.05)
-        data, _ = transport.sendto.call_args[0]
+        (data,) = transport.write.call_args[0]
         assert b"Authorization: Digest" in data
         assert b'username="alice"' in data
         assert b'realm="example.com"' in data
@@ -1647,7 +1761,7 @@ class TestRegistration:
         p = make_register_session(username="alice", password="secret")  # noqa: S106
         transport = make_mock_transport()
         p.transport = transport
-        p.public_address = ("127.0.0.1", 5060)
+        p.local_address = ("127.0.0.1", 5061)
         challenge = 'Digest realm="example.com", nonce="xyz"'
         p.response_received(
             Response(
@@ -1655,10 +1769,10 @@ class TestRegistration:
                 reason="Proxy Auth Required",
                 headers={"Proxy-Authenticate": challenge, "CSeq": "1 REGISTER"},
             ),
-            ("192.0.2.2", 5060),
+            ("192.0.2.2", 5061),
         )
         await asyncio.sleep(0.05)
-        data, _ = transport.sendto.call_args[0]
+        (data,) = transport.write.call_args[0]
         assert b"Proxy-Authorization: Digest" in data
         assert b'username="alice"' in data
 
@@ -1667,7 +1781,7 @@ class TestRegistration:
         p = make_register_session()
         transport = make_mock_transport()
         p.transport = transport
-        p.public_address = ("127.0.0.1", 5060)
+        p.local_address = ("127.0.0.1", 5061)
         challenge = 'Digest realm="example.com", nonce="n", qop="auth"'
         p.response_received(
             Response(
@@ -1675,10 +1789,10 @@ class TestRegistration:
                 reason="Unauthorized",
                 headers={"WWW-Authenticate": challenge, "CSeq": "1 REGISTER"},
             ),
-            ("192.0.2.2", 5060),
+            ("192.0.2.2", 5061),
         )
         await asyncio.sleep(0.05)
-        data, _ = transport.sendto.call_args[0]
+        (data,) = transport.write.call_args[0]
         assert b"qop=auth" in data
         assert b"nc=00000001" in data
         assert b"cnonce=" in data
@@ -1688,7 +1802,7 @@ class TestRegistration:
         p = make_register_session()
         transport = make_mock_transport()
         p.transport = transport
-        p.public_address = ("127.0.0.1", 5060)
+        p.local_address = ("127.0.0.1", 5061)
         challenge = 'Digest realm="example.com", nonce="n", opaque="secret-opaque"'
         p.response_received(
             Response(
@@ -1696,10 +1810,10 @@ class TestRegistration:
                 reason="Unauthorized",
                 headers={"WWW-Authenticate": challenge, "CSeq": "1 REGISTER"},
             ),
-            ("192.0.2.2", 5060),
+            ("192.0.2.2", 5061),
         )
         await asyncio.sleep(0.05)
-        data, _ = transport.sendto.call_args[0]
+        (data,) = transport.write.call_args[0]
         assert b'opaque="secret-opaque"' in data
 
     async def test_register__via_header_has_rport(self):
@@ -1707,12 +1821,13 @@ class TestRegistration:
         import re
 
         p = make_register_session()
-        p.public_address = ("192.0.2.10", 5060)
-        transport = make_mock_transport("192.0.2.10", 5060)
+        p.local_address = ("192.0.2.10", 5061)
+        transport = make_mock_transport("192.0.2.10", 5061)
         p.transport = transport
+        p._is_tls = True
         await p.register()
-        data, _ = transport.sendto.call_args[0]
-        assert b"Via: SIP/2.0/UDP 192.0.2.10:5060;rport;branch=z9hG4bK" in data
+        (data,) = transport.write.call_args[0]
+        assert b"Via: SIP/2.0/TLS 192.0.2.10:5061;rport;branch=z9hG4bK" in data
         assert re.search(rb"branch=z9hG4bK[0-9a-f]{32}", data)
 
     async def test_register__via_branch_is_unique_per_request(self):
@@ -1720,30 +1835,31 @@ class TestRegistration:
         import re
 
         p = make_register_session()
-        p.public_address = "127.0.0.1", 5060
+        p.local_address = "127.0.0.1", 5061
         transport = make_mock_transport()
         p.transport = transport
         await p.register()
-        data1, _ = transport.sendto.call_args[0]
+        (data1,) = transport.write.call_args[0]
         transport.reset_mock()
         await p.register()
-        data2, _ = transport.sendto.call_args[0]
+        (data2,) = transport.write.call_args[0]
         branch1 = re.search(rb"branch=(z9hG4bK[0-9a-f]{32})", data1).group(1)
         branch2 = re.search(rb"branch=(z9hG4bK[0-9a-f]{32})", data2).group(1)
         assert branch1 != branch2
 
     async def test_register__contact_uses_local_addr(self):
-        """Contact header always uses the local socket address."""
+        """Contact header uses sips: URI with the local socket address."""
         p = make_register_session()
-        p.public_address = "10.0.0.5", 5060
-        transport = make_mock_transport("10.0.0.5", 5060)
+        p.local_address = "10.0.0.5", 5061
+        transport = make_mock_transport("10.0.0.5", 5061)
         p.transport = transport
+        p._is_tls = True
         await p.register()
-        data, _ = transport.sendto.call_args[0]
-        assert b"Contact: <sip:alice@10.0.0.5:5060>" in data
+        (data,) = transport.write.call_args[0]
+        assert b"Contact: <sips:alice@10.0.0.5:5061>" in data
 
-    async def test_datagram_received__sip_response__calls_response_received(self):
-        """datagram_received routes SIP messages to response_received."""
+    async def test_data_received__sip_response__calls_response_received(self):
+        """data_received routes SIP messages to response_received via TCP stream."""
         received = []
 
         class ConcreteSession(SessionInitiationProtocol):
@@ -1751,14 +1867,14 @@ class TestRegistration:
                 received.append(response)
 
         p = ConcreteSession(
-            server_address=("192.0.2.2", 5060),
+            server_address=("192.0.2.2", 5061),
             aor="sip:alice@example.com",
             username="a",
             password="b",  # noqa: S106
         )
         p.connection_made(make_mock_transport())
         sip_data = b"SIP/2.0 200 OK\r\nCSeq: 1 REGISTER\r\n\r\n"
-        p.datagram_received(sip_data, ("192.0.2.2", 5060))
+        p.data_received(sip_data)
         assert len(received) == 1
         assert received[0].status_code == 200
 

@@ -2,6 +2,7 @@
 import asyncio
 import dataclasses
 import logging
+import ssl
 import time
 
 from voip.sip import messages
@@ -21,26 +22,31 @@ class ConsoleMessageProcessor:
     """Protocol mixin that prints messages to stdout."""
 
     def request_received(self, request: messages.Request, addr: tuple[str, int]):
-        self.pprint(request, addr)
+        self.pprint(request)
         super().request_received(request, addr)
 
     def response_received(self, response: messages.Response, addr: tuple[str, int]):
-        self.pprint(response, addr)
+        self.pprint(response)
         super().response_received(response, addr)
 
-    def send(self, message, addr: tuple[str, int]) -> None:
+    def send(self, message) -> None:
         """Send a message and print it to stdout."""
-        self.pprint(message, addr)
-        super().send(message, addr)
+        self.pprint(message)
+        super().send(message)
 
-    @staticmethod
-    def pprint(msg, addr):
+    def pprint(self, msg):
         """Pretty print the message."""
-        host = f"[{addr[0]}]" if ":" in addr[0] else addr[0]
-        host = click.style(host, fg="green", bold=True)
-        port = click.style(str(addr[1]), fg="yellow", bold=True)
+        transport = getattr(self, "transport", None)
+        addr = transport.get_extra_info("peername") if transport else None
+        if addr:
+            host = f"[{addr[0]}]" if ":" in addr[0] else addr[0]
+            host = click.style(host, fg="green", bold=True)
+            port = click.style(str(addr[1]), fg="yellow", bold=True)
+            prefix = f"{host}:{port} - - [{time.asctime()}]"
+        else:
+            prefix = f"[unknown] - - [{time.asctime()}]"
         pretty_msg = highlight(str(msg), SIPLexer(), formatters.TerminalFormatter())
-        click.echo(f"{host}:{port} - - [{time.asctime()}] {pretty_msg}")
+        click.echo(f"{prefix} {pretty_msg}")
 
 
 @click.group()
@@ -66,7 +72,7 @@ def sip():
 main = voip
 
 
-def _parse_server(ctx, param, value: str, default_port=5060) -> tuple[str, int]:
+def _parse_server(ctx, param, value: str, default_port=5061) -> tuple[str, int]:
     """Parse 'HOST[:PORT]' option into a (host, port) tuple."""
     try:
         host, port_str = value.rsplit(":", 1)
@@ -96,7 +102,7 @@ def _parse_stun_server(ctx, param, value: str | None) -> tuple[str, int] | None:
     required=True,
     metavar="HOST[:PORT]",
     callback=_parse_server,
-    help="SIP server address.",
+    help="SIP server address (TLS, default port 5061).",
 )
 @click.option(
     "--aor",
@@ -104,13 +110,10 @@ def _parse_stun_server(ctx, param, value: str | None) -> tuple[str, int] | None:
     required=False,
     default=None,
     metavar="SIP_AOR",
-    help="SIP Address of Record (defaults to sip:{username}@{server_host}).",
+    help="SIP Address of Record (defaults to sips:{username}@{server_host}).",
 )
 @click.option("--username", envvar="SIP_USERNAME", required=True, help="SIP username.")
 @click.option("--password", envvar="SIP_PASSWORD", help="SIP password.")
-@click.option(
-    "--local-port", default=5060, show_default=True, help="Local UDP port to bind."
-)
 @click.option(
     "--stun-server",
     envvar="STUN_SERVER",
@@ -119,11 +122,25 @@ def _parse_stun_server(ctx, param, value: str | None) -> tuple[str, int] | None:
     metavar="HOST[:PORT]",
     callback=_parse_stun_server,
     is_eager=False,
-    help="STUN server for NAT traversal (use 'none' to disable).",
+    help="STUN server for RTP NAT traversal (use 'none' to disable).",
+)
+@click.option(
+    "--no-tls",
+    is_flag=True,
+    default=False,
+    help="Disable TLS entirely and connect in plain-text (e.g. for port 5060).",
+)
+@click.option(
+    "--no-verify-tls",
+    is_flag=True,
+    default=False,
+    help="Disable TLS certificate verification (insecure; for testing only).",
 )
 @click.pass_context
-def transcribe(ctx, model, server, aor, username, password, local_port, stun_server):
-    """Register with a SIP carrier and transcribe incoming calls via Whisper."""
+def transcribe(
+    ctx, model, server, aor, username, password, stun_server, no_tls, no_verify_tls
+):
+    """Register with a SIP carrier over TLS and transcribe incoming calls via Whisper."""
     from voip.sip.protocol import SIP
 
     from .audio import WhisperCall  # noqa: PLC0415
@@ -131,7 +148,7 @@ def transcribe(ctx, model, server, aor, username, password, local_port, stun_ser
     server_addr = server
     host = server_addr[0]
     if aor is None:
-        aor = f"sip:{username}@{host}"
+        aor = f"sips:{username}@{host}"
 
     verbose = ctx.obj.get("verbose", 0)
 
@@ -161,15 +178,24 @@ def transcribe(ctx, model, server, aor, username, password, local_port, stun_ser
 
     async def run():
         loop = asyncio.get_running_loop()
-        await loop.create_datagram_endpoint(
+        if no_tls:
+            ssl_context = None
+        else:
+            ssl_context = ssl.create_default_context()
+            if no_verify_tls:
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
+        await loop.create_connection(
             lambda: TranscribeSession(
                 server_address=server_addr,
                 aor=aor,
                 username=username,
                 password=password,
-                stun_server_address=stun_server,
+                rtp_stun_server_address=stun_server,
             ),
-            local_addr=("0.0.0.0", local_port),  # noqa: S104
+            host=server_addr[0],
+            port=server_addr[1],
+            ssl=ssl_context,
         )
         await asyncio.Future()
 

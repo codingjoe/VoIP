@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import struct
 from unittest.mock import MagicMock
 
@@ -313,3 +314,58 @@ class TestRealtimeTransportProtocol:
         from voip.stun import STUNProtocol  # noqa: PLC0415
 
         assert issubclass(RealtimeTransportProtocol, STUNProtocol)
+
+
+class TestSRTPIntegration:
+    """Tests for SRTP decryption in the RTP mux (voip.srtp integration)."""
+
+    @pytest.mark.asyncio
+    async def test_srtp_packet__decrypted_before_delivery(self):
+        """SRTP-encrypted packets are decrypted before being passed to datagram_received."""
+        from voip.srtp import SRTPSession  # noqa: PLC0415
+
+        received: list[bytes] = []
+
+        @dataclasses.dataclass
+        class SRTPCapture(Call):
+            def datagram_received(self, data: bytes, addr) -> None:
+                received.append(data)
+
+        mux = RealtimeTransportProtocol()
+        session = SRTPSession.generate()
+        handler = SRTPCapture(rtp=mux, sip=MagicMock(), srtp=session)
+        mux.register_call(None, handler)
+
+        rtp_packet = make_rtp_packet(payload=b"secret")
+        srtp_packet = session.encrypt(rtp_packet)
+        assert srtp_packet != rtp_packet
+        mux.datagram_received(srtp_packet, ("1.2.3.4", 5004))
+        assert received == [rtp_packet]
+
+    @pytest.mark.asyncio
+    async def test_srtp_invalid_auth_tag__discarded(self, caplog):
+        """SRTP packets with invalid authentication tags are silently discarded."""
+        import logging  # noqa: PLC0415
+
+        from voip.srtp import SRTPSession  # noqa: PLC0415
+
+        received: list[bytes] = []
+
+        @dataclasses.dataclass
+        class SRTPCapture(Call):
+            def datagram_received(self, data: bytes, addr) -> None:
+                received.append(data)
+
+        mux = RealtimeTransportProtocol()
+        session = SRTPSession.generate()
+        handler = SRTPCapture(rtp=mux, sip=MagicMock(), srtp=session)
+        mux.register_call(None, handler)
+
+        rtp_packet = make_rtp_packet(payload=b"tampered")
+        srtp_packet = session.encrypt(rtp_packet)
+        # Corrupt the authentication tag.
+        tampered = srtp_packet[:-1] + bytes([srtp_packet[-1] ^ 0xFF])
+        with caplog.at_level(logging.WARNING, logger="voip.rtp"):
+            mux.datagram_received(tampered, ("1.2.3.4", 5004))
+        assert received == []
+        assert any("authentication failed" in r.message for r in caplog.records)

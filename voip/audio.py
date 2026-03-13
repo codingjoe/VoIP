@@ -228,7 +228,7 @@ class AudioCall(Call):
                     remote_fmt if remote_fmt and remote_fmt.encoding_name else preferred
                 )
                 return MediaDescription(
-                    media="audio", port=0, proto="RTP/AVP", fmt=[codec]
+                    media="audio", port=0, proto=remote_media.proto, fmt=[codec]
                 )
             for remote_fmt in remote_media.fmt:
                 if (
@@ -237,7 +237,10 @@ class AudioCall(Call):
                     == preferred.encoding_name.lower()
                 ):
                     return MediaDescription(
-                        media="audio", port=0, proto="RTP/AVP", fmt=[remote_fmt]
+                        media="audio",
+                        port=0,
+                        proto=remote_media.proto,
+                        fmt=[remote_fmt],
                     )
 
         raise NotImplementedError(

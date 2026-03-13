@@ -29,7 +29,7 @@ from voip.sdp.types import (
     RTPPayloadFormat,
     Timing,
 )
-from voip.stun import STUNProtocol
+from voip.srtp import SRTPSession
 from voip.types import DigestQoP
 
 from .messages import Message, Request, Response
@@ -68,11 +68,12 @@ def _mask_caller(header: str) -> str:
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
-class SessionInitiationProtocol(STUNProtocol):
-    """SIP session handler (RFC 3261).
+class SessionInitiationProtocol(asyncio.Protocol):
+    """SIP session handler over TLS/TCP (RFC 3261 + RFC 3261 §26.2.2).
 
     Handles incoming calls and, optionally, carrier registration with digest
-    auth (RFC 3261 §22).
+    auth (RFC 3261 §22).  All signalling is sent over a single persistent
+    TLS/TCP connection to the SIP server.
 
     Subclass and override :meth:`call_received` to handle incoming calls::
 
@@ -83,8 +84,8 @@ class SessionInitiationProtocol(STUNProtocol):
     To register with a carrier on startup, pass the registration parameters::
 
         session = SessionInitiationProtocol(
-            server_address=("sip.example.com", 5060),
-            aor="sip:alice@example.com",
+            server_address=("sip.example.com", 5061),
+            aor="sips:alice@example.com",
             username="alice",
             password="secret",
         )
@@ -96,9 +97,7 @@ class SessionInitiationProtocol(STUNProtocol):
     #: RFC 3261 §11 – methods supported by this UA (used in Allow header).
     ALLOW: typing.ClassVar[str] = "INVITE, ACK, BYE, CANCEL, OPTIONS"
 
-    _request_addrs: dict[str, tuple[str, int]] = dataclasses.field(
-        init=False, default_factory=dict
-    )
+    _pending_invites: set[str] = dataclasses.field(init=False, default_factory=set)
     _answered_calls: collections.OrderedDict[str, None] = dataclasses.field(
         init=False, default_factory=collections.OrderedDict
     )
@@ -113,24 +112,29 @@ class SessionInitiationProtocol(STUNProtocol):
     _call_rtp_addrs: dict[str, tuple[str, int] | None] = dataclasses.field(
         init=False, default_factory=dict
     )
+    _buffer: bytearray = dataclasses.field(init=False, default_factory=bytearray)
     server_address: tuple[str, int]
     aor: str
     username: str | None = None
     password: str | None = None
+    #: STUN server used for RTP NAT traversal (SIP uses TLS/TCP; no STUN needed).
+    rtp_stun_server_address: tuple[str, int] | None = ("stun.cloudflare.com", 3478)
     call_id: str = dataclasses.field(init=False)
     cseq: int = dataclasses.field(init=False, default=0)
-    public_address: tuple[str, int] = dataclasses.field(init=False)
+    #: Local TCP socket address (host, port) — set when connection is established.
+    local_address: tuple[str, int] = dataclasses.field(init=False)
+    transport: asyncio.Transport | None = dataclasses.field(init=False, default=None)
+    #: True when the underlying transport is TLS-wrapped; False for plain TCP.
+    _is_tls: bool = dataclasses.field(init=False, default=False)
 
     def __post_init__(self):
         self.call_id = f"{uuid.uuid4()}@{socket.gethostname()}"
 
-    def stun_connection_made(
-        self,
-        transport: asyncio.DatagramTransport,
-        addr: tuple[str, int],
-    ) -> None:
-        """Schedule RTP mux creation and SIP registration on socket readiness."""
-        self.public_address = addr
+    def connection_made(self, transport: asyncio.Transport) -> None:  # type: ignore[override]
+        """Store the TLS/TCP transport and start RTP mux + carrier registration."""
+        self.transport = transport
+        self.local_address = transport.get_extra_info("sockname")
+        self._is_tls = transport.get_extra_info("ssl_object") is not None
         try:
             asyncio.get_running_loop().create_task(self._initialize())
         except RuntimeError:
@@ -139,23 +143,56 @@ class SessionInitiationProtocol(STUNProtocol):
     async def _initialize(self) -> None:
         """Set up the RTP mux and register with the carrier (in that order).
 
-        Scheduled by :meth:`stun_connection_made` after STUN completes, so
-        :attr:`public_address` is already resolved when :meth:`register` runs.
+        Creates a dedicated UDP socket for RTP (with optional STUN discovery
+        for NAT traversal) before sending REGISTER so the SDP answer can
+        advertise the correct public RTP address.
         """
         loop = asyncio.get_running_loop()
         self._rtp_transport, self._rtp_protocol = await loop.create_datagram_endpoint(
             lambda: RealtimeTransportProtocol(
-                stun_server_address=self.stun_server_address
+                stun_server_address=self.rtp_stun_server_address
             ),
             local_addr=("0.0.0.0", 0),  # noqa: S104
         )
         await self.register()
 
-    def packet_received(self, data: bytes, addr: tuple[str, int]) -> None:
+    def data_received(self, data: bytes) -> None:
+        """Buffer incoming bytes and dispatch complete SIP messages.
+
+        SIP over TCP uses the ``Content-Length`` header to frame messages
+        (RFC 3261 §18.3).  Partial datagrams are accumulated until a full
+        message is available.
+        """
+        self._buffer.extend(data)
+        while True:
+            end_of_headers = self._buffer.find(b"\r\n\r\n")
+            if end_of_headers == -1:
+                break
+            header_bytes = bytes(self._buffer[:end_of_headers])
+            # Determine body length from Content-Length header.
+            content_length = 0
+            for line in header_bytes.decode(errors="replace").split("\r\n")[1:]:
+                low = line.lower()
+                if low.startswith("content-length:"):
+                    try:
+                        content_length = int(line.split(":", 1)[1].strip())
+                    except ValueError:
+                        pass
+                    break
+            message_end = end_of_headers + 4 + content_length
+            if len(self._buffer) < message_end:
+                break
+            message_data = bytes(self._buffer[:message_end])
+            del self._buffer[:message_end]
+            addr = self.transport.get_extra_info("peername") if self.transport else None
+            self.packet_received(message_data, addr)
+
+    def packet_received(self, data: bytes, addr: tuple[str, int] | None) -> None:
         """Handle RFC 5626 keepalive pings, then dispatch SIP messages."""
         if data == b"\r\n\r\n":  # RFC 5626 §4.4.1 double-CRLF keepalive ping
             logger.debug("RFC 5626 keepalive from %s, sending pong", addr)
-            self.transport.sendto(b"\r\n", addr)
+            if self.transport:
+                self.transport.write(b"\r\n")
             return
         match Message.parse(data):
             case Request() as request:
@@ -163,10 +200,18 @@ class SessionInitiationProtocol(STUNProtocol):
             case Response() as response:
                 self.response_received(response, addr)
 
-    def send(self, message: Response | Request, addr: tuple[str, int]) -> None:
-        """Serialize and send a SIP message to the given address."""
-        logger.debug("Sending %r to %r", message, addr)
-        self.transport.sendto(bytes(message), addr)
+    def send(self, message: Response | Request) -> None:
+        """Serialize and send a SIP message over the TLS/TCP connection."""
+        logger.debug("Sending %r", message)
+        if self.transport is not None:
+            self.transport.write(bytes(message))
+
+    def close(self) -> None:
+        """Close the TLS/TCP transport and the RTP mux."""
+        if self.transport is not None:
+            self.transport.close()
+        if self._rtp_transport is not None:
+            self._rtp_transport.close()
 
     def _cleanup_rtp_call(self, call_id: str) -> None:
         """Remove the call handler registered with the shared RTP mux, if any."""
@@ -185,6 +230,7 @@ class SessionInitiationProtocol(STUNProtocol):
     def request_received(self, request: Request, addr: tuple[str, int]) -> None:
         """Dispatch a received SIP request to the appropriate handler."""
         call_id = request.headers.get("Call-ID", "")
+        peer_ip = addr[0] if addr else None
         match request.method:
             case "INVITE":
                 caller = CallerID(request.headers.get("From", ""))
@@ -193,11 +239,11 @@ class SessionInitiationProtocol(STUNProtocol):
                         {
                             "event": "incoming_call",
                             "caller": repr(caller),
-                            "ip": addr[0],
+                            "ip": peer_ip,
                             "call_id": call_id,
                         }
                     ),
-                    extra={"caller": repr(caller), "ip": addr[0], "call_id": call_id},
+                    extra={"caller": repr(caller), "ip": peer_ip, "call_id": call_id},
                 )
                 if call_id in self._answered_calls:
                     logger.debug(
@@ -207,7 +253,7 @@ class SessionInitiationProtocol(STUNProtocol):
                 # Mark immediately (before async answering) so retransmissions
                 # that arrive while RTP setup is in progress are suppressed.
                 self._mark_call_answered(call_id)
-                self._request_addrs[call_id] = addr
+                self._pending_invites.add(call_id)
                 self._to_tags[call_id] = secrets.token_hex(8)
                 self.call_received(request)
             case "ACK":
@@ -220,11 +266,11 @@ class SessionInitiationProtocol(STUNProtocol):
                         {
                             "event": "call_ended",
                             "caller": repr(caller),
-                            "ip": addr[0],
+                            "ip": peer_ip,
                             "call_id": call_id,
                         }
                     ),
-                    extra={"caller": repr(caller), "ip": addr[0], "call_id": call_id},
+                    extra={"caller": repr(caller), "ip": peer_ip, "call_id": call_id},
                 )
                 self.send(
                     Response(
@@ -239,7 +285,6 @@ class SessionInitiationProtocol(STUNProtocol):
                             call_id,
                         ),
                     ),
-                    addr,
                 )
                 self._to_tags.pop(call_id, None)
                 self._cleanup_rtp_call(call_id)
@@ -251,11 +296,11 @@ class SessionInitiationProtocol(STUNProtocol):
                         {
                             "event": "call_cancelled",
                             "caller": repr(caller),
-                            "ip": addr[0],
+                            "ip": peer_ip,
                             "call_id": call_id,
                         }
                     ),
-                    extra={"caller": repr(caller), "ip": addr[0], "call_id": call_id},
+                    extra={"caller": repr(caller), "ip": peer_ip, "call_id": call_id},
                 )
                 self.send(
                     Response(
@@ -267,10 +312,9 @@ class SessionInitiationProtocol(STUNProtocol):
                             if key in ("Via", "To", "From", "Call-ID", "CSeq")
                         },
                     ),
-                    addr,
                 )
-                invite_addr = self._request_addrs.pop(call_id, None)
-                if invite_addr is not None:
+                if call_id in self._pending_invites:
+                    self._pending_invites.discard(call_id)
                     self.send(
                         Response(
                             status_code=Status["Request Terminated"],
@@ -284,7 +328,6 @@ class SessionInitiationProtocol(STUNProtocol):
                                 call_id,
                             ),
                         ),
-                        invite_addr,
                     )
                 self._answered_calls.pop(call_id, None)
                 self._to_tags.pop(call_id, None)
@@ -295,7 +338,9 @@ class SessionInitiationProtocol(STUNProtocol):
                     f"Unsupported SIP request method: {request.method}"
                 )
 
-    def response_received(self, response: Response, addr: tuple[str, int]) -> None:
+    def response_received(
+        self, response: Response, addr: tuple[str, int] | None
+    ) -> None:
         """Handle REGISTER responses including digest auth challenges (RFC 3261 §22).
 
         Only processes responses when registration parameters are configured.
@@ -430,21 +475,26 @@ class SessionInitiationProtocol(STUNProtocol):
     async def _answer(self, request: Request, call_class: type[Call]) -> None:
         """Perform the asynchronous part of answering: set up RTP, send 200 OK."""
         call_id = request.headers.get("Call-ID", "")
-        addr = self._request_addrs.pop(call_id, None)
-        if addr is None:
-            logger.error("No address found for INVITE with Call-ID %r", call_id)
+        if call_id not in self._pending_invites:
+            logger.error("No pending INVITE found for Call-ID %r", call_id)
             return
+        self._pending_invites.discard(call_id)
+        peer = self.transport.get_extra_info("peername") if self.transport else None
         caller = CallerID(request.headers.get("From", ""))
         logger.info(
             json.dumps(
                 {
                     "event": "call_answered",
                     "caller": repr(caller),
-                    "ip": addr[0],
+                    "ip": peer[0] if peer else None,
                     "call_id": call_id,
                 }
             ),
-            extra={"caller": repr(caller), "ip": addr[0], "call_id": call_id},
+            extra={
+                "caller": repr(caller),
+                "ip": peer[0] if peer else None,
+                "call_id": call_id,
+            },
         )
         remote_audio = next(
             (
@@ -463,13 +513,21 @@ class SessionInitiationProtocol(STUNProtocol):
             negotiated_media = MediaDescription(
                 media="audio",
                 port=0,
-                proto="RTP/AVP",
+                proto="RTP/SAVP",
                 fmt=[RTPPayloadFormat.from_pt(0)],
             )
 
+        # Generate a fresh SRTP session only when the negotiated transport is SRTP.
+        use_srtp = negotiated_media.proto == "RTP/SAVP"
+        srtp_session = SRTPSession.generate() if use_srtp else None
+
         # Instantiate the per-call handler and register it with the shared mux.
         call_handler = call_class(
-            rtp=self._rtp_protocol, sip=self, caller=caller, media=negotiated_media
+            rtp=self._rtp_protocol,
+            sip=self,
+            caller=caller,
+            media=negotiated_media,
+            srtp=srtp_session,
         )
         # Determine the remote RTP address for routing.  If the INVITE SDP
         # specifies a connection address, use that; otherwise fall back to the
@@ -478,18 +536,27 @@ class SessionInitiationProtocol(STUNProtocol):
         # delivers all unmatched traffic to this handler.
         if remote_audio is not None:
             conn = request.body.connection if request.body else None
-            remote_ip = conn.connection_address if conn else addr[0]
+            remote_ip = conn.connection_address if conn else "0.0.0.0"  # noqa: S104
             remote_rtp_addr: tuple[str, int] | None = (remote_ip, remote_audio.port)
         else:
             remote_rtp_addr = None
         self._rtp_protocol.register_call(remote_rtp_addr, call_handler)
         self._call_rtp_addrs[call_id] = remote_rtp_addr
 
+        # NAT hole-punch: send a dummy datagram to the carrier's RTP address so
+        # that our router creates a return-path mapping allowing the carrier's
+        # media packets to reach our UDP socket (RFC 4787 / address-restricted NAT).
+        if remote_rtp_addr is not None:
+            self._rtp_protocol.send(b"\x00", remote_rtp_addr)
+
         record_route = request.headers.get("Record-Route")
         sess_id = str(secrets.randbelow(2**32) + 1)
-        sdp_media_attributes = [
-            Attribute(name="sendrecv"),
-        ]
+        rtp_public = await self._rtp_protocol.public_address
+        sdp_media_attributes = [Attribute(name="sendrecv")]
+        if srtp_session is not None:
+            sdp_media_attributes.append(
+                Attribute(name="crypto", value=srtp_session.sdes_attribute)
+            )
         self.send(
             Response(
                 status_code=Status["OK"],
@@ -504,7 +571,7 @@ class SessionInitiationProtocol(STUNProtocol):
                         call_id,
                     ),
                     **({"Record-Route": record_route} if record_route else {}),
-                    "Contact": f"<sip:{self.public_address[0]}:{self.public_address[1]}>",
+                    "Contact": f"<{'sips' if self._is_tls else 'sip'}:{self.local_address[0]}:{self.local_address[1]}>",
                     "Allow": self.ALLOW,
                     "Supported": "replaces",
                     "Content-Type": "application/sdp",
@@ -516,26 +583,25 @@ class SessionInitiationProtocol(STUNProtocol):
                         sess_version=sess_id,
                         nettype="IN",
                         addrtype="IP4",
-                        unicast_address=(await self._rtp_protocol.public_address)[0],
+                        unicast_address=rtp_public[0],
                     ),
                     timings=[Timing(start_time=0, stop_time=0)],
                     connection=ConnectionData(
                         nettype="IN",
                         addrtype="IP4",
-                        connection_address=(await self._rtp_protocol.public_address)[0],
+                        connection_address=rtp_public[0],
                     ),
                     media=[
                         MediaDescription(
                             media="audio",
-                            port=(await self._rtp_protocol.public_address)[1],
-                            proto="RTP/AVP",
+                            port=rtp_public[1],
+                            proto=negotiated_media.proto,
                             fmt=negotiated_media.fmt,
                             attributes=sdp_media_attributes,
                         )
                     ],
                 ),
             ),
-            addr,
         )
         self._mark_call_answered(call_id)
         self._to_tags.pop(call_id, None)
@@ -558,9 +624,8 @@ class SessionInitiationProtocol(STUNProtocol):
             request: The SIP INVITE request (from :meth:`call_received`).
         """
         call_id = request.headers.get("Call-ID", "")
-        address = self._request_addrs.get(call_id)
-        if address is None:
-            logger.error("No address found for INVITE with Call-ID %r", call_id)
+        if call_id not in self._pending_invites:
+            logger.error("No pending INVITE found for Call-ID %r", call_id)
             return
         caller = CallerID(request.headers.get("From", ""))
         logger.info(
@@ -582,7 +647,6 @@ class SessionInitiationProtocol(STUNProtocol):
                     call_id,
                 ),
             ),
-            address,
         )
 
     def reject(
@@ -599,17 +663,18 @@ class SessionInitiationProtocol(STUNProtocol):
             reason: SIP response reason phrase.
         """
         call_id = request.headers.get("Call-ID", "")
-        addr = self._request_addrs.pop(call_id, None)
-        if addr is None:
-            logger.error("No address found for INVITE with Call-ID %r", call_id)
+        if call_id not in self._pending_invites:
+            logger.error("No pending INVITE found for Call-ID %r", call_id)
             return
+        self._pending_invites.discard(call_id)
+        peer = self.transport.get_extra_info("peername") if self.transport else None
         caller = CallerID(request.headers.get("From", ""))
         logger.info(
             json.dumps(
                 {
                     "event": "call_rejected",
                     "caller": repr(caller),
-                    "ip": addr[0],
+                    "ip": peer[0] if peer else None,
                     "call_id": call_id,
                     "status": status_code,
                     "reason": reason,
@@ -617,7 +682,7 @@ class SessionInitiationProtocol(STUNProtocol):
             ),
             extra={
                 "caller": repr(caller),
-                "ip": addr[0],
+                "ip": peer[0] if peer else None,
                 "call_id": call_id,
                 "status": status_code,
             },
@@ -635,13 +700,12 @@ class SessionInitiationProtocol(STUNProtocol):
                     call_id,
                 ),
             ),
-            addr,
         )
         self._to_tags.pop(call_id, None)
 
     @property
     def registrar_uri(self) -> str:
-        """Registrar Request-URI derived from the AOR (e.g. sip:example.com)."""
+        """Registrar Request-URI derived from the AOR (e.g. sips:example.com)."""
         if not self.aor:
             raise ValueError("AOR is not configured; cannot derive registrar URI")
         scheme, _, rest = self.aor.partition(":")
@@ -661,20 +725,18 @@ class SessionInitiationProtocol(STUNProtocol):
             self.server_address[1],
             self.cseq,
         )
-        # Prefer the publicly routable SIP address (from STUN) for Via and Contact.
-        # Falls back to the local address when STUN is not configured.
         branch = f"{self.VIA_BRANCH_PREFIX}{secrets.token_hex(16)}"
         logger.debug("REGISTER Via branch: %s", branch)
-        # Extract SIP user part from AOR (e.g. "sip:alice@example.com" -> "alice")
+        # Extract SIP user part from AOR (e.g. "sips:alice@example.com" -> "alice")
         aor_rest = self.aor.partition(":")[2] if self.aor else ""
         user = aor_rest.partition("@")[0] if "@" in aor_rest else aor_rest
         headers = {
-            "Via": f"SIP/2.0/UDP {self.public_address[0]}:{self.public_address[1]};rport;branch={branch}",
+            "Via": f"SIP/2.0/{'TLS' if self._is_tls else 'TCP'} {self.local_address[0]}:{self.local_address[1]};rport;branch={branch}",
             "From": self.aor,
             "To": self.aor,
             "Call-ID": self.call_id,
             "CSeq": f"{self.cseq} REGISTER",
-            "Contact": f"<sip:{user}@{self.public_address[0]}:{self.public_address[1]}>",
+            "Contact": f"<{'sips' if self._is_tls else 'sip'}:{user}@{self.local_address[0]}:{self.local_address[1]}>",
             "Expires": "3600",  # 1 hour
             "Max-Forwards": "70",
         }
@@ -684,7 +746,6 @@ class SessionInitiationProtocol(STUNProtocol):
             headers["Proxy-Authorization"] = proxy_authorization
         self.send(
             Request(method="REGISTER", uri=self.registrar_uri, headers=headers),
-            self.server_address,
         )
 
     def registered(self) -> None:
@@ -723,16 +784,20 @@ class SessionInitiationProtocol(STUNProtocol):
             ).hexdigest()
         return hashlib.md5(f"{ha1}:{nonce}:{ha2}".encode()).hexdigest()  # noqa: S324
 
-    def error_received(self, exc: OSError) -> None:
-        """Handle a transport-level error, delegating to the STUN base class."""
-        STUNProtocol.error_received(self, exc)
+    def error_received(self, exc: Exception) -> None:
+        """Handle a transport-level error.
+
+        On Windows, sending to an unreachable TCP port may raise
+        ``ConnectionResetError``; logging and ignoring it keeps the socket
+        alive so subsequent messages are still processed.
+        """
+        logger.warning("TLS transport error (ignored): %s", exc)
 
     def connection_lost(self, exc: Exception | None) -> None:
-        """Handle a lost connection."""
+        """Handle a lost TLS/TCP connection."""
         if exc is not None:
             logger.exception("Connection lost", exc_info=exc)
         self.transport = None
-        STUNProtocol.connection_lost(self, exc)
 
 
 #: Short alias for :class:`SessionInitiationProtocol`.
