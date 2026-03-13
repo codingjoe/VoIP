@@ -37,7 +37,15 @@ from .types import CallerID, Status
 
 logger = logging.getLogger("voip.sip")
 
-__all__ = ["SIP", "SessionInitiationProtocol"]
+__all__ = ["RegistrationError", "SIP", "SessionInitiationProtocol"]
+
+
+class RegistrationError(Exception):
+    """Raised when a SIP REGISTER request fails with an unexpected response.
+
+    The exception message includes the response status code and reason phrase
+    from the server, e.g. ``"403 Forbidden"`` or ``"500 Server Error"``.
+    """
 
 
 def _mask_caller(header: str) -> str:
@@ -366,9 +374,9 @@ class SessionInitiationProtocol(asyncio.Protocol):
 
         Only processes responses when registration parameters are configured.
         """
-        if response.status_code == Status["OK"] and "REGISTER" in response.headers.get(
+        if response.status_code == Status["OK"] and response.headers.get(
             "CSeq", ""
-        ):
+        ).split()[-1:] == ["REGISTER"]:
             logger.info("Registration successful")
             self.registered()
             return
@@ -426,10 +434,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
             else:
                 asyncio.create_task(self.register(authorization=auth_value))
             return
-        logger.warning(
-            "Unexpected REGISTER response: %s %s", response.status_code, response.reason
-        )
-        raise NotImplementedError("Unexpected REGISTER response")
+        raise RegistrationError(f"{response.status_code} {response.reason}")
 
     def call_received(self, request: Request) -> None:
         """Handle an incoming call.
@@ -594,7 +599,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
                         call_id,
                     ),
                     **({"Record-Route": record_route} if record_route else {}),
-                    "Contact": f"<{'sips' if self._is_tls else 'sip'}:{self.local_address[0]}:{self.local_address[1]}>",
+                    "Contact": self._build_contact(),
                     "Allow": self.ALLOW,
                     "Supported": "replaces",
                     "Content-Type": "application/sdp",
@@ -636,6 +641,27 @@ class SessionInitiationProtocol(asyncio.Protocol):
             **headers,
             "To": headers.get("To", "") + (f";tag={tag}" if tag else ""),
         }
+
+    def _build_contact(self, user: str | None = None) -> str:
+        """Return a ``Contact:`` header value for this UA.
+
+        The URI scheme mirrors :attr:`aor`: a ``sips:`` AOR produces a
+        ``sips:`` Contact (the strongest TLS guarantee); a ``sip:`` AOR over
+        TLS produces ``sip:`` with ``transport=tls``; plain TCP produces plain
+        ``sip:``.
+
+        Args:
+            user: SIP user part (e.g. ``"alice"``).  When provided the Contact
+                is of the form ``<scheme:user@host:port>``; otherwise just
+                ``<scheme:host:port>``.
+        """
+        aor_scheme = self.aor.partition(":")[0]  # "sip" or "sips"
+        host_port = f"{self.local_address[0]}:{self.local_address[1]}"
+        addr = f"{user}@{host_port}" if user else host_port
+        if aor_scheme == "sips":
+            return f"<sips:{addr}>"
+        tls_param = ";transport=tls" if self._is_tls else ""
+        return f"<sip:{addr}{tls_param}>"
 
     def ringing(self, request: Request) -> None:
         """Send a 180 Ringing provisional response to the caller.
@@ -728,7 +754,18 @@ class SessionInitiationProtocol(asyncio.Protocol):
 
     @property
     def registrar_uri(self) -> str:
-        """Registrar Request-URI derived from the AOR (e.g. sips:example.com)."""
+        """Registrar Request-URI derived from the AOR, preserving its scheme.
+
+        The scheme (``sip:`` or ``sips:``) is taken directly from :attr:`aor`
+        so the client honours whatever security contract the administrator has
+        configured.  The user part is stripped; only the host (and optional
+        port) is kept, per RFC 3261 §10.2.
+
+        Examples::
+
+            sip:alice@example.com   →  sip:example.com
+            sips:alice@example.com  →  sips:example.com
+        """
         if not self.aor:
             raise ValueError("AOR is not configured; cannot derive registrar URI")
         scheme, _, rest = self.aor.partition(":")
@@ -773,7 +810,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
             "To": self.aor,
             "Call-ID": self.call_id,
             "CSeq": f"{self.cseq} REGISTER",
-            "Contact": f"<{'sips' if self._is_tls else 'sip'}:{user}@{self.local_address[0]}:{self.local_address[1]}>",
+            "Contact": self._build_contact(user),
             "Expires": "3600",  # 1 hour
             "Max-Forwards": "70",
         }

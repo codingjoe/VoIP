@@ -12,7 +12,12 @@ from voip.rtp import RealtimeTransportProtocol
 from voip.sdp.messages import SessionDescription
 from voip.sdp.types import Timing
 from voip.sip.messages import Message, Request, Response
-from voip.sip.protocol import SIP, SessionInitiationProtocol, _mask_caller
+from voip.sip.protocol import (
+    SIP,
+    RegistrationError,
+    SessionInitiationProtocol,
+    _mask_caller,
+)
 from voip.sip.types import CallerID
 from voip.types import DigestAlgorithm
 
@@ -682,7 +687,7 @@ class TestAnswer:
 
     @pytest.mark.asyncio
     async def test_answer__includes_contact_header(self, fake_rtp_transport):
-        """Include a Contact header with the local SIPS address in 200 OK."""
+        """Include a Contact header with the local SIP address in 200 OK."""
         protocol = FakeProtocol()
         addr = ("192.0.2.1", 5060)
         invite = self._make_invite("answer-contact-1")
@@ -690,7 +695,10 @@ class TestAnswer:
         await self._run_answer(protocol, invite, fake_rtp_transport)
         response, _ = protocol._sent_responses[-1]
         assert "Contact" in response.headers
-        assert response.headers["Contact"].startswith("<sips:")
+        # FakeProtocol AOR is sip:test@example.com → sip: Contact.
+        assert response.headers["Contact"].startswith("<sip:")
+        # FakeTransport is TLS-wrapped, so transport=tls param should be present.
+        assert ";transport=tls" in response.headers["Contact"]
 
     @pytest.mark.asyncio
     async def test_answer__includes_allow_header(self, fake_rtp_transport):
@@ -1638,6 +1646,17 @@ class TestRegistration:
         p = make_register_session(aor="sip:alice@example.com:5080")
         assert p.registrar_uri == "sip:example.com:5080"
 
+    def test_registrar_uri__preserves_sips_scheme(self):
+        """sips: AOR produces sips: registrar URI (RFC 3261 §10.2)."""
+        p = make_register_session(aor="sips:alice@example.com")
+        assert p.registrar_uri == "sips:example.com"
+
+    def test_registrar_uri__preserves_sip_scheme(self):
+        """sip: AOR produces sip: registrar URI regardless of transport."""
+        p = make_register_session(aor="sip:alice@example.com")
+        p._is_tls = True  # TLS transport should not change the scheme
+        assert p.registrar_uri == "sip:example.com"
+
     async def test_connection_made__sends_register(self):
         """Send a REGISTER request when the connection is established."""
 
@@ -1657,6 +1676,7 @@ class TestRegistration:
         await asyncio.sleep(0.05)
         transport.write.assert_called()
         (data,) = transport.write.call_args[0]
+        # sip: AOR → sip: registrar URI even over TLS.
         assert b"REGISTER sip:example.com SIP/2.0" in data
 
     async def test_register__includes_required_headers(self):
@@ -1670,7 +1690,8 @@ class TestRegistration:
         (data,) = transport.write.call_args[0]
         assert b"From: sip:alice@example.com" in data
         assert b"To: sip:alice@example.com" in data
-        assert b"Contact: <sips:alice@127.0.0.1:5061>" in data
+        # sip: AOR over TLS → sip:;transport=tls Contact
+        assert b"Contact: <sip:alice@127.0.0.1:5061;transport=tls>" in data
         assert b"Expires: 3600" in data
 
     async def test_register__increments_cseq(self):
@@ -1726,10 +1747,10 @@ class TestRegistration:
         assert calls == [True]
 
     async def test_response_received__200_non_register_raises(self):
-        """Receiving 200 OK for a non-REGISTER method raises NotImplementedError."""
+        """Receiving 200 OK for a non-REGISTER method raises RegistrationError."""
         p = make_register_session()
         p.connection_made(make_mock_transport())
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(RegistrationError):
             p.response_received(
                 Response(status_code=200, reason="OK", headers={"CSeq": "1 INVITE"}),
                 ("192.0.2.2", 5060),
@@ -1850,7 +1871,7 @@ class TestRegistration:
         assert branch1 != branch2
 
     async def test_register__contact_uses_local_addr(self):
-        """Contact header uses sips: URI with the local socket address."""
+        """Contact header uses sip:;transport=tls when AOR is sip: over TLS."""
         p = make_register_session()
         p.local_address = "10.0.0.5", 5061
         transport = make_mock_transport("10.0.0.5", 5061)
@@ -1858,7 +1879,48 @@ class TestRegistration:
         p._is_tls = True
         await p.register()
         (data,) = transport.write.call_args[0]
+        assert b"Contact: <sip:alice@10.0.0.5:5061;transport=tls>" in data
+
+    async def test_register__contact_uses_sips_when_aor_is_sips(self):
+        """Contact header uses sips: when AOR scheme is sips:."""
+        p = make_register_session(aor="sips:alice@example.com")
+        p.local_address = "10.0.0.5", 5061
+        transport = make_mock_transport("10.0.0.5", 5061)
+        p.transport = transport
+        p._is_tls = True
+        await p.register()
+        (data,) = transport.write.call_args[0]
         assert b"Contact: <sips:alice@10.0.0.5:5061>" in data
+
+    async def test_response_received__403_raises_registration_error(self):
+        """403 Forbidden for REGISTER raises RegistrationError with the response message."""
+        p = make_register_session()
+        p.local_address = ("127.0.0.1", 5061)
+        p.transport = make_mock_transport()
+        with pytest.raises(RegistrationError, match="403 Forbidden"):
+            p.response_received(
+                Response(
+                    status_code=403,
+                    reason="Forbidden",
+                    headers={"CSeq": "1 REGISTER"},
+                ),
+                ("192.0.2.2", 5061),
+            )
+
+    async def test_response_received__unexpected_raises_registration_error(self):
+        """Any unexpected REGISTER response raises RegistrationError."""
+        p = make_register_session()
+        p.local_address = ("127.0.0.1", 5061)
+        p.transport = make_mock_transport()
+        with pytest.raises(RegistrationError, match="500 Server Error"):
+            p.response_received(
+                Response(
+                    status_code=500,
+                    reason="Server Error",
+                    headers={"CSeq": "1 REGISTER"},
+                ),
+                ("192.0.2.2", 5061),
+            )
 
     async def test_data_received__sip_response__calls_response_received(self):
         """data_received routes SIP messages to response_received via TCP stream."""
@@ -1917,14 +1979,16 @@ class TestRegistration:
             )
         assert any("Registration successful" in r.message for r in caplog.records)
 
-    async def test_response_received__unexpected_status__logs_warning(self, caplog):
-        """An unhandled status code logs a warning and raises NotImplementedError."""
+    async def test_response_received__unexpected_status__raises_registration_error(
+        self, caplog
+    ):
+        """An unhandled status code raises RegistrationError with status and reason."""
         import logging
 
         p = make_register_session()
         p.connection_made(make_mock_transport())
         with caplog.at_level(logging.WARNING, logger="voip.sip"):
-            with pytest.raises(NotImplementedError):
+            with pytest.raises(RegistrationError, match="500 Server Error"):
                 p.response_received(
                     Response(
                         status_code=500,
@@ -1933,7 +1997,6 @@ class TestRegistration:
                     ),
                     ("192.0.2.2", 5060),
                 )
-        assert any("500" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------

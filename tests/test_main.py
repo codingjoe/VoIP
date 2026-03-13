@@ -310,14 +310,14 @@ class TestTranscribeCLI:
                 [
                     "sip",
                     "transcribe",
-                    "sips:alice@carrier.example.com",
+                    "sip:alice@carrier.example.com",
                     "--username=bob",
                     "--password=p",
                 ],
                 catch_exceptions=False,
             )
         assert captured.get("username") == "bob"
-        assert captured.get("aor") == "sips:bob@carrier.example.com"
+        assert captured.get("aor") == "sip:bob@carrier.example.com"
 
     def test_transcribe__proxy_overrides_outbound_proxy(self):
         """--proxy overrides the outbound proxy address derived from AOR."""
