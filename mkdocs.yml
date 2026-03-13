@@ -6,6 +6,7 @@ watch:
 nav:
   - Home: index.md
   - Usage: usage.md
+  - Feature Roadmap: roadmap.md
   - API-Reference:
       - SIP: sip.md
       - RTP: rtp.md
