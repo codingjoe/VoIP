@@ -8,7 +8,7 @@
   <a href="https://github.com/codingjoe">Documentation</a> |
   <a href="https://github.com/codingjoe/VoIP/issues/new/choose">Issues</a> |
   <a href="https://github.com/codingjoe/VoIP/releases">Changelog</a> |
-  <a href="https://github.com/sponsors/codingjoe">Funding</a> 💚
+  <a href="https://github.com/sponsors/codingjoe">Funding</a> ♥
 </p>
 
 # Python VoIP library

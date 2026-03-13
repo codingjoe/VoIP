@@ -24,3 +24,13 @@ uv pre-commit install
 ```bash
 uv run --extra=cli --extra=pygments --extra=audio pytest
 ```
+
+## Writing documentation
+
+The documentation is built using [MkDocs](https://www.mkdocs.org/) with [mkdocstrings](https://mkdocstrings.github.io/) for automatic API documentation generation.
+
+To serve the documentation locally for development, run:
+
+```bash
+uv run mkdocs serve --livereload
+```
