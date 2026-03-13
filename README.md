@@ -21,7 +21,7 @@ Python asyncio library for SIP telephony ([RFC 3261](https://tools.ietf.org/html
 All signalling uses **SIP over TLS** (SIPS, RFC 3261 §26) and all media is
 protected with **SRTP** ([RFC 3711](https://tools.ietf.org/html/rfc3711))
 using the `AES_CM_128_HMAC_SHA1_80` cipher suite with SDES key exchange
-([RFC 4568](https://tools.ietf.org/html/rfc4568)).  Unencrypted SIP or RTP
+([RFC 4568](https://tools.ietf.org/html/rfc4568)). Unencrypted SIP or RTP
 is not supported.
 
 ## Setup
@@ -40,7 +40,7 @@ Answer calls and transcribe them live from the terminal:
 voip sip transcribe --server sip.example.com --username alice --password secret
 ```
 
-The CLI connects to the SIP server on port **5061** (TLS) by default.  Pass
+The CLI connects to the SIP server on port **5061** (TLS) by default. Pass
 `--server host:port` to override.
 
 ### Python API

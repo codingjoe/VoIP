@@ -346,6 +346,7 @@ class TestSRTPIntegration:
     async def test_srtp_invalid_auth_tag__discarded(self, caplog):
         """SRTP packets with invalid authentication tags are silently discarded."""
         import logging  # noqa: PLC0415
+
         from voip.srtp import SRTPSession  # noqa: PLC0415
 
         received: list[bytes] = []
