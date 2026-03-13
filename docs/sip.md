@@ -7,8 +7,8 @@ The `voip.sip` module implements the Session Initiation Protocol (RFC 3261), han
 ::: voip.sip.protocol.SessionInitiationProtocol
 
 ::: voip.sip.protocol.SIP
-    options:
-      members: false
+options:
+members: false
 
 ## Messages
 

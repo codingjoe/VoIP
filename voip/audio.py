@@ -366,4 +366,3 @@ class AudioCall(Call):
                 (16 kHz) covering :attr:`chunk_duration` seconds of audio
                 (or one RTP packet when ``chunk_duration == 0``).
         """
-

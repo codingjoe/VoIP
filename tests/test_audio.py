@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -11,7 +11,7 @@ np = pytest.importorskip("numpy")
 av = pytest.importorskip("av")
 
 from voip.audio import AudioCall, _build_ogg_opus  # noqa: E402
-from voip.rtp import RealtimeTransportProtocol, RTPPayloadType  # noqa: E402
+from voip.rtp import RealtimeTransportProtocol  # noqa: E402
 from voip.sdp.types import MediaDescription, RTPPayloadFormat  # noqa: E402
 
 

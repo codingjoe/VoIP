@@ -14,7 +14,7 @@ pytest.importorskip("pocket_tts")
 
 from voip.ai import AgentCall, WhisperCall  # noqa: E402
 from voip.audio import AudioCall  # noqa: E402
-from voip.rtp import RealtimeTransportProtocol, RTPPayloadType  # noqa: E402
+from voip.rtp import RTPPayloadType  # noqa: E402
 from voip.sdp.types import MediaDescription, RTPPayloadFormat  # noqa: E402
 
 
@@ -433,7 +433,9 @@ class TestAgentCall:
 
         call = make_agent_call(MagicMock(), tts_mock)
         result = call._synthesize("hello world")
-        tts_mock.generate_audio.assert_called_once_with(call._voice_state, "hello world")
+        tts_mock.generate_audio.assert_called_once_with(
+            call._voice_state, "hello world"
+        )
         assert result is audio_result
 
     def test_reply_received__noop_by_default(self):

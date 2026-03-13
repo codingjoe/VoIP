@@ -19,7 +19,7 @@ import ollama
 from faster_whisper import WhisperModel
 from pocket_tts import TTSModel
 
-from voip.audio import AudioCall, SAMPLE_RATE
+from voip.audio import SAMPLE_RATE, AudioCall
 
 __all__ = ["AgentCall", "WhisperCall"]
 
