@@ -1,7 +1,7 @@
 """AI-powered call handlers for RTP streams.
 
 This module provides :class:`WhisperCall`, which transcribes decoded audio
-with OpenAI Whisper, and :class:`AgentCall`, which extends it with an
+with faster-whisper, and :class:`AgentCall`, which extends it with an
 Ollama-powered response loop and Pocket TTS voice synthesis.
 
 Requires the ``ai`` extra: ``pip install voip[ai]``.
@@ -12,6 +12,8 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
+import secrets
+import struct
 from typing import Any, ClassVar
 
 import numpy as np
@@ -19,16 +21,17 @@ import ollama
 from faster_whisper import WhisperModel
 from pocket_tts import TTSModel
 
-from voip.audio import SAMPLE_RATE, AudioCall
+from voip.audio import AudioCall, SAMPLE_RATE
+from voip.rtp import RTPPayloadType
 
 __all__ = ["AgentCall", "WhisperCall"]
 
 logger = logging.getLogger(__name__)
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(kw_only=True)
 class WhisperCall(AudioCall):
-    """RTP call handler that transcribes audio with OpenAI Whisper.
+    """RTP call handler that transcribes audio with faster-whisper.
 
     Audio is decoded by :class:`~voip.audio.AudioCall` and delivered as
     float32 PCM to :meth:`audio_received`, which schedules an async
@@ -80,7 +83,7 @@ class WhisperCall(AudioCall):
         asyncio.create_task(self._transcribe(audio))
 
     async def _transcribe(self, audio: np.ndarray) -> None:
-        """Transcribe decoded audio and deliver the text."""
+        """Transcribe decoded audio and deliver non-empty text to the handler."""
         loop = asyncio.get_running_loop()
         logger.debug(
             "Transcribing %d samples (%.1f s)",
@@ -88,8 +91,9 @@ class WhisperCall(AudioCall):
             len(audio) / SAMPLE_RATE,
         )
         try:
-            text = await loop.run_in_executor(None, self._run_transcription, audio)
-            self.transcription_received(text.strip())
+            raw = await loop.run_in_executor(None, self._run_transcription, audio)
+            if text := raw.strip():
+                self.transcription_received(text)
         except asyncio.CancelledError:
             logger.debug("Transcription task was cancelled", exc_info=True)
             raise
@@ -114,35 +118,37 @@ class WhisperCall(AudioCall):
         """Handle a transcription result.  Override in subclasses.
 
         Args:
-            text: Transcribed text for this audio chunk.
+            text: Transcribed text for this audio chunk (already stripped).
         """
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(kw_only=True)
 class AgentCall(WhisperCall):
-    """RTP call handler that responds to speech using Ollama and Pocket TTS.
+    """RTP call handler that responds to caller speech using Ollama and Pocket TTS.
 
     Extends :class:`WhisperCall` by feeding each transcription to an Ollama
-    language model, then synthesising the reply as speech with Pocket TTS.
+    language model, then synthesising the reply as speech with Pocket TTS
+    and streaming it back to the caller via RTP.
 
-    Override :meth:`reply_received` to handle the text reply, or
-    :meth:`speech_received` to handle the synthesised audio::
-
-        class MyAgent(AgentCall):
-            def reply_received(self, text: str) -> None:
-                print("Agent says:", text)
-
-            def speech_received(self, audio: np.ndarray) -> None:
-                send_rtp(audio)
+    Chat history is maintained across turns so the language model can follow
+    the conversation.  A built-in system prompt informs the model that it is
+    on a phone call.
 
     To share the TTS model across multiple calls pass a pre-loaded
-    :class:`~pocket_tts.TTSModel` as the *tts_model* argument::
+    :class:`~pocket_tts.TTSModel`::
 
         shared_tts = TTSModel.load_model()
-
-        class MyAgent(AgentCall):
-            tts_model = shared_tts
+        AgentCall(rtp=..., sip=..., tts_model=shared_tts)
     """
+
+    _SYSTEM_PROMPT: ClassVar[str] = (
+        "You are a helpful voice assistant on a phone call. "
+        "Keep your answers brief and conversational."
+    )
+    #: PCMU target sample rate (G.711 µ-law, RFC 3551).
+    _PCMU_SAMPLE_RATE: ClassVar[int] = 8000
+    #: RTP payload samples per packet (20 ms at 8 kHz).
+    _RTP_CHUNK_SAMPLES: ClassVar[int] = 160
 
     #: Ollama model name for generating replies.
     ollama_model: str = dataclasses.field(default="llama3")
@@ -154,54 +160,145 @@ class AgentCall(WhisperCall):
 
     _tts_instance: TTSModel = dataclasses.field(init=False, repr=False)
     _voice_state: Any = dataclasses.field(init=False, repr=False)
+    _messages: list[dict] = dataclasses.field(init=False, repr=False)
+    _rtp_seq: int = dataclasses.field(init=False, repr=False, default=0)
+    _rtp_ts: int = dataclasses.field(init=False, repr=False, default=0)
+    _rtp_ssrc: int = dataclasses.field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         super().__post_init__()
         self._tts_instance = self.tts_model or TTSModel.load_model()
         self._voice_state = self._tts_instance.get_state_for_audio_prompt(self.voice)
+        self._messages = [{"role": "system", "content": self._SYSTEM_PROMPT}]
+        self._rtp_ssrc = secrets.randbits(32)
 
     def transcription_received(self, text: str) -> None:
-        """Schedule an async Ollama→TTS response for *text*."""
-        asyncio.create_task(self._respond(text))
+        """Schedule an async Ollama→TTS→RTP response for *text*.
+
+        Silently ignores empty strings (Whisper occasionally emits them).
+        """
+        if text:
+            asyncio.create_task(self._respond(text))
 
     async def _respond(self, text: str) -> None:
-        """Fetch an Ollama reply for *text* and synthesise speech."""
+        """Fetch an Ollama reply for *text* and send as speech via RTP."""
         try:
+            self._messages.append({"role": "user", "content": text})
             response = await ollama.AsyncClient().chat(
                 model=self.ollama_model,
-                messages=[{"role": "user", "content": text}],
+                messages=self._messages,
             )
             reply = response.message.content
-            self.reply_received(reply)
-            loop = asyncio.get_running_loop()
-            audio = await loop.run_in_executor(None, self._synthesize, reply)
-            self.speech_received(audio)
+            self._messages.append({"role": "assistant", "content": reply})
+            logger.info("Agent reply: %r", reply)
+            await self._send_speech(reply)
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("Error while generating agent response")
 
-    def _synthesize(self, text: str) -> np.ndarray:
-        """Synthesise *text* to a float32 PCM array using Pocket TTS.
+    async def _send_speech(self, text: str) -> None:
+        """Stream synthesised speech from Pocket TTS and send via RTP.
+
+        Yields audio chunks from
+        :meth:`~pocket_tts.TTSModel.generate_audio_stream` as soon as they
+        are decoded, enabling low-latency real-time delivery to the caller.
 
         Args:
-            text: Text to convert to speech.
+            text: Text to synthesise and transmit.
+        """
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[np.ndarray | None] = asyncio.Queue()
+
+        def _generate() -> None:
+            for chunk in self._tts_instance.generate_audio_stream(
+                self._voice_state, text
+            ):
+                asyncio.run_coroutine_threadsafe(queue.put(chunk.numpy()), loop).result()
+            asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
+
+        future = loop.run_in_executor(None, _generate)
+        while (chunk := await queue.get()) is not None:
+            self._send_rtp_audio(chunk)
+        await future
+
+    def _send_rtp_audio(self, audio: np.ndarray) -> None:
+        """Encode *audio* as PCMU and transmit to the caller's RTP address.
+
+        Looks up the caller's remote RTP address from the shared
+        :class:`~voip.rtp.RealtimeTransportProtocol` call registry and
+        transmits the encoded audio as 20 ms RTP packets.
+
+        Args:
+            audio: Float32 mono PCM chunk from Pocket TTS.
+        """
+        remote_addr = next(
+            (addr for addr, call in self.rtp.calls.items() if call is self),
+            None,
+        )
+        if remote_addr is None:
+            logger.warning("No remote RTP address for this call; dropping audio")
+            return
+        samples = self._resample(audio, self._tts_instance.sample_rate)
+        for i in range(0, len(samples), self._RTP_CHUNK_SAMPLES):
+            payload = self._encode_pcmu(samples[i : i + self._RTP_CHUNK_SAMPLES])
+            self.send_datagram(self._build_rtp_packet(payload), remote_addr)
+
+    @classmethod
+    def _resample(cls, audio: np.ndarray, src_rate: int) -> np.ndarray:
+        """Resample *audio* from *src_rate* to :attr:`_PCMU_SAMPLE_RATE`.
+
+        Uses linear interpolation via :func:`numpy.interp`.
+
+        Args:
+            audio: Float32 mono PCM array.
+            src_rate: Sample rate of *audio* in Hz.
 
         Returns:
-            Float32 mono PCM array at :attr:`~pocket_tts.TTSModel.sample_rate` Hz.
+            Resampled float32 array at :attr:`_PCMU_SAMPLE_RATE` Hz.
         """
-        return self._tts_instance.generate_audio(self._voice_state, text).numpy()
+        if src_rate == cls._PCMU_SAMPLE_RATE:
+            return audio
+        n_out = round(len(audio) * cls._PCMU_SAMPLE_RATE / src_rate)
+        return np.interp(
+            np.linspace(0, len(audio) - 1, n_out),
+            np.arange(len(audio)),
+            audio,
+        ).astype(np.float32)
 
-    def reply_received(self, text: str) -> None:
-        """Handle the text reply from Ollama.  Override in subclasses.
+    @staticmethod
+    def _encode_pcmu(samples: np.ndarray) -> bytes:
+        """Encode float32 PCM samples to G.711 µ-law (PCMU) bytes.
 
         Args:
-            text: Text reply generated by the Ollama language model.
-        """
+            samples: Float32 mono PCM array in the range ``[-1, 1]``.
 
-    def speech_received(self, audio: np.ndarray) -> None:
-        """Handle the synthesised speech audio.  Override in subclasses.
+        Returns:
+            µ-law encoded bytes, one byte per input sample.
+        """
+        x = np.clip(samples, -1.0, 1.0)
+        x_mu = np.sign(x) * np.log1p(255.0 * np.abs(x)) / np.log1p(255.0)
+        return np.floor((x_mu + 1.0) / 2.0 * 255.0 + 0.5).astype(np.uint8).tobytes()
+
+    def _build_rtp_packet(self, payload: bytes) -> bytes:
+        """Wrap *payload* in a minimal RTP header (RFC 3550 §5.1).
+
+        Increments the sequence number and timestamp after each packet.
 
         Args:
-            audio: Float32 mono PCM array from Pocket TTS.
+            payload: Encoded audio payload bytes.
+
+        Returns:
+            RTP packet bytes ready for transmission.
         """
+        header = struct.pack(
+            ">BBHII",
+            0x80,  # V=2, P=0, X=0, CC=0
+            RTPPayloadType.PCMU,
+            self._rtp_seq & 0xFFFF,
+            self._rtp_ts & 0xFFFFFFFF,
+            self._rtp_ssrc,
+        )
+        self._rtp_seq += 1
+        self._rtp_ts += self._RTP_CHUNK_SAMPLES
+        return header + payload

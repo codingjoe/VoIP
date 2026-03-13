@@ -288,6 +288,22 @@ class TestWhisperCall:
         kwargs = mock_decode.call_args[1]
         assert kwargs.get("input_sample_rate") == 16000
 
+    async def test_transcribe__empty_transcription_not_delivered(self):
+        """Whitespace-only transcription is silently discarded."""
+        transcriptions = []
+        model_mock = MagicMock()
+        seg = MagicMock()
+        seg.text = "   "
+        model_mock.transcribe.return_value = ([seg], MagicMock())
+
+        class Capture(WhisperCall):
+            def transcription_received(self, text: str) -> None:
+                transcriptions.append(text)
+
+        call = make_whisper_call(model_mock, Capture)
+        await call._transcribe(np.zeros(16000, dtype=np.float32))
+        assert transcriptions == []
+
     @pytest.mark.asyncio
     async def test_audio_received__logs_debug(self, caplog):
         """Log a debug message for each received audio frame."""
@@ -351,45 +367,64 @@ class TestAgentCall:
         tts_mock.get_state_for_audio_prompt.assert_called_once_with("alba")
         assert call._voice_state is voice_state
 
-    def test_transcription_received__schedules_respond(self):
-        """transcription_received creates an async _respond task."""
+    def test_transcription_received__ignores_empty_text(self):
+        """transcription_received does not schedule _respond for empty text."""
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
         call = make_agent_call(MagicMock(), tts_mock)
-        with patch.object(call, "_respond", new_callable=AsyncMock) as mock_respond:
-            with patch("asyncio.create_task") as mock_create_task:
-                call.transcription_received("hello")
-        mock_create_task.assert_called_once()
+        with patch("asyncio.create_task") as mock_create_task:
+            call.transcription_received("")
+        mock_create_task.assert_not_called()
 
-    async def test_respond__calls_ollama_and_synthesises(self):
-        """_respond fetches an Ollama reply and synthesises speech."""
+    def test_init__initializes_chat_history_with_system_prompt(self):
+        """Chat history is seeded with a system prompt mentioning a phone call."""
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
-        audio_result = np.zeros(24000, dtype=np.float32)
-        tts_mock.generate_audio.return_value = MagicMock(numpy=lambda: audio_result)
+        call = make_agent_call(MagicMock(), tts_mock)
+        assert len(call._messages) == 1
+        assert call._messages[0]["role"] == "system"
+        assert "phone" in call._messages[0]["content"].lower()
 
-        replies: list[str] = []
-        speeches: list[np.ndarray] = []
-
-        class CapturingCall(AgentCall):
-            def reply_received(self, text: str) -> None:
-                replies.append(text)
-
-            def speech_received(self, audio: np.ndarray) -> None:
-                speeches.append(audio)
-
-        call = make_agent_call(MagicMock(), tts_mock, CapturingCall)
+    async def test_respond__calls_ollama_and_sends_speech(self):
+        """_respond fetches an Ollama reply, records it in history, and sends speech."""
+        tts_mock = MagicMock()
+        tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
+        call = make_agent_call(MagicMock(), tts_mock)
         mock_response = MagicMock()
         mock_response.message.content = "I am an AI assistant."
-        with patch("voip.ai.ollama.AsyncClient") as mock_client_cls:
+        with (
+            patch("voip.ai.ollama.AsyncClient") as mock_client_cls,
+            patch.object(call, "_send_speech", new_callable=AsyncMock) as mock_send_speech,
+        ):
             mock_client = MagicMock()
             mock_client.chat = AsyncMock(return_value=mock_response)
             mock_client_cls.return_value = mock_client
             await call._respond("hello")
 
-        assert replies == ["I am an AI assistant."]
-        assert len(speeches) == 1
-        assert speeches[0] is audio_result
+        mock_send_speech.assert_awaited_once_with("I am an AI assistant.")
+        assert {"role": "user", "content": "hello"} in call._messages
+        assert {"role": "assistant", "content": "I am an AI assistant."} in call._messages
+
+    async def test_respond__passes_full_history_to_ollama(self):
+        """_respond passes the full message history (including system prompt) to Ollama."""
+        tts_mock = MagicMock()
+        tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
+        call = make_agent_call(MagicMock(), tts_mock)
+        mock_response = MagicMock()
+        mock_response.message.content = "reply"
+        with (
+            patch("voip.ai.ollama.AsyncClient") as mock_client_cls,
+            patch.object(call, "_send_speech", new_callable=AsyncMock),
+        ):
+            mock_client = MagicMock()
+            mock_client.chat = AsyncMock(return_value=mock_response)
+            mock_client_cls.return_value = mock_client
+            await call._respond("hello")
+        _, kwargs = mock_client.chat.call_args
+        messages = kwargs.get("messages") or mock_client.chat.call_args[0][0]
+        # First message is the system prompt
+        assert messages[0]["role"] == "system"
+        assert messages[1] == {"role": "user", "content": "hello"}
 
     async def test_respond__logs_exception_on_error(self, caplog):
         """Log an exception when Ollama raises an error."""
@@ -422,32 +457,106 @@ class TestAgentCall:
             mock_client_cls.return_value = mock_client
             await call._respond("hello")
 
-    def test_synthesize__returns_numpy_array(self):
-        """_synthesize returns a numpy array from the Pocket TTS model."""
-        tts_mock = MagicMock()
-        audio_tensor = MagicMock()
-        audio_result = np.zeros(24000, dtype=np.float32)
-        audio_tensor.numpy.return_value = audio_result
-        tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
-        tts_mock.generate_audio.return_value = audio_tensor
-
-        call = make_agent_call(MagicMock(), tts_mock)
-        result = call._synthesize("hello world")
-        tts_mock.generate_audio.assert_called_once_with(
-            call._voice_state, "hello world"
-        )
-        assert result is audio_result
-
-    def test_reply_received__noop_by_default(self):
-        """reply_received is a no-op in the base AgentCall class."""
+    async def test_send_speech__streams_chunks_to_send_rtp_audio(self):
+        """_send_speech iterates generate_audio_stream and passes each chunk to _send_rtp_audio."""
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
-        call = make_agent_call(MagicMock(), tts_mock)
-        call.reply_received("some text")  # must not raise
+        arr1 = np.zeros(160, dtype=np.float32)
+        arr2 = np.ones(160, dtype=np.float32)
+        chunk1, chunk2 = MagicMock(), MagicMock()
+        chunk1.numpy.return_value = arr1
+        chunk2.numpy.return_value = arr2
+        tts_mock.generate_audio_stream.return_value = iter([chunk1, chunk2])
+        tts_mock.sample_rate = 24000
 
-    def test_speech_received__noop_by_default(self):
-        """speech_received is a no-op in the base AgentCall class."""
+        call = make_agent_call(MagicMock(), tts_mock)
+        received: list[np.ndarray] = []
+        with patch.object(call, "_send_rtp_audio", side_effect=received.append):
+            await call._send_speech("hello")
+
+        assert len(received) == 2
+        assert received[0] is arr1
+        assert received[1] is arr2
+
+    def test_send_rtp_audio__sends_to_remote_addr(self):
+        """_send_rtp_audio sends RTP packets to the caller's registered address."""
+        tts_mock = MagicMock()
+        tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
+        tts_mock.sample_rate = 8000  # same as PCMU — no resampling needed
+        call = make_agent_call(MagicMock(), tts_mock)
+
+        remote_addr = ("10.0.0.1", 5004)
+        call.rtp.calls = {remote_addr: call}
+
+        audio = np.zeros(160, dtype=np.float32)
+        with patch.object(call, "send_datagram") as mock_send:
+            call._send_rtp_audio(audio)
+            mock_send.assert_called_once()
+        data, addr = mock_send.call_args[0]
+        assert addr == remote_addr
+        assert len(data) == 12 + 160  # 12-byte RTP header + 160 PCMU bytes
+
+    def test_send_rtp_audio__drops_audio_when_no_remote_addr(self, caplog):
+        """Log a warning and drop audio when no RTP address is registered."""
+        import logging
+
+        tts_mock = MagicMock()
+        tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
+        tts_mock.sample_rate = 8000
+        call = make_agent_call(MagicMock(), tts_mock)
+        call.rtp.calls = {}
+
+        with (
+            caplog.at_level(logging.WARNING, logger="voip.ai"),
+            patch.object(call, "send_datagram") as mock_send,
+        ):
+            call._send_rtp_audio(np.zeros(160, dtype=np.float32))
+        mock_send.assert_not_called()
+        assert any("dropping audio" in r.message for r in caplog.records)
+
+    def test_resample__downsamples_from_24khz_to_8khz(self):
+        """_resample reduces 24 000 samples at 24 kHz to 8 000 samples at 8 kHz."""
+        audio = np.zeros(24000, dtype=np.float32)
+        result = AgentCall._resample(audio, 24000)
+        assert len(result) == 8000
+
+    def test_resample__passthrough_when_rate_matches(self):
+        """_resample returns the original array unchanged when already at 8 kHz."""
+        audio = np.zeros(8000, dtype=np.float32)
+        result = AgentCall._resample(audio, 8000)
+        assert result is audio
+
+    def test_encode_pcmu__returns_one_byte_per_sample(self):
+        """_encode_pcmu returns a bytes object with one byte per input sample."""
+        samples = np.zeros(160, dtype=np.float32)
+        result = AgentCall._encode_pcmu(samples)
+        assert isinstance(result, bytes)
+        assert len(result) == 160
+
+    def test_encode_pcmu__silence_encodes_to_midpoint(self):
+        """Zero-amplitude samples encode to the µ-law midpoint value."""
+        samples = np.zeros(10, dtype=np.float32)
+        result = AgentCall._encode_pcmu(samples)
+        assert result[0] in (127, 128)
+
+    def test_build_rtp_packet__has_twelve_byte_header(self):
+        """_build_rtp_packet prepends a 12-byte RTP header to the payload."""
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
         call = make_agent_call(MagicMock(), tts_mock)
-        call.speech_received(np.zeros(24000, dtype=np.float32))  # must not raise
+        payload = b"\x00" * 160
+        packet = call._build_rtp_packet(payload)
+        assert len(packet) == 12 + len(payload)
+        assert packet[0] == 0x80  # V=2, P=0, X=0, CC=0
+
+    def test_build_rtp_packet__increments_seq_and_ts_each_call(self):
+        """Each _build_rtp_packet call increments seq by 1 and ts by chunk size."""
+        tts_mock = MagicMock()
+        tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
+        call = make_agent_call(MagicMock(), tts_mock)
+        call._build_rtp_packet(b"\x00" * 160)
+        assert call._rtp_seq == 1
+        assert call._rtp_ts == 160
+        call._build_rtp_packet(b"\x00" * 160)
+        assert call._rtp_seq == 2
+        assert call._rtp_ts == 320

@@ -17,7 +17,11 @@ _WHISPER_STUBS = {
     "numpy": MagicMock(),
     "whisper": MagicMock(),
     "av": MagicMock(),
-    "voip.audio": MagicMock(WhisperCall=MagicMock),
+    "faster_whisper": MagicMock(),
+    "ollama": MagicMock(),
+    "pocket_tts": MagicMock(),
+    "voip.audio": MagicMock(),
+    "voip.ai": MagicMock(WhisperCall=MagicMock, AgentCall=MagicMock),
 }
 
 
@@ -546,3 +550,235 @@ class TestTranscribeCLI:
                     assert isinstance(kwargs["call_class"], type)
 
             asyncio.run(_run_whisper())
+
+
+class TestAgentCLI:
+    def test_agent__missing_aor_exits_with_error(self):
+        """Exit with error when the AOR positional argument is not provided."""
+        from voip.__main__ import voip
+
+        result = make_runner().invoke(voip, ["sip", "agent", "--password=p"])
+        assert result.exit_code != 0
+
+    def test_agent__invalid_aor_exits_with_error(self):
+        """Exit with error when the AOR has no user@host part."""
+        from voip.__main__ import voip
+
+        result = make_runner().invoke(
+            voip, ["sip", "agent", "not-a-sip-uri", "--password=p"]
+        )
+        assert result.exit_code != 0
+
+    def test_agent__sips_aor_uses_tls(self):
+        """sips: AOR without explicit port defaults to TLS on port 5061."""
+        from voip.__main__ import voip
+
+        captured = {}
+
+        async def fake_connection(factory, *, host, port, ssl):
+            captured["host"] = host
+            captured["port"] = port
+            captured["ssl"] = ssl
+            raise KeyboardInterrupt
+
+        with (
+            patch.dict(sys.modules, _WHISPER_STUBS),
+            patch("asyncio.get_event_loop"),
+            patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
+        ):
+            mock_loop.return_value.create_connection = fake_connection
+            make_runner().invoke(
+                voip,
+                [
+                    "sip",
+                    "agent",
+                    "sips:alice@sip.example.com",
+                    "--password=secret",
+                ],
+                catch_exceptions=False,
+            )
+        assert captured.get("host") == "sip.example.com"
+        assert captured.get("port") == 5061
+        assert captured.get("ssl") is not None
+
+    def test_agent__port_5060_uses_tcp(self):
+        """Port 5060 in the AOR triggers plain TCP (no TLS)."""
+        from voip.__main__ import voip
+
+        captured = {}
+
+        async def fake_connection(factory, *, host, port, ssl):
+            captured["ssl"] = ssl
+            captured["port"] = port
+            raise KeyboardInterrupt
+
+        with (
+            patch.dict(sys.modules, _WHISPER_STUBS),
+            patch("asyncio.get_event_loop"),
+            patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
+        ):
+            mock_loop.return_value.create_connection = fake_connection
+            make_runner().invoke(
+                voip,
+                [
+                    "sip",
+                    "agent",
+                    "sip:alice@example.com:5060",
+                    "--password=secret",
+                ],
+                catch_exceptions=False,
+            )
+        assert captured.get("ssl") is None
+        assert captured.get("port") == 5060
+
+    def test_agent__call_received_uses_agent_call_class(self):
+        """call_received answers with an AgentCall subclass."""
+        from voip.__main__ import voip
+
+        protocol_holder = {}
+
+        async def fake_connection(factory, *, host, port, ssl):
+            protocol = factory()
+            protocol_holder["protocol"] = protocol
+            raise KeyboardInterrupt
+
+        with (
+            patch.dict(sys.modules, _WHISPER_STUBS),
+            patch("asyncio.get_event_loop"),
+            patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
+        ):
+            mock_loop.return_value.create_connection = fake_connection
+            make_runner().invoke(
+                voip,
+                [
+                    "sip",
+                    "agent",
+                    "sips:alice@example.com",
+                    "--password=p",
+                    "--stun-server=none",
+                ],
+                catch_exceptions=False,
+            )
+        protocol = protocol_holder.get("protocol")
+        if protocol:
+            from voip.sip.messages import Request
+
+            request = Request(
+                method="INVITE",
+                uri="sip:u@example.com",
+                headers={"From": "sip:caller@example.com", "Call-ID": "test@pc"},
+            )
+
+            async def _run_agent():
+                with patch.object(protocol, "answer") as mock_answer:
+                    protocol.connection_made(MagicMock())
+                    protocol._pending_invites.add(request.headers["Call-ID"])
+                    protocol.call_received(request)
+                    mock_answer.assert_called_once()
+                    _, kwargs = mock_answer.call_args
+                    assert "call_class" in kwargs
+                    assert isinstance(kwargs["call_class"], type)
+
+            asyncio.run(_run_agent())
+
+    def test_agent__ollama_model_option(self):
+        """--ollama-model sets the ollama_model on the call class."""
+        from voip.__main__ import voip
+
+        protocol_holder = {}
+
+        async def fake_connection(factory, *, host, port, ssl):
+            protocol = factory()
+            protocol_holder["protocol"] = protocol
+            raise KeyboardInterrupt
+
+        with (
+            patch.dict(sys.modules, _WHISPER_STUBS),
+            patch("asyncio.get_event_loop"),
+            patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
+        ):
+            mock_loop.return_value.create_connection = fake_connection
+            make_runner().invoke(
+                voip,
+                [
+                    "sip",
+                    "agent",
+                    "sips:alice@example.com",
+                    "--password=p",
+                    "--ollama-model=mistral",
+                    "--stun-server=none",
+                ],
+                catch_exceptions=False,
+            )
+        protocol = protocol_holder.get("protocol")
+        if protocol:
+            from voip.sip.messages import Request
+
+            request = Request(
+                method="INVITE",
+                uri="sip:u@example.com",
+                headers={"From": "sip:caller@example.com", "Call-ID": "test@pc"},
+            )
+
+            async def _run_ollama():
+                with patch.object(protocol, "answer") as mock_answer:
+                    protocol.connection_made(MagicMock())
+                    protocol._pending_invites.add(request.headers["Call-ID"])
+                    protocol.call_received(request)
+                    _, kwargs = mock_answer.call_args
+                    call_cls = kwargs.get("call_class")
+                    if call_cls:
+                        assert call_cls.ollama_model == "mistral"
+
+            asyncio.run(_run_ollama())
+
+    def test_agent__voice_option(self):
+        """--voice sets the voice on the call class."""
+        from voip.__main__ import voip
+
+        protocol_holder = {}
+
+        async def fake_connection(factory, *, host, port, ssl):
+            protocol = factory()
+            protocol_holder["protocol"] = protocol
+            raise KeyboardInterrupt
+
+        with (
+            patch.dict(sys.modules, _WHISPER_STUBS),
+            patch("asyncio.get_event_loop"),
+            patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
+        ):
+            mock_loop.return_value.create_connection = fake_connection
+            make_runner().invoke(
+                voip,
+                [
+                    "sip",
+                    "agent",
+                    "sips:alice@example.com",
+                    "--password=p",
+                    "--voice=ellie",
+                    "--stun-server=none",
+                ],
+                catch_exceptions=False,
+            )
+        protocol = protocol_holder.get("protocol")
+        if protocol:
+            from voip.sip.messages import Request
+
+            request = Request(
+                method="INVITE",
+                uri="sip:u@example.com",
+                headers={"From": "sip:caller@example.com", "Call-ID": "test@pc"},
+            )
+
+            async def _run_voice():
+                with patch.object(protocol, "answer") as mock_answer:
+                    protocol.connection_made(MagicMock())
+                    protocol._pending_invites.add(request.headers["Call-ID"])
+                    protocol.call_received(request)
+                    _, kwargs = mock_answer.call_args
+                    call_cls = kwargs.get("call_class")
+                    if call_cls:
+                        assert call_cls.voice == "ellie"
+
+            asyncio.run(_run_voice())

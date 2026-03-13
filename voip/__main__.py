@@ -128,6 +128,29 @@ def _parse_stun_server(ctx, param, value: str | None) -> tuple[str, int] | None:
 _parse_server = _parse_hostport
 
 
+async def _connect_sip(
+    session_factory,
+    proxy_addr: tuple[str, int],
+    use_tls: bool,
+    no_verify_tls: bool,
+) -> None:
+    """Connect to a SIP proxy and wait indefinitely."""
+    loop = asyncio.get_running_loop()
+    ssl_context: ssl.SSLContext | None = None
+    if use_tls:
+        ssl_context = ssl.create_default_context()
+        if no_verify_tls:
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+    await loop.create_connection(
+        session_factory,
+        host=proxy_addr[0],
+        port=proxy_addr[1],
+        ssl=ssl_context,
+    )
+    await asyncio.Future()
+
+
 @sip.command()
 @click.argument("aor", metavar="AOR", envvar="SIP_AOR")
 @click.option(
@@ -260,15 +283,7 @@ def transcribe(
             )
 
     async def run():
-        loop = asyncio.get_running_loop()
-        if use_tls:
-            ssl_context = ssl.create_default_context()
-            if no_verify_tls:
-                ssl_context.check_hostname = False
-                ssl_context.verify_mode = ssl.CERT_NONE
-        else:
-            ssl_context = None
-        await loop.create_connection(
+        await _connect_sip(
             lambda: TranscribeSession(
                 outbound_proxy=proxy_addr,
                 aor=normalized_aor,
@@ -276,11 +291,192 @@ def transcribe(
                 password=password,
                 rtp_stun_server_address=stun_server,
             ),
-            host=proxy_addr[0],
-            port=proxy_addr[1],
-            ssl=ssl_context,
+            proxy_addr,
+            use_tls,
+            no_verify_tls,
         )
-        await asyncio.Future()
+
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        pass
+
+
+@sip.command()
+@click.argument("aor", metavar="AOR", envvar="SIP_AOR")
+@click.option(
+    "--model",
+    default="base",
+    envvar="WHISPER_MODEL",
+    show_default=True,
+    help="Whisper model size.",
+)
+@click.option(
+    "--ollama-model",
+    default="llama3",
+    envvar="OLLAMA_MODEL",
+    show_default=True,
+    help="Ollama language model name.",
+)
+@click.option(
+    "--voice",
+    default="alba",
+    envvar="TTS_VOICE",
+    show_default=True,
+    help="Pocket TTS voice name or path to a conditioning audio file.",
+)
+@click.option(
+    "--password",
+    envvar="SIP_PASSWORD",
+    required=True,
+    help="SIP password (not parsed from AOR for security).",
+)
+@click.option(
+    "--username",
+    envvar="SIP_USERNAME",
+    default=None,
+    help="Override SIP username (defaults to user part of AOR).",
+)
+@click.option(
+    "--proxy",
+    envvar="SIP_PROXY",
+    default=None,
+    metavar="HOST[:PORT]",
+    help=(
+        "Outbound proxy address (RFC 3261 §8.1.2). "
+        "Defaults to the host and port from AOR. "
+        "Use this when the proxy differs from the registrar domain."
+    ),
+)
+@click.option(
+    "--stun-server",
+    envvar="STUN_SERVER",
+    default="stun.cloudflare.com:3478",
+    show_default=True,
+    metavar="HOST[:PORT]",
+    callback=_parse_stun_server,
+    is_eager=False,
+    help="STUN server for RTP NAT traversal (use 'none' to disable).",
+)
+@click.option(
+    "--no-tls",
+    is_flag=True,
+    default=False,
+    help=(
+        "Force plain TCP — skips TLS. "
+        "Auto-selected when port 5060 is used; explicit flag overrides any port."
+    ),
+)
+@click.option(
+    "--no-verify-tls",
+    is_flag=True,
+    default=False,
+    help="Disable TLS certificate verification (insecure; for testing only).",
+)
+@click.pass_context
+def agent(
+    ctx,
+    aor,
+    model,
+    ollama_model,
+    voice,
+    password,
+    username,
+    proxy,
+    stun_server,
+    no_tls,
+    no_verify_tls,
+):
+    r"""Register with a SIP carrier and handle calls with an AI voice agent.
+
+    AOR is a SIP Address of Record URI identifying the account to register,
+    e.g. ``sips:alice@carrier.example.com`` or ``sip:alice@carrier.example.com:5060``.
+
+    Incoming speech is transcribed with Whisper, processed by an Ollama
+    language model, and the reply is synthesised with Pocket TTS and sent
+    back to the caller via RTP.  The conversation is echoed to the console.
+
+    \b
+    Transport selection (overridable with --no-tls):
+      sips: URI or port 5061  →  TLS (default)
+      sip:  URI or port 5060  →  plain TCP
+
+    \b
+    Examples:
+      voip sip agent sips:alice@sip.example.com --password secret
+      voip sip agent sips:alice@sip.example.com --ollama-model mistral --password secret
+    """
+    from voip.sip.protocol import SIP
+
+    from .ai import AgentCall  # noqa: PLC0415
+
+    try:
+        scheme, aor_user, aor_host, aor_port = _parse_aor(aor)
+    except click.BadParameter as exc:
+        raise click.BadParameter(str(exc), param_hint="AOR") from exc
+
+    effective_username = username or aor_user
+
+    if proxy is not None:
+        proxy_addr = _parse_hostport(ctx, None, proxy)
+    else:
+        default_port = SIP_TCP_PORT if scheme == "sip" else SIP_TLS_PORT
+        port = aor_port if aor_port is not None else default_port
+        proxy_addr = (aor_host, port)
+
+    use_tls = not no_tls and proxy_addr[1] != SIP_TCP_PORT
+    normalized_aor = f"{scheme}:{effective_username}@{aor_host}"
+
+    verbose = ctx.obj.get("verbose", 0)
+
+    # Capture CLI args as class-level defaults so the call class can be passed
+    # as a plain type to SIP.answer() without extra constructor arguments.
+    _model, _ollama_model, _voice = model, ollama_model, voice
+
+    @dataclasses.dataclass(kw_only=True)
+    class AgentCallWithOutput(AgentCall):
+        """AgentCall that echoes the conversation to the console."""
+
+        model: str = dataclasses.field(default=_model)
+        ollama_model: str = dataclasses.field(default=_ollama_model)
+        voice: str = dataclasses.field(default=_voice)
+
+        def transcription_received(self, text: str) -> None:
+            click.echo(click.style(f"User:  {text}", fg="blue", bold=True))
+            super().transcription_received(text)
+
+        async def _respond(self, text: str) -> None:
+            msg_count = len(self._messages)
+            await super()._respond(text)
+            for msg in self._messages[msg_count:]:
+                if msg["role"] == "assistant":
+                    click.echo(
+                        click.style(f"Agent: {msg['content']}", fg="green", bold=True)
+                    )
+                    break
+
+    bases = (ConsoleMessageProcessor, SIP) if verbose >= 3 else (SIP,)
+
+    class AgentSession(*bases):
+        def call_received(self, request) -> None:
+            self.ringing(request=request)
+            asyncio.create_task(
+                self.answer(request=request, call_class=AgentCallWithOutput)
+            )
+
+    async def run():
+        await _connect_sip(
+            lambda: AgentSession(
+                outbound_proxy=proxy_addr,
+                aor=normalized_aor,
+                username=effective_username,
+                password=password,
+                rtp_stun_server_address=stun_server,
+            ),
+            proxy_addr,
+            use_tls,
+            no_verify_tls,
+        )
 
     try:
         asyncio.run(run())
