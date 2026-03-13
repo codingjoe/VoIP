@@ -110,7 +110,7 @@ def _parse_stun_server(ctx, param, value: str | None) -> tuple[str, int] | None:
     required=False,
     default=None,
     metavar="SIP_AOR",
-    help="SIP Address of Record (defaults to sips:{username}@{server_host}).",
+    help="SIP Address of Record (defaults to sip:{username}@{server_host}).",
 )
 @click.option("--username", envvar="SIP_USERNAME", required=True, help="SIP username.")
 @click.option("--password", envvar="SIP_PASSWORD", help="SIP password.")
@@ -148,7 +148,7 @@ def transcribe(
     server_addr = server
     host = server_addr[0]
     if aor is None:
-        aor = f"sips:{username}@{host}"
+        aor = f"sip:{username}@{host}"
 
     verbose = ctx.obj.get("verbose", 0)
 

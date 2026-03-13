@@ -573,7 +573,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
                         call_id,
                     ),
                     **({"Record-Route": record_route} if record_route else {}),
-                    "Contact": f"<{'sips' if self._is_tls else 'sip'}:{self.local_address[0]}:{self.local_address[1]}>",
+                    "Contact": f"<sip:{self.local_address[0]}:{self.local_address[1]}{';transport=tls' if self._is_tls else ''}>",
                     "Allow": self.ALLOW,
                     "Supported": "replaces",
                     "Content-Type": "application/sdp",
@@ -707,12 +707,19 @@ class SessionInitiationProtocol(asyncio.Protocol):
 
     @property
     def registrar_uri(self) -> str:
-        """Registrar Request-URI derived from the AOR (e.g. sips:example.com)."""
+        """Registrar Request-URI derived from the AOR (e.g. sip:example.com).
+
+        Per RFC 5630 §4, ``sips:`` URIs require end-to-end TLS on every hop and
+        are not supported by many carriers.  When the AOR uses the ``sips:``
+        scheme we normalise to ``sip:`` here — TLS transport is already signalled
+        by ``Via: SIP/2.0/TLS``, so the scheme conversion is safe and RFC-
+        compliant.
+        """
         if not self.aor:
             raise ValueError("AOR is not configured; cannot derive registrar URI")
-        scheme, _, rest = self.aor.partition(":")
+        _, _, rest = self.aor.partition(":")
         _, _, hostport = rest.partition("@")
-        return f"{scheme}:{hostport}"
+        return f"sip:{hostport}"
 
     async def register(
         self,
@@ -738,7 +745,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
             "To": self.aor,
             "Call-ID": self.call_id,
             "CSeq": f"{self.cseq} REGISTER",
-            "Contact": f"<{'sips' if self._is_tls else 'sip'}:{user}@{self.local_address[0]}:{self.local_address[1]}>",
+            "Contact": f"<sip:{user}@{self.local_address[0]}:{self.local_address[1]}{';transport=tls' if self._is_tls else ''}>",
             "Expires": "3600",  # 1 hour
             "Max-Forwards": "70",
         }

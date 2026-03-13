@@ -116,7 +116,7 @@ class TestTranscribeCLI:
                 ],
                 catch_exceptions=False,
             )
-        assert captured.get("aor") == "sips:u@sip.example.com"
+        assert captured.get("aor") == "sip:u@sip.example.com"
 
     def test_transcribe__server_with_port_is_parsed(self):
         """Parse host and port from SIP_SERVER when a colon is present."""

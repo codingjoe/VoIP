@@ -682,7 +682,7 @@ class TestAnswer:
 
     @pytest.mark.asyncio
     async def test_answer__includes_contact_header(self, fake_rtp_transport):
-        """Include a Contact header with the local SIPS address in 200 OK."""
+        """Include a Contact header with the local SIP address in 200 OK."""
         protocol = FakeProtocol()
         addr = ("192.0.2.1", 5060)
         invite = self._make_invite("answer-contact-1")
@@ -690,7 +690,7 @@ class TestAnswer:
         await self._run_answer(protocol, invite, fake_rtp_transport)
         response, _ = protocol._sent_responses[-1]
         assert "Contact" in response.headers
-        assert response.headers["Contact"].startswith("<sips:")
+        assert response.headers["Contact"].startswith("<sip:")
 
     @pytest.mark.asyncio
     async def test_answer__includes_allow_header(self, fake_rtp_transport):
@@ -1638,6 +1638,11 @@ class TestRegistration:
         p = make_register_session(aor="sip:alice@example.com:5080")
         assert p.registrar_uri == "sip:example.com:5080"
 
+    def test_registrar_uri__normalises_sips_to_sip(self):
+        """sips: AOR is normalised to sip: in the registrar URI (RFC 5630 §4)."""
+        p = make_register_session(aor="sips:alice@example.com")
+        assert p.registrar_uri == "sip:example.com"
+
     async def test_connection_made__sends_register(self):
         """Send a REGISTER request when the connection is established."""
 
@@ -1670,7 +1675,7 @@ class TestRegistration:
         (data,) = transport.write.call_args[0]
         assert b"From: sip:alice@example.com" in data
         assert b"To: sip:alice@example.com" in data
-        assert b"Contact: <sips:alice@127.0.0.1:5061>" in data
+        assert b"Contact: <sip:alice@127.0.0.1:5061;transport=tls>" in data
         assert b"Expires: 3600" in data
 
     async def test_register__increments_cseq(self):
@@ -1850,7 +1855,7 @@ class TestRegistration:
         assert branch1 != branch2
 
     async def test_register__contact_uses_local_addr(self):
-        """Contact header uses sips: URI with the local socket address."""
+        """Contact header uses sip: URI with transport=tls and the local socket address."""
         p = make_register_session()
         p.local_address = "10.0.0.5", 5061
         transport = make_mock_transport("10.0.0.5", 5061)
@@ -1858,7 +1863,7 @@ class TestRegistration:
         p._is_tls = True
         await p.register()
         (data,) = transport.write.call_args[0]
-        assert b"Contact: <sips:alice@10.0.0.5:5061>" in data
+        assert b"Contact: <sip:alice@10.0.0.5:5061;transport=tls>" in data
 
     async def test_data_received__sip_response__calls_response_received(self):
         """data_received routes SIP messages to response_received via TCP stream."""
