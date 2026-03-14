@@ -477,14 +477,18 @@ class TestAgentCall:
 
         call = make_agent_call(MagicMock(), tts_mock)
         received: list[np.ndarray] = []
-        with patch.object(call, "_send_rtp_audio", side_effect=received.append):
+
+        async def _capture(audio: np.ndarray) -> None:
+            received.append(audio)
+
+        with patch.object(call, "_send_rtp_audio", side_effect=_capture):
             await call._send_speech("hello")
 
         assert len(received) == 2
         assert received[0] is arr1
         assert received[1] is arr2
 
-    def test_send_rtp_audio__sends_to_remote_addr(self):
+    async def test_send_rtp_audio__sends_to_remote_addr(self):
         """_send_rtp_audio sends RTP packets to the caller's registered address."""
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
@@ -496,13 +500,13 @@ class TestAgentCall:
 
         audio = np.zeros(160, dtype=np.float32)
         with patch.object(call, "send_datagram") as mock_send:
-            call._send_rtp_audio(audio)
+            await call._send_rtp_audio(audio)
             mock_send.assert_called_once()
         data, addr = mock_send.call_args[0]
         assert addr == remote_addr
         assert len(data) == 12 + 160  # 12-byte RTP header + 160 PCMU bytes
 
-    def test_send_rtp_audio__drops_audio_when_no_remote_addr(self, caplog):
+    async def test_send_rtp_audio__drops_audio_when_no_remote_addr(self, caplog):
         """Log a warning and drop audio when no RTP address is registered."""
         import logging
 
@@ -516,7 +520,7 @@ class TestAgentCall:
             caplog.at_level(logging.WARNING, logger="voip.ai"),
             patch.object(call, "send_datagram") as mock_send,
         ):
-            call._send_rtp_audio(np.zeros(160, dtype=np.float32))
+            await call._send_rtp_audio(np.zeros(160, dtype=np.float32))
         mock_send.assert_not_called()
         assert any("dropping audio" in r.message for r in caplog.records)
 
@@ -600,7 +604,7 @@ class TestAgentCall:
 
         call = make_agent_call(MagicMock(), tts_mock)
         call.debug_audio_dir = str(tmp_path)
-        with patch.object(call, "_send_rtp_audio"):
+        with patch.object(call, "_send_rtp_audio", new_callable=AsyncMock):
             await call._send_speech("hello")
 
         wav_files = list(tmp_path.glob("agent_*.wav"))
@@ -622,7 +626,34 @@ class TestAgentCall:
 
         call = make_agent_call(MagicMock(), tts_mock)
         assert call.debug_audio_dir is None
-        with patch.object(call, "_send_rtp_audio"):
+        with patch.object(call, "_send_rtp_audio", new_callable=AsyncMock):
             await call._send_speech("hello")
         # No files written
         assert list(tmp_path.iterdir()) == []
+
+    async def test_send_rtp_audio__paces_packets_at_20ms_intervals(self):
+        """_send_rtp_audio sleeps _RTP_PACKET_DURATION seconds between each packet."""
+        tts_mock = MagicMock()
+        tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
+        tts_mock.sample_rate = 8000
+        call = make_agent_call(MagicMock(), tts_mock)
+        remote_addr = ("10.0.0.2", 5006)
+        call.rtp.calls = {remote_addr: call}
+
+        # Two 20 ms packets (320 samples total)
+        audio = np.zeros(320, dtype=np.float32)
+        sleep_calls: list[float] = []
+        original_sleep = asyncio.sleep
+
+        async def _capture_sleep(delay: float) -> None:
+            sleep_calls.append(delay)
+            await original_sleep(0)  # don't actually wait in tests
+
+        with (
+            patch("voip.ai.asyncio.sleep", side_effect=_capture_sleep),
+            patch.object(call, "send_datagram"),
+        ):
+            await call._send_rtp_audio(audio)
+
+        assert len(sleep_calls) == 2
+        assert all(s == AgentCall._RTP_PACKET_DURATION for s in sleep_calls)

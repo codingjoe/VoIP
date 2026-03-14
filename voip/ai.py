@@ -153,6 +153,8 @@ class AgentCall(WhisperCall):
     _PCMU_SAMPLE_RATE: ClassVar[int] = 8000
     #: RTP payload samples per packet (20 ms at 8 kHz).
     _RTP_CHUNK_SAMPLES: ClassVar[int] = 160
+    #: Wall-clock duration of one RTP packet in seconds (used for pacing).
+    _RTP_PACKET_DURATION: ClassVar[float] = _RTP_CHUNK_SAMPLES / _PCMU_SAMPLE_RATE
     #: Prefer PCMU so outbound audio codec always matches what we send.
     PREFERRED_CODECS: ClassVar[list[RTPPayloadFormat]] = [
         RTPPayloadFormat(payload_type=RTPPayloadType.PCMU),
@@ -243,19 +245,23 @@ class AgentCall(WhisperCall):
             pcm_8k = self._resample(tts_chunk, self._tts_instance.sample_rate)
             if self.debug_audio_dir is not None:
                 debug_chunks.append(pcm_8k)
-            self._send_rtp_audio(pcm_8k)
+            await self._send_rtp_audio(pcm_8k)
         await future
 
         if debug_chunks:
             full_audio = np.concatenate(debug_chunks)
             await loop.run_in_executor(None, self._save_debug_wav, full_audio)
 
-    def _send_rtp_audio(self, audio: np.ndarray) -> None:
+    async def _send_rtp_audio(self, audio: np.ndarray) -> None:
         """Encode *audio* (float32, 8 kHz) as PCMU and transmit to the caller via RTP.
 
         Looks up the caller's remote RTP address from the shared
         :class:`~voip.rtp.RealtimeTransportProtocol` call registry and
-        transmits the encoded audio as 20 ms RTP packets.
+        transmits the encoded audio as 20 ms RTP packets, sleeping
+        :attr:`_RTP_PACKET_DURATION` seconds between each packet so that
+        packets arrive at the UAS at the correct real-time rate.  Without this
+        pacing the UAS jitter buffer receives all packets simultaneously,
+        plays them back too fast, and the result sounds cut-up.
 
         Args:
             audio: Float32 mono PCM at :attr:`_PCMU_SAMPLE_RATE` Hz.
@@ -270,6 +276,7 @@ class AgentCall(WhisperCall):
         for i in range(0, len(audio), self._RTP_CHUNK_SAMPLES):
             payload = self._encode_pcmu(audio[i : i + self._RTP_CHUNK_SAMPLES])
             self.send_datagram(self._build_rtp_packet(payload), remote_addr)
+            await asyncio.sleep(self._RTP_PACKET_DURATION)
 
     def _save_debug_wav(self, audio: np.ndarray) -> None:
         """Save *audio* as a 16-bit mono WAV file in :attr:`debug_audio_dir`.
