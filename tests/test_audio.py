@@ -10,8 +10,8 @@ import pytest
 np = pytest.importorskip("numpy")
 av = pytest.importorskip("av")
 
-from voip.audio import AudioCall, _build_ogg_opus  # noqa: E402
-from voip.rtp import RealtimeTransportProtocol  # noqa: E402
+from voip.audio import AudioCall, JitterBuffer, _build_ogg_opus  # noqa: E402
+from voip.rtp import RealtimeTransportProtocol, RTPPacket  # noqa: E402
 from voip.sdp.types import MediaDescription, RTPPayloadFormat  # noqa: E402
 
 
@@ -32,7 +32,93 @@ PCMU_MEDIA = _make_media("0")  # static PT, no rtpmap
 G722_MEDIA = _make_media("9", "9 G722/8000")
 
 
-class TestBuildOggOpus:
+def _make_rtp_packet(sequence_number: int, payload: bytes = b"x") -> RTPPacket:
+    """Build an RTPPacket with the given sequence number for use in jitter buffer tests."""
+    return RTPPacket(
+        payload_type=8,
+        sequence_number=sequence_number,
+        timestamp=sequence_number * 160,
+        ssrc=0,
+        payload=payload,
+    )
+
+
+class TestJitterBuffer:
+    def test_get__before_put__returns_none(self):
+        """Return None when get is called before any packet has been put."""
+        assert JitterBuffer().get() is None
+
+    def test_empty__true_initially(self):
+        """A freshly created buffer reports itself as empty."""
+        assert JitterBuffer().empty is True
+
+    def test_empty__false_after_put(self):
+        """Empty is False after at least one packet is stored."""
+        buf = JitterBuffer()
+        buf.put(_make_rtp_packet(1))
+        assert buf.empty is False
+
+    def test_ready__false_below_depth(self):
+        """Ready is False when fewer than depth packets have been put."""
+        buf = JitterBuffer(depth=2)
+        buf.put(_make_rtp_packet(1))
+        assert buf.ready is False
+
+    def test_ready__true_at_depth(self):
+        """Ready is True once at least depth packets have been buffered."""
+        buf = JitterBuffer(depth=2)
+        buf.put(_make_rtp_packet(1))
+        buf.put(_make_rtp_packet(2))
+        assert buf.ready is True
+
+    def test_get__returns_in_order(self):
+        """Get returns packets in ascending sequence order regardless of insertion order."""
+        buf = JitterBuffer(depth=1)
+        buf.put(_make_rtp_packet(2))
+        buf.put(_make_rtp_packet(1))
+        first = buf.get()
+        second = buf.get()
+        assert first is not None and first.sequence_number == 1
+        assert second is not None and second.sequence_number == 2
+
+    def test_get__returns_none_for_missing_packet(self):
+        """Get returns None for a missing sequence slot and still advances the counter."""
+        buf = JitterBuffer(depth=1)
+        buf.put(_make_rtp_packet(1))
+        buf.put(_make_rtp_packet(3))  # seq 2 is absent
+        assert buf.get().sequence_number == 1  # type: ignore[union-attr]
+        assert buf.get() is None  # seq 2 missing
+        assert buf.get().sequence_number == 3  # type: ignore[union-attr]
+
+    def test_get__advances_past_empty_buffer(self):
+        """Get advances the sequence counter even when the buffer becomes empty mid-stream."""
+        buf = JitterBuffer(depth=1)
+        buf.put(_make_rtp_packet(5))
+        assert buf.get().sequence_number == 5  # type: ignore[union-attr]
+        assert buf.empty
+        buf.put(_make_rtp_packet(7))
+        # next_seq is now 6, so pkt 7 is not at the head
+        assert buf.get() is None  # seq 6 missing
+        assert buf.get().sequence_number == 7  # type: ignore[union-attr]
+
+    def test_get__handles_sequence_number_wraparound(self):
+        """Get correctly wraps the 16-bit sequence counter from 65535 back to 0."""
+        buf = JitterBuffer(depth=1)
+        buf.put(_make_rtp_packet(65535))
+        buf.put(_make_rtp_packet(0))
+        assert buf.get().sequence_number == 65535  # type: ignore[union-attr]
+        assert buf.get().sequence_number == 0  # type: ignore[union-attr]
+
+    def test_pause__resets_sequence_anchor(self):
+        """Pause clears the sequence anchor so the next burst re-anchors to its minimum."""
+        buf = JitterBuffer(depth=1)
+        buf.put(_make_rtp_packet(10))
+        assert buf.get().sequence_number == 10  # type: ignore[union-attr]
+        buf.pause()
+        buf.put(_make_rtp_packet(20))
+        # Without pause, _next_seq would be 11 and seq 20 would take 9 skips.
+        assert buf.get().sequence_number == 20  # type: ignore[union-attr]
+
     def test_build_ogg_opus__starts_with_ogg_magic(self):
         """The resulting container starts with the Ogg capture pattern 'OggS'."""
         assert _build_ogg_opus(b"packet").startswith(b"OggS")
@@ -169,15 +255,34 @@ class TestAudioCall:
         assert any("PCMA" in r.message and "8000" in r.message for r in caplog.records)
 
     @pytest.mark.asyncio
+    async def test_datagram_received__malformed_rtp__noop(self):
+        """datagram_received silently ignores packets that fail RTP parsing."""
+        call = make_audio_call()
+        call.datagram_received(b"\x80" * 5, ("127.0.0.1", 5004))  # too short
+        assert call._jitter_buffer.empty
+
+    @pytest.mark.asyncio
+    async def test_datagram_received__empty_payload__noop(self):
+        """datagram_received ignores valid RTP packets with no payload."""
+        import struct  # noqa: PLC0415
+
+        empty_rtp = struct.pack(">BBHII", 0x80, 8 & 0x7F, 1, 0, 0)  # no payload bytes
+        call = make_audio_call()
+        call.datagram_received(empty_rtp, ("127.0.0.1", 5004))
+        assert call._jitter_buffer.empty
+
+    @pytest.mark.asyncio
     async def test_datagram_received__forwards_audio_payload(self):
-        """datagram_received parses the RTP packet and calls audio_received after decode."""
+        """datagram_received buffers packets and calls audio_received after playout delay."""
         import struct  # noqa: PLC0415
 
         received: list = []
 
         class ConcreteCall(AudioCall):
+            jitter_buffer_depth = 1  # one-packet playout delay for test speed
+
             def _decode_raw(self, packet: bytes) -> np.ndarray:
-                return np.array([1.0], dtype=np.float32)  # non-empty sentinel array
+                return np.array([1.0], dtype=np.float32)
 
             def audio_received(self, *, audio: np.ndarray, rms: float) -> None:
                 received.append(audio)
@@ -185,8 +290,40 @@ class TestAudioCall:
         rtp_packet = struct.pack(">BBHII", 0x80, 8 & 0x7F, 1, 0, 0) + b"audio"
         call = ConcreteCall(rtp=MagicMock(), sip=MagicMock(), media=PCMA_MEDIA)
         call.datagram_received(rtp_packet, ("127.0.0.1", 5004))
-        await asyncio.sleep(0.05)  # let the executor task run
+        await asyncio.sleep(0.15)  # ≥ (depth + 1) × 20 ms playout ticks
         assert len(received) == 1
+
+    @pytest.mark.asyncio
+    async def test_datagram_received__jitter_buffer__withholds_until_depth(self):
+        """audio_received is not called until the jitter buffer reaches its playout depth."""
+        import struct  # noqa: PLC0415
+
+        received: list = []
+
+        class ConcreteCall(AudioCall):
+            jitter_buffer_depth = 2
+
+            def _decode_raw(self, packet: bytes) -> np.ndarray:
+                return np.array([1.0], dtype=np.float32)
+
+            def audio_received(self, *, audio: np.ndarray, rms: float) -> None:
+                received.append(audio)
+
+        call = ConcreteCall(rtp=MagicMock(), sip=MagicMock(), media=PCMA_MEDIA)
+        # Send only one packet — buffer is below depth, nothing emitted yet.
+        call.datagram_received(
+            struct.pack(">BBHII", 0x80, 8 & 0x7F, 1, 0, 0) + b"a",
+            ("127.0.0.1", 5004),
+        )
+        await asyncio.sleep(0.01)  # well below one playout tick
+        assert received == []
+        # Second packet fills the buffer; playout starts and both are emitted.
+        call.datagram_received(
+            struct.pack(">BBHII", 0x80, 8 & 0x7F, 2, 0, 0) + b"b",
+            ("127.0.0.1", 5004),
+        )
+        await asyncio.sleep(0.15)  # allow playout loop to drain both packets
+        assert len(received) == 2
 
 
 class TestNegotiateCodec:

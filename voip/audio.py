@@ -27,10 +27,13 @@ from voip.call import Call
 from voip.rtp import RTPPacket, RTPPayloadType
 from voip.sdp.types import MediaDescription, RTPPayloadFormat
 
-__all__ = ["AudioCall"]
+__all__ = ["AudioCall", "JitterBuffer"]
 
 #: Native sample rate expected by Whisper models.
 SAMPLE_RATE = 16000
+
+#: Default playout depth for the jitter buffer (packets, ≈ 40 ms at 20 ms/packet).
+JITTER_BUFFER_DEPTH = 2
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +111,85 @@ def _build_ogg_opus(packet: bytes) -> bytes:
 
 
 @dataclasses.dataclass
+class JitterBuffer:
+    """Reorder and hold RTP packets to absorb network jitter.
+
+    Incoming packets are stored by their 16-bit sequence number; draining via
+    :meth:`get` yields them in ascending order with transparent wraparound
+    handling (sequence 0 follows 65535 per RFC 3550 §5.1).
+
+    The sequence anchor is set lazily on the first :meth:`get` call by
+    selecting the *earliest* buffered sequence number using modular arithmetic,
+    so out-of-order packets that arrive during pre-buffering are emitted in the
+    correct order.  Call :meth:`pause` when the playout loop drains the buffer
+    so that the next burst of packets re-anchors from scratch.
+
+    Attributes:
+        depth: Minimum number of packets to accumulate before :attr:`ready`
+            becomes ``True`` (the playout delay expressed in packet units).
+    """
+
+    depth: int = JITTER_BUFFER_DEPTH
+    _packets: dict[int, RTPPacket] = dataclasses.field(init=False, default_factory=dict)
+    _next_seq: int | None = dataclasses.field(init=False, default=None)
+
+    def put(self, packet: RTPPacket) -> None:
+        """Store *packet* in the buffer.
+
+        Args:
+            packet: Parsed RTP packet to enqueue.
+        """
+        self._packets[packet.sequence_number] = packet
+
+    def _count_after(self, seq: int) -> int:
+        """Count how many buffered packets follow *seq* in 16-bit circular order."""
+        return sum(((other - seq) & 0xFFFF) < 0x8000 for other in self._packets)
+
+    def _anchor_sequence(self) -> int:
+        """Return the earliest buffered sequence number using wraparound-aware comparison."""
+        return max(self._packets, key=self._count_after)
+
+    @property
+    def ready(self) -> bool:
+        """Return ``True`` when at least :attr:`depth` packets have accumulated."""
+        return len(self._packets) >= self.depth
+
+    @property
+    def empty(self) -> bool:
+        """Return ``True`` when no packets are buffered."""
+        return not self._packets
+
+    def get(self) -> RTPPacket | None:
+        """Remove and return the next in-order packet, or ``None`` if missing.
+
+        On the first call after construction or :meth:`pause`, the sequence
+        anchor is set to the earliest sequence number currently in the buffer.
+        Subsequent calls advance the counter by one; a missing slot returns
+        ``None`` so the playout loop can emit silence without stalling.
+
+        Returns:
+            The next :class:`~voip.rtp.RTPPacket` in sequence order, or
+            ``None`` when that slot is missing (packet loss).
+        """
+        if not self._packets:
+            return None
+        if self._next_seq is None:
+            self._next_seq = self._anchor_sequence()
+        packet = self._packets.pop(self._next_seq, None)
+        self._next_seq = (self._next_seq + 1) & 0xFFFF
+        return packet
+
+    def pause(self) -> None:
+        """Reset the sequence anchor so the next burst re-anchors from scratch.
+
+        Call this when the playout loop drains the buffer to avoid emitting
+        spurious ``None`` slots if the next burst begins at a different
+        sequence number (e.g. after a call pause or a sender restart).
+        """
+        self._next_seq = None
+
+
+@dataclasses.dataclass
 class AudioCall(Call):
     """RTP call handler with audio buffering, codec negotiation, and decoding."""
 
@@ -124,11 +206,16 @@ class AudioCall(Call):
         RTPPayloadFormat(payload_type=RTPPayloadType.PCMU),
     ]
 
+    #: Playout depth for the jitter buffer in packet units (≈ 40 ms at 20 ms/packet).
+    jitter_buffer_depth: ClassVar[int] = JITTER_BUFFER_DEPTH
+
     _encoding_name: str = dataclasses.field(init=False, repr=False)
     _payload_type: int = dataclasses.field(init=False, default=0, repr=False)
     _sample_rate: int = dataclasses.field(init=False, default=8000, repr=False)
-    _audio_buffer: list[bytes] = dataclasses.field(
-        init=False, default_factory=list, repr=False
+    _frame_duration_s: float = dataclasses.field(init=False, repr=False)
+    _jitter_buffer: JitterBuffer = dataclasses.field(init=False, repr=False)
+    _playout_task: asyncio.Task[None] | None = dataclasses.field(
+        init=False, default=None, repr=False
     )
 
     def __post_init__(self) -> None:
@@ -136,6 +223,8 @@ class AudioCall(Call):
         self._encoding_name = fmt.encoding_name.lower()
         self._payload_type = fmt.payload_type
         self._sample_rate = fmt.sample_rate or 8000
+        self._frame_duration_s = fmt.frame_size / self._sample_rate
+        self._jitter_buffer = JitterBuffer(depth=self.jitter_buffer_depth)
         logger.info(
             json.dumps(
                 {
@@ -214,14 +303,41 @@ class AudioCall(Call):
         )
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
-        """Buffer *data* as an RTP packet; emit when the chunk threshold is reached."""
+        """Add an incoming RTP datagram to the jitter buffer.
+
+        Starts (or restarts) the playout loop when the buffer transitions from
+        idle to active.  The playout loop holds packets for at least
+        :attr:`jitter_buffer_depth` frame intervals before emitting audio,
+        absorbing network jitter and reordering out-of-sequence packets.
+        """
         try:
             packet = RTPPacket.parse(data)
         except ValueError:
             return
-        else:
-            if packet.payload:
-                asyncio.create_task(self._emit_audio(packet))
+        if not packet.payload:
+            return
+        self._jitter_buffer.put(packet)
+        if self._playout_task is None or self._playout_task.done():
+            self._playout_task = asyncio.create_task(self._playout_loop())
+
+    async def _playout_loop(self) -> None:
+        """Pre-buffer then drain the jitter buffer at the codec frame interval.
+
+        Sleeps for :attr:`_frame_duration_s` per iteration, matching the 20 ms
+        packetisation interval common to G.722, PCMA, PCMU, and Opus.  Exits
+        when the buffer drains so that :meth:`datagram_received` can restart it
+        cleanly on the next burst of packets.
+        """
+        while not self._jitter_buffer.ready:
+            await asyncio.sleep(self._frame_duration_s)
+        while True:
+            await asyncio.sleep(self._frame_duration_s)
+            packet = self._jitter_buffer.get()
+            if packet is not None:
+                await self._emit_audio(packet)
+            if self._jitter_buffer.empty:
+                self._jitter_buffer.pause()
+                return
 
     @staticmethod
     def _estimate_payload_rms(payload: bytes) -> float:
