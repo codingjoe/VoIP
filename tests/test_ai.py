@@ -480,14 +480,43 @@ class TestAgentCall:
         call.transcription_received("")
         assert call._pending_text == []
 
-    def test_transcription_received__buffers_non_empty_text(self):
-        """transcription_received appends non-empty text to _pending_text."""
+    def test_transcription_received__buffers_non_empty_text_when_timer_active(self):
+        """transcription_received buffers text when the silence timer is running."""
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
         call = make_agent_call(MagicMock(), tts_mock)
-        call.transcription_received("hello")
-        call.transcription_received("world")
-        assert call._pending_text == ["hello", "world"]
+        call._silence_handle = MagicMock()
+        with patch.object(call, "_trigger_response") as mock_trigger:
+            call.transcription_received("hello")
+        assert call._pending_text == ["hello"]
+        mock_trigger.assert_not_called()
+
+    def test_transcription_received__triggers_response_when_timer_already_fired(self):
+        """transcription_received immediately triggers a response when the debounce timer has already fired.
+
+        This fixes the race condition where Whisper inference finishes after the
+        silence debounce timer has already checked _pending_text and found it empty.
+        """
+        tts_mock = MagicMock()
+        tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
+        call = make_agent_call(MagicMock(), tts_mock)
+        call._silence_handle = None
+        assert call._state is AgentState.LISTENING
+        with patch.object(call, "_trigger_response") as mock_trigger:
+            call.transcription_received("hello world")
+        mock_trigger.assert_called_once()
+
+    def test_transcription_received__does_not_trigger_when_thinking(self):
+        """transcription_received does not trigger if state is not LISTENING."""
+        tts_mock = MagicMock()
+        tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
+        call = make_agent_call(MagicMock(), tts_mock)
+        call._state = AgentState.THINKING
+        call._silence_handle = None
+        with patch.object(call, "_trigger_response") as mock_trigger:
+            call.transcription_received("hello")
+        mock_trigger.assert_not_called()
+        assert call._pending_text == ["hello"]
 
     def test_init__state_is_listening(self):
         """Initial state is LISTENING."""

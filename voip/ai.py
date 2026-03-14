@@ -383,17 +383,26 @@ class AgentCall(WhisperCall):
         self._response_task = asyncio.create_task(self._respond(text))
 
     def transcription_received(self, text: str) -> None:
-        """Buffer *text* for the next LLM query.
+        """Buffer *text* for the next LLM query, or respond immediately.
 
         Appends non-empty transcription snippets to the pending buffer.
-        The buffer is flushed and sent to the LLM when the silence debounce
-        timer fires (see `_trigger_response`).
+        In the normal case the buffer is flushed by `_trigger_response` when
+        the silence debounce timer fires.
+
+        If the timer has already fired and found an empty buffer (because
+        Whisper inference was still running), the transcription is sent to the
+        LLM immediately so that late-arriving transcriptions are not silently
+        swallowed.
 
         Args:
             text: Transcribed text (already stripped; empty strings are ignored).
         """
-        if text:
-            self._pending_text.append(text)
+        if not text:
+            return
+        self._pending_text.append(text)
+        match self._state:
+            case AgentState.LISTENING if self._silence_handle is None:
+                self._trigger_response()
 
     async def _respond(self, text: str) -> None:
         """Fetch an Ollama reply for *text* and stream it as speech via RTP.
