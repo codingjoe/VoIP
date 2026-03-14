@@ -15,7 +15,7 @@ import enum
 import logging
 import secrets
 import struct
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Iterator
 
 import av
 import numpy as np
@@ -355,10 +355,36 @@ class AgentCall(TranscribeCall):
         if remote_addr is None:
             logger.warning("No remote RTP address for this call; dropping audio")
             return
-        for i in range(0, len(audio), self._rtp_chunk_samples):
-            payload = self._encode_audio(audio[i : i + self._rtp_chunk_samples])
+        for payload in self._packetize(audio):
             self.send_datagram(self._build_rtp_packet(payload), remote_addr)
             await asyncio.sleep(self._rtp_packet_duration)
+
+    def _packetize(self, audio: np.ndarray) -> Iterator[bytes]:
+        """Encode *audio* and yield one payload bytes object per 20 ms RTP packet.
+
+        G.722 is an ADPCM codec that maintains predictor state across samples.
+        Encoding the whole buffer at once preserves that state so the decoded
+        audio is continuous.  PCMU, PCMA, and Opus are stateless per-packet and
+        are encoded via :meth:`_encode_audio` one chunk at a time.
+
+        Args:
+            audio: Float32 mono PCM at :attr:`_rtp_sample_rate` Hz.
+
+        Yields:
+            Encoded bytes ready to use as an RTP payload.
+        """
+        match self._encoding_name:
+            case "g722":
+                # Encode the whole buffer at once to preserve ADPCM predictor state.
+                # G.722 has a fixed 2:1 sample-to-byte ratio, so _rtp_chunk_samples
+                # (320) input samples map to 160 output bytes per packet.
+                encoded = self._encode_via_av(audio, "g722", self._rtp_sample_rate)
+                payload_size = self._rtp_chunk_samples // 2
+                for i in range(0, len(encoded), payload_size):
+                    yield encoded[i : i + payload_size]
+            case _:
+                for i in range(0, len(audio), self._rtp_chunk_samples):
+                    yield self._encode_audio(audio[i : i + self._rtp_chunk_samples])
 
     @classmethod
     def _resample(
@@ -388,6 +414,10 @@ class AgentCall(TranscribeCall):
     def _encode_audio(self, samples: np.ndarray) -> bytes:
         """Encode float32 PCM to the negotiated outbound codec's bytes.
 
+        Used for stateless per-packet encoding (PCMU, PCMA, Opus).  G.722 is
+        handled separately by :meth:`_packetize` which encodes the whole TTS
+        buffer at once to preserve the ADPCM predictor state.
+
         Args:
             samples: Float32 mono PCM array in the range ``[-1, 1]``.
 
@@ -403,8 +433,6 @@ class AgentCall(TranscribeCall):
                 return self._encode_pcmu(samples)
             case "pcma":
                 return self._encode_pcma(samples)
-            case "g722":
-                return self._encode_via_av(samples, "g722", self._rtp_sample_rate)
             case "opus":
                 return self._encode_via_av(samples, "libopus", self._rtp_sample_rate)
             case _:

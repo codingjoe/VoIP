@@ -732,16 +732,6 @@ class TestAgentCall:
             call._encode_audio(samples)
         mock_enc.assert_called_once_with(samples)
 
-    def test_encode_audio__dispatches_to_g722(self):
-        """_encode_audio delegates to _encode_via_av with g722 for G.722 media."""
-        tts_mock = MagicMock()
-        tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
-        call = make_agent_call(MagicMock(), tts_mock, media=G722_MEDIA)
-        samples = np.zeros(320, dtype=np.float32)
-        with patch.object(AgentCall, "_encode_via_av", return_value=b"x") as mock_enc:
-            call._encode_audio(samples)
-        mock_enc.assert_called_once_with(samples, "g722", 16000)
-
     def test_encode_audio__dispatches_to_opus(self):
         """_encode_audio delegates to _encode_via_av with libopus for Opus media."""
         tts_mock = MagicMock()
@@ -760,6 +750,51 @@ class TestAgentCall:
         call._encoding_name = "h264"
         with pytest.raises(NotImplementedError, match="Unsupported outbound codec"):
             call._encode_audio(np.zeros(160, dtype=np.float32))
+
+    def test_encode_audio__raises_for_g722(self):
+        """_encode_audio raises NotImplementedError for G.722 (handled by _packetize)."""
+        tts_mock = MagicMock()
+        tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
+        call = make_agent_call(MagicMock(), tts_mock, media=PCMU_MEDIA)
+        call._encoding_name = "g722"
+        with pytest.raises(NotImplementedError, match="Unsupported outbound codec"):
+            call._encode_audio(np.zeros(320, dtype=np.float32))
+
+    def test_packetize__g722_encodes_whole_buffer_at_once(self):
+        """_packetize calls _encode_via_av on the full audio buffer for G.722.
+
+        Encoding the whole buffer at once preserves the ADPCM predictor state
+        across 20 ms packet boundaries so the decoded audio is continuous.
+        """
+        tts_mock = MagicMock()
+        tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
+        call = make_agent_call(MagicMock(), tts_mock, media=G722_MEDIA)
+        # Two 20 ms chunks: 320 samples each → 160 encoded bytes each
+        audio = np.zeros(640, dtype=np.float32)
+        # _encode_via_av returns 320 bytes for 640-sample input (2:1 ratio)
+        fake_encoded = b"\xab" * 320
+        with patch.object(
+            AgentCall, "_encode_via_av", return_value=fake_encoded
+        ) as mock_enc:
+            packets = list(call._packetize(audio))
+        # Must be called once with the full buffer (not per-chunk)
+        mock_enc.assert_called_once_with(audio, "g722", 16000)
+        assert len(packets) == 2
+        assert packets[0] == b"\xab" * 160
+        assert packets[1] == b"\xab" * 160
+
+    def test_packetize__pcmu_encodes_per_chunk(self):
+        """_packetize calls _encode_audio once per 20 ms chunk for PCMU."""
+        tts_mock = MagicMock()
+        tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
+        call = make_agent_call(MagicMock(), tts_mock, media=PCMU_MEDIA)
+        audio = np.zeros(320, dtype=np.float32)
+        with patch.object(
+            call, "_encode_audio", return_value=b"\x7f" * 160
+        ) as mock_enc:
+            packets = list(call._packetize(audio))
+        assert mock_enc.call_count == 2
+        assert len(packets) == 2
 
     def test_build_rtp_packet__has_twelve_byte_header(self):
         """_build_rtp_packet prepends a 12-byte RTP header to the payload."""
