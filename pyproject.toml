@@ -99,6 +99,7 @@ source = ["voip"]
 
 [tool.coverage.report]
 show_missing = true
+skip_covered = true
 
 [tool.ruff]
 src = ["voip", "tests"]
