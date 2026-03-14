@@ -183,7 +183,7 @@ class TestAudioCall:
         received: list = []
 
         class ConcreteCall(AudioCall):
-            def _decode_raw(self, raw_packets: list[bytes]):
+            def _decode_raw(self, packet: list[bytes]):
                 return DECODED  # skip real av decode in unit tests
 
             def audio_received(self, audio) -> None:
@@ -215,8 +215,8 @@ class TestAudioCall:
         class ChunkedCall(AudioCall):
             chunk_duration = 1  # 1 s @ 8 kHz / 160 samples = 50 packets
 
-            def _decode_raw(self, raw_packets: list[bytes]):
-                return raw_packets  # skip real av decode; pass raw list as "audio"
+            def _decode_raw(self, packet: list[bytes]):
+                return packet  # skip real av decode; pass raw list as "audio"
 
             def audio_received(self, audio) -> None:
                 received.append(audio)

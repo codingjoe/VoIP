@@ -46,11 +46,11 @@ Pass it as `call_class` when answering an incoming call:
 ```python
 import asyncio
 import ssl
-from voip.ai import WhisperCall
+from voip.ai import TranscribeCall
 from voip.sip.protocol import SIP
 
 
-class MyCall(WhisperCall):
+class MyCall(TranscribeCall):
     def transcription_received(self, text: str) -> None:
         print(f"[{self.caller}] {text}")
 

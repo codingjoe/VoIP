@@ -12,7 +12,7 @@ pytest.importorskip("faster_whisper")
 pytest.importorskip("ollama")
 pytest.importorskip("pocket_tts")
 
-from voip.ai import AgentCall, AgentState, WhisperCall  # noqa: E402
+from voip.ai import AgentCall, AgentState, TranscribeCall  # noqa: E402
 from voip.audio import AudioCall  # noqa: E402
 from voip.rtp import RTPPayloadType  # noqa: E402
 from voip.sdp.types import MediaDescription, RTPPayloadFormat  # noqa: E402
@@ -37,9 +37,9 @@ G722_MEDIA = _make_media("9", "9 G722/8000")
 
 def make_whisper_call(
     model_mock: MagicMock, call_class=None, media: MediaDescription | None = None
-) -> WhisperCall:
+) -> TranscribeCall:
     """Return a WhisperCall with a mocked Whisper model."""
-    cls = call_class or WhisperCall
+    cls = call_class or TranscribeCall
     med = media if media is not None else OPUS_MEDIA
     with patch("voip.ai.WhisperModel", return_value=model_mock):
         return cls(
@@ -75,14 +75,14 @@ def make_agent_call(
 class TestWhisperCall:
     def test_whisper_call__is_audio_call(self):
         """WhisperCall is a subclass of AudioCall."""
-        assert issubclass(WhisperCall, AudioCall)
+        assert issubclass(TranscribeCall, AudioCall)
 
     def test_init__uses_pre_loaded_model_instance(self):
         """When model is a WhisperModel instance it is stored directly (no re-load)."""
         model_instance = MagicMock()
         with patch("voip.ai.WhisperModel") as wm_cls:
             # Pass the instance directly — the constructor must NOT be called again.
-            call = WhisperCall(
+            call = TranscribeCall(
                 rtp=MagicMock(),
                 sip=MagicMock(),
                 media=OPUS_MEDIA,
@@ -93,7 +93,7 @@ class TestWhisperCall:
 
     def test_class_attrs__chunk_duration(self):
         """chunk_duration is 0 so every RTP packet is decoded immediately for VAD."""
-        assert WhisperCall.chunk_duration == 0
+        assert TranscribeCall.chunk_duration == 0
 
     def test_init__packet_threshold__opus(self):
         """_packet_threshold is 1 for Opus with chunk_duration=0 (per-packet emit)."""
@@ -204,7 +204,7 @@ class TestWhisperCall:
         seg.text = "hello"
         model_mock.transcribe.return_value = ([seg], MagicMock())
 
-        class Capture(WhisperCall):
+        class Capture(TranscribeCall):
             def transcription_received(self, text: str) -> None:
                 transcriptions.append(text)
 
@@ -244,7 +244,7 @@ class TestWhisperCall:
         seg.text = "  hello world  "
         model_mock.transcribe.return_value = ([seg], MagicMock())
 
-        class Capture(WhisperCall):
+        class Capture(TranscribeCall):
             def transcription_received(self, text: str) -> None:
                 transcriptions.append(text)
 
@@ -388,7 +388,9 @@ class TestWhisperCall:
         model_mock = MagicMock()
         call = make_whisper_call(model_mock)
         with (
-            patch.object(call, "_run_transcription", side_effect=asyncio.CancelledError),
+            patch.object(
+                call, "_run_transcription", side_effect=asyncio.CancelledError
+            ),
             pytest.raises(asyncio.CancelledError),
         ):
             await call._transcribe(np.zeros(16000, dtype=np.float32))
@@ -401,7 +403,7 @@ class TestWhisperCall:
         seg.text = "   "
         model_mock.transcribe.return_value = ([seg], MagicMock())
 
-        class Capture(WhisperCall):
+        class Capture(TranscribeCall):
             def transcription_received(self, text: str) -> None:
                 transcriptions.append(text)
 
@@ -424,7 +426,7 @@ class TestWhisperCall:
 class TestAgentCall:
     def test_agent_call__is_whisper_call(self):
         """AgentCall is a subclass of WhisperCall."""
-        assert issubclass(AgentCall, WhisperCall)
+        assert issubclass(AgentCall, TranscribeCall)
 
     def test_init__loads_tts_model_when_none(self):
         """Load the default Pocket TTS model when tts_model is None."""

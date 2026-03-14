@@ -13,11 +13,8 @@ import asyncio
 import dataclasses
 import enum
 import logging
-import os
 import secrets
 import struct
-import time
-import wave
 from typing import Any, ClassVar
 
 import numpy as np
@@ -25,11 +22,11 @@ import ollama
 from faster_whisper import WhisperModel
 from pocket_tts import TTSModel
 
-from voip.audio import SAMPLE_RATE, AudioCall
-from voip.rtp import RTPPacket, RTPPayloadType
+from voip.audio import AudioCall
+from voip.rtp import RTPPayloadType
 from voip.sdp.types import RTPPayloadFormat
 
-__all__ = ["AgentCall", "AgentState", "WhisperCall"]
+__all__ = ["AgentCall", "AgentState", "TranscribeCall"]
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +50,7 @@ class AgentState(enum.Enum):
 
 
 @dataclasses.dataclass(kw_only=True)
-class WhisperCall(AudioCall):
+class TranscribeCall(AudioCall):
     """RTP call handler that transcribes audio with faster-whisper.
 
     Audio is decoded by `AudioCall` on a per-packet basis and delivered to
@@ -79,26 +76,10 @@ class WhisperCall(AudioCall):
             model = shared_model
     """
 
-    #: Set to 0 so each RTP packet is decoded individually, enabling
-    #: per-packet VAD.  Transcription is driven by silence detection rather
-    #: than a fixed wall-clock duration.
-    chunk_duration: ClassVar[int] = 0
-
-    #: Whisper model.  Either a model name string (e.g. ``"base"``,
-    #: ``"small"``, ``"large-v3"``) that will be loaded on first use, or a
-    #: pre-loaded :class:`~faster_whisper.WhisperModel` instance.  Pass a
-    #: shared instance to avoid loading the model separately for each call.
     model: str | WhisperModel = dataclasses.field(default="kyutai/stt-1b-en_fr-trfs")
-    #: Loaded Whisper model instance (not part of ``__init__``).
     _whisper_model: WhisperModel = dataclasses.field(init=False, repr=False)
 
-    #: Root Mean Square (RMS) energy threshold for decoded float32 PCM audio
-    #: above which a packet is classified as speech.  Increase to require
-    #: louder speech; decrease for environments with very quiet speakers.
-    speech_threshold: float = dataclasses.field(default=0.01)
-    #: Seconds of continuous silence after speech before the accumulated audio
-    #: is sent to Whisper for transcription.  Lower values give faster
-    #: responses at the risk of cutting utterances short.
+    speech_threshold: float = dataclasses.field(default=0.5)
     silence_gap: float = dataclasses.field(default=0.5)
 
     _speech_buffer: list[np.ndarray] = dataclasses.field(
@@ -120,7 +101,7 @@ class WhisperCall(AudioCall):
         self._in_speech = False
         self._transcription_handle = None
 
-    def audio_received(self, audio: np.ndarray) -> None:
+    def audio_received(self, *, audio: np.ndarray, rms: float) -> None:
         """Classify incoming audio as speech or silence and buffer accordingly.
 
         Uses RMS energy of *audio* to detect speech.  Speech audio is
@@ -131,18 +112,13 @@ class WhisperCall(AudioCall):
         Args:
             audio: Float32 mono PCM array at :data:`~voip.audio.SAMPLE_RATE` Hz.
         """
-        if not audio.size:
-            return
-        logger.debug(
-            "Audio received: %d samples (%.1f s)", len(audio), len(audio) / SAMPLE_RATE
-        )
-        rms = float(np.sqrt(np.mean(audio**2)))
+        self._speech_buffer.append(audio)
         if rms > self.speech_threshold:
-            self._on_audio_speech(audio)
+            self._on_audio_speech()
         else:
             self._on_audio_silence()
 
-    def _on_audio_speech(self, audio: np.ndarray) -> None:
+    def _on_audio_speech(self) -> None:
         """Accumulate *audio* into the speech buffer and cancel any pending timer.
 
         Args:
@@ -151,8 +127,6 @@ class WhisperCall(AudioCall):
         if self._transcription_handle is not None:
             self._transcription_handle.cancel()
             self._transcription_handle = None
-        self._in_speech = True
-        self._speech_buffer.append(audio)
 
     def _on_audio_silence(self) -> None:
         """Arm the transcription debounce timer when silence follows speech.
@@ -160,12 +134,13 @@ class WhisperCall(AudioCall):
         Does nothing when no speech has been seen yet (e.g. background noise
         at call start) or when the timer is already running.
         """
-        if not self._in_speech or self._transcription_handle is not None:
-            return
-        loop = asyncio.get_event_loop()
-        self._transcription_handle = loop.call_later(
-            self.silence_gap, self._flush_speech_buffer
-        )
+        if self._transcription_handle is None:
+            logger.debug("Silence detected")
+            loop = asyncio.get_event_loop()
+            self._transcription_handle = loop.call_later(
+                self.silence_gap,
+                self._flush_speech_buffer,
+            )
 
     def _flush_speech_buffer(self) -> None:
         """Concatenate buffered speech audio and schedule async transcription.
@@ -173,8 +148,9 @@ class WhisperCall(AudioCall):
         Resets speech state so the next utterance starts with a clean buffer.
         """
         self._transcription_handle = None
-        self._in_speech = False
-        if not self._speech_buffer:
+        if len(self._speech_buffer) < self._sample_rate // 50 * self.silence_gap:
+            # Not enough speech to transcribe, discard buffer.
+            self._speech_buffer.clear()
             return
         audio = np.concatenate(self._speech_buffer)
         self._speech_buffer.clear()
@@ -183,20 +159,9 @@ class WhisperCall(AudioCall):
     async def _transcribe(self, audio: np.ndarray) -> None:
         """Transcribe decoded audio and deliver non-empty text to the handler."""
         loop = asyncio.get_running_loop()
-        logger.debug(
-            "Transcribing %d samples (%.1f s)",
-            len(audio),
-            len(audio) / SAMPLE_RATE,
-        )
-        try:
-            raw = await loop.run_in_executor(None, self._run_transcription, audio)
-            if text := raw.strip():
-                self.transcription_received(text)
-        except asyncio.CancelledError:
-            logger.debug("Transcription task was cancelled", exc_info=True)
-            raise
-        except Exception:
-            logger.exception("Error while transcribing audio chunk")
+        raw = await loop.run_in_executor(None, self._run_transcription, audio)
+        if text := raw.strip():
+            self.transcription_received(text)
 
     def _run_transcription(self, audio: np.ndarray) -> str:
         """Transcribe a float32 PCM array using the Whisper model.
@@ -209,7 +174,7 @@ class WhisperCall(AudioCall):
         """
         segments, _ = self._whisper_model.transcribe(audio)
         result = "".join(segment.text for segment in segments)
-        logger.debug("Transcription result: %r", result)
+        logger.debug("Transcription result: %r", segments)
         return result
 
     def transcription_received(self, text: str) -> None:
@@ -221,7 +186,7 @@ class WhisperCall(AudioCall):
 
 
 @dataclasses.dataclass(kw_only=True)
-class AgentCall(WhisperCall):
+class AgentCall(TranscribeCall):
     """RTP call handler that responds to caller speech using Ollama and Pocket TTS.
 
     Extends :class:`WhisperCall` by feeding each transcription to an Ollama
@@ -241,7 +206,7 @@ class AgentCall(WhisperCall):
 
     _SYSTEM_PROMPT: ClassVar[str] = (
         "You are a helpful voice assistant on a phone call. "
-        "Keep your answers brief and conversational."
+        "Keep your answers very brief and conversational. YOU MUST NOT USE EMOJIS."
     )
     #: PCMU target sample rate (G.711 µ-law, RFC 3551).
     _PCMU_SAMPLE_RATE: ClassVar[int] = 8000
@@ -258,19 +223,10 @@ class AgentCall(WhisperCall):
     #: Ollama model name for generating replies.
     ollama_model: str = dataclasses.field(default="llama3")
     #: Pocket TTS voice name or path to a conditioning audio file.
-    voice: str = dataclasses.field(default="alba")
+    voice: str = dataclasses.field(default="azelma")
     #: Pre-loaded Pocket TTS model.  Pass a shared instance to avoid
     #: loading the model separately for each call.
     tts_model: TTSModel | None = dataclasses.field(default=None)
-    #: Directory for debug WAV files.  When set, each synthesised response
-    #: is saved to ``<debug_audio_dir>/agent_<timestamp>.wav`` at 8 kHz mono
-    #: int16 PCM so you can verify TTS output independently of RTP encoding.
-    debug_audio_dir: str | None = dataclasses.field(default=None)
-    #: Normalised RMS threshold (0–1) above which inbound audio is classified
-    #: as speech.  Lower values make the VAD more sensitive.
-    vad_threshold: float = dataclasses.field(default=0.02)
-    #: Seconds of continuous silence required before the LLM is queried.
-    silence_duration: float = dataclasses.field(default=1.0)
 
     _tts_instance: TTSModel = dataclasses.field(init=False, repr=False)
     _voice_state: Any = dataclasses.field(init=False, repr=False)
@@ -295,33 +251,6 @@ class AgentCall(WhisperCall):
         self._pending_text = []
         self._silence_handle = None
         self._response_task = None
-
-    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
-        """Process an inbound RTP datagram and drive VAD state transitions.
-
-        Estimates the energy of the payload to classify the packet as speech
-        or silence.  Speech cancels any in-progress response and arms the
-        LISTENING state; sustained silence arms the debounce timer that
-        eventually triggers the LLM query.
-
-        Args:
-            data: Raw (decrypted) RTP datagram bytes.
-            addr: Source ``(host, port)`` of the datagram.
-        """
-        super().datagram_received(data, addr)
-        # Parse again (separately from the parent) to inspect individual packets
-        # for real-time VAD without waiting for a full 5-second Whisper chunk.
-        try:
-            packet = RTPPacket.parse(data)
-        except ValueError:
-            return
-        if not packet.payload:
-            return
-        rms = self._estimate_payload_rms(packet.payload)
-        if rms > self.vad_threshold:
-            self._on_speech()
-        else:
-            self._on_silence()
 
     def _on_speech(self) -> None:
         """React to a speech-energy packet: cancel any running response.
@@ -351,37 +280,6 @@ class AgentCall(WhisperCall):
                 self._in_speech = False
                 self._state = AgentState.LISTENING
 
-    def _on_silence(self) -> None:
-        """React to a silence-energy packet: arm the debounce timer.
-
-        Only arms the timer when in `LISTENING` state and no timer is already
-        running.  The timer calls `_trigger_response` after
-        `silence_duration` seconds of continuous silence.
-        """
-        if self._state is not AgentState.LISTENING:
-            return
-        if self._silence_handle is not None:
-            return
-        loop = asyncio.get_event_loop()
-        self._silence_handle = loop.call_later(
-            self.silence_duration, self._trigger_response
-        )
-
-    def _trigger_response(self) -> None:
-        """Combine buffered transcriptions and schedule the LLM response.
-
-        Called by the silence debounce timer.  Transitions to `THINKING` and
-        creates the `_respond` task.  Does nothing when no transcriptions have
-        been buffered (e.g. background noise caused a false silence transition).
-        """
-        self._silence_handle = None
-        if not self._pending_text:
-            return
-        text = " ".join(self._pending_text)
-        self._pending_text.clear()
-        self._state = AgentState.THINKING
-        self._response_task = asyncio.create_task(self._respond(text))
-
     def transcription_received(self, text: str) -> None:
         """Buffer *text* for the next LLM query, or respond immediately.
 
@@ -397,14 +295,12 @@ class AgentCall(WhisperCall):
         Args:
             text: Transcribed text (already stripped; empty strings are ignored).
         """
-        if not text:
-            return
         self._pending_text.append(text)
-        match self._state:
-            case AgentState.LISTENING if self._silence_handle is None:
-                self._trigger_response()
+        if self._response_task is not None and not self._response_task.done():
+            self._response_task.cancel()
+        self._response_task = asyncio.create_task(self._respond())
 
-    async def _respond(self, text: str) -> None:
+    async def _respond(self) -> None:
         """Fetch an Ollama reply for *text* and stream it as speech via RTP.
 
         Manages state transitions: `THINKING` while waiting for the LLM,
@@ -412,8 +308,12 @@ class AgentCall(WhisperCall):
         On cancellation (human started speaking) the partial user turn is
         removed from the chat history so the history stays consistent.
         """
+        self._messages.append(
+            {"role": "user", "content": "\n".join(self._pending_text)}
+        )
+        self._pending_text.clear()
         try:
-            self._messages.append({"role": "user", "content": text})
+            print(self._messages)
             response = await ollama.AsyncClient().chat(
                 model=self.ollama_model,
                 messages=self._messages,
@@ -421,7 +321,6 @@ class AgentCall(WhisperCall):
             reply = response.message.content
             self._messages.append({"role": "assistant", "content": reply})
             logger.info("Agent reply: %r", reply)
-            self._state = AgentState.SPEAKING
             await self._send_speech(reply)
         except asyncio.CancelledError:
             # Remove the partial user turn so history stays consistent.
@@ -448,7 +347,6 @@ class AgentCall(WhisperCall):
         """
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[np.ndarray | None] = asyncio.Queue()
-        debug_chunks: list[np.ndarray] = []
 
         def _generate() -> None:
             for chunk in self._tts_instance.generate_audio_stream(
@@ -462,14 +360,8 @@ class AgentCall(WhisperCall):
         future = loop.run_in_executor(None, _generate)
         while (tts_chunk := await queue.get()) is not None:
             pcm_8k = self._resample(tts_chunk, self._tts_instance.sample_rate)
-            if self.debug_audio_dir is not None:
-                debug_chunks.append(pcm_8k)
             await self._send_rtp_audio(pcm_8k)
         await future
-
-        if debug_chunks:
-            full_audio = np.concatenate(debug_chunks)
-            await loop.run_in_executor(None, self._save_debug_wav, full_audio)
 
     async def _send_rtp_audio(self, audio: np.ndarray) -> None:
         """Encode *audio* (float32, 8 kHz) as PCMU and transmit to the caller via RTP.
@@ -497,29 +389,6 @@ class AgentCall(WhisperCall):
             self.send_datagram(self._build_rtp_packet(payload), remote_addr)
             await asyncio.sleep(self._RTP_PACKET_DURATION)
 
-    def _save_debug_wav(self, audio: np.ndarray) -> None:
-        """Save *audio* as a 16-bit mono WAV file in :attr:`debug_audio_dir`.
-
-        The filename includes a timestamp and process-unique suffix so that
-        successive responses in the same call do not overwrite each other.
-
-        Args:
-            audio: Float32 mono PCM at :attr:`_PCMU_SAMPLE_RATE` Hz.
-        """
-        os.makedirs(self.debug_audio_dir, exist_ok=True)  # type: ignore[arg-type]
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        filename = os.path.join(
-            self.debug_audio_dir,  # type: ignore[arg-type]
-            f"agent_{timestamp}_{id(audio)}.wav",
-        )
-        pcm_int16 = np.clip(np.round(audio * 32768.0), -32768, 32767).astype(np.int16)
-        with wave.open(filename, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(self._PCMU_SAMPLE_RATE)
-            wf.writeframes(pcm_int16.tobytes())
-        logger.debug("Saved debug audio to %s", filename)
-
     @classmethod
     def _resample(cls, audio: np.ndarray, src_rate: int) -> np.ndarray:
         """Resample *audio* from *src_rate* to :attr:`_PCMU_SAMPLE_RATE`.
@@ -541,24 +410,6 @@ class AgentCall(WhisperCall):
             np.arange(len(audio)),
             audio,
         ).astype(np.float32)
-
-    @staticmethod
-    def _estimate_payload_rms(payload: bytes) -> float:
-        """Estimate normalised RMS energy from a raw G.711 RTP payload.
-
-        G.711 codecs (PCMU/PCMA) encode silence as a fixed codeword, so speech
-        energy manifests as byte variance around that codeword.  Standard
-        deviation over the byte values, divided by 128, gives a normalised
-        proxy for RMS in the range ``[0, 1]`` that is suitable for thresholding.
-
-        Args:
-            payload: Raw RTP payload bytes from a G.711-encoded packet.
-
-        Returns:
-            Normalised energy estimate in ``[0, 1]``.
-        """
-        samples = np.frombuffer(payload, dtype=np.uint8).astype(np.float32)
-        return float(np.std(samples) / 128.0)
 
     @staticmethod
     def _encode_pcmu(samples: np.ndarray) -> bytes:

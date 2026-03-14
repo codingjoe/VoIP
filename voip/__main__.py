@@ -233,7 +233,7 @@ async def _connect_sip(
 @sip.command()
 @click.option(
     "--model",
-    default="large-v3-turbo",
+    default="tiny",
     envvar="WHISPER_MODEL",
     show_default=True,
     help="Whisper model size.",
@@ -254,7 +254,7 @@ def transcribe(ctx, model):
     """
     from voip.sip.protocol import SIP
 
-    from .ai import WhisperCall  # noqa: PLC0415
+    from .ai import TranscribeCall  # noqa: PLC0415
 
     obj = ctx.obj
     proxy_addr = obj["proxy_addr"]
@@ -263,7 +263,7 @@ def transcribe(ctx, model):
     _model = model
 
     @dataclasses.dataclass
-    class TranscribingCall(WhisperCall):
+    class TranscribingCall(TranscribeCall):
         """WhisperCall with the CLI-selected model and console output."""
 
         model: str = _model
@@ -317,7 +317,7 @@ def transcribe(ctx, model):
 )
 @click.option(
     "--voice",
-    default="alba",
+    default="azelma",
     envvar="TTS_VOICE",
     show_default=True,
     help="Pocket TTS voice name or path to a conditioning audio file.",
@@ -362,9 +362,9 @@ def agent(ctx, model, ollama_model, voice):
             click.echo(click.style(f"User:  {text}", fg="blue", bold=True))
             super().transcription_received(text)
 
-        async def _respond(self, text: str) -> None:
+        async def _respond(self) -> None:
             msg_count = len(self._messages)
-            await super()._respond(text)
+            await super()._respond()
             for msg in self._messages[msg_count:]:
                 if msg["role"] == "assistant":
                     click.echo(

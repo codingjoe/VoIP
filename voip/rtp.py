@@ -168,12 +168,6 @@ class RealtimeTransportProtocol(STUNProtocol):
                     )
                     return
                 data = decrypted
-            logger.debug(
-                "Routing RTP packet from %s:%s to %s",
-                addr[0],
-                addr[1],
-                type(handler).__name__,
-            )
             handler.datagram_received(data, addr)
         else:
             logger.debug(
