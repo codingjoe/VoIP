@@ -7,7 +7,7 @@ nav:
   - Home: index.md
   - Usage: usage.md
   - Feature Roadmap: roadmap.md
-  - API-Reference:
+  - API Reference:
       - SIP: sip.md
       - RTP: rtp.md
       - Calls: calls.md
