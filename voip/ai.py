@@ -56,18 +56,22 @@ class AgentState(enum.Enum):
 class WhisperCall(AudioCall):
     """RTP call handler that transcribes audio with faster-whisper.
 
-    Audio is decoded by :class:`~voip.audio.AudioCall` and delivered as
-    float32 PCM to :meth:`audio_received`, which schedules an async
-    transcription job.  Override :meth:`transcription_received` to handle
-    the resulting text::
+    Audio is decoded by `AudioCall` on a per-packet basis and delivered to
+    `audio_received`, which applies an energy-based voice activity detector
+    (VAD).  Speech packets are accumulated until silence is sustained for
+    `silence_gap` seconds, then the entire utterance is sent to Whisper as
+    one chunk.  This avoids cutting sentences in the middle and prevents
+    background microphone noise from being passed to Whisper as spurious
+    audio.
+
+    Override `transcription_received` to handle the resulting text::
 
         class MySession(SessionInitiationProtocol):
             def call_received(self, request: Request) -> None:
                 self.answer(request=request, call_class=WhisperCall)
 
     To share one model instance across multiple calls (recommended to avoid
-    loading it multiple times) pass a pre-loaded
-    :class:`~faster_whisper.WhisperModel` as the *model* argument::
+    loading it multiple times) pass a pre-loaded `WhisperModel`::
 
         shared_model = WhisperModel("base")
 
@@ -75,8 +79,10 @@ class WhisperCall(AudioCall):
             model = shared_model
     """
 
-    #: Audio buffered (in seconds) before each transcription is triggered.
-    chunk_duration: ClassVar[int] = 5
+    #: Set to 0 so each RTP packet is decoded individually, enabling
+    #: per-packet VAD.  Transcription is driven by silence detection rather
+    #: than a fixed wall-clock duration.
+    chunk_duration: ClassVar[int] = 0
 
     #: Whisper model.  Either a model name string (e.g. ``"base"``,
     #: ``"small"``, ``"large-v3"``) that will be loaded on first use, or a
@@ -86,6 +92,23 @@ class WhisperCall(AudioCall):
     #: Loaded Whisper model instance (not part of ``__init__``).
     _whisper_model: WhisperModel = dataclasses.field(init=False, repr=False)
 
+    #: Root Mean Square (RMS) energy threshold for decoded float32 PCM audio
+    #: above which a packet is classified as speech.  Increase to require
+    #: louder speech; decrease for environments with very quiet speakers.
+    speech_threshold: float = dataclasses.field(default=0.01)
+    #: Seconds of continuous silence after speech before the accumulated audio
+    #: is sent to Whisper for transcription.  Lower values give faster
+    #: responses at the risk of cutting utterances short.
+    silence_gap: float = dataclasses.field(default=0.5)
+
+    _speech_buffer: list[np.ndarray] = dataclasses.field(
+        init=False, repr=False, default_factory=list
+    )
+    _in_speech: bool = dataclasses.field(init=False, repr=False, default=False)
+    _transcription_handle: asyncio.TimerHandle | None = dataclasses.field(
+        init=False, repr=False, default=None
+    )
+
     def __post_init__(self) -> None:
         super().__post_init__()
         if isinstance(self.model, str):
@@ -93,16 +116,68 @@ class WhisperCall(AudioCall):
             self._whisper_model = WhisperModel(self.model)
         else:
             self._whisper_model = self.model
+        self._speech_buffer = []
+        self._in_speech = False
+        self._transcription_handle = None
 
     def audio_received(self, audio: np.ndarray) -> None:
-        """Schedule async transcription for a decoded audio chunk.
+        """Classify incoming audio as speech or silence and buffer accordingly.
+
+        Uses RMS energy of *audio* to detect speech.  Speech audio is
+        accumulated in the buffer; when silence is sustained for
+        `silence_gap` seconds the buffer is flushed and sent to Whisper as a
+        single utterance.
 
         Args:
             audio: Float32 mono PCM array at :data:`~voip.audio.SAMPLE_RATE` Hz.
         """
+        if not audio.size:
+            return
         logger.debug(
             "Audio received: %d samples (%.1f s)", len(audio), len(audio) / SAMPLE_RATE
         )
+        rms = float(np.sqrt(np.mean(audio**2)))
+        if rms > self.speech_threshold:
+            self._on_audio_speech(audio)
+        else:
+            self._on_audio_silence()
+
+    def _on_audio_speech(self, audio: np.ndarray) -> None:
+        """Accumulate *audio* into the speech buffer and cancel any pending timer.
+
+        Args:
+            audio: Float32 mono PCM array classified as speech.
+        """
+        if self._transcription_handle is not None:
+            self._transcription_handle.cancel()
+            self._transcription_handle = None
+        self._in_speech = True
+        self._speech_buffer.append(audio)
+
+    def _on_audio_silence(self) -> None:
+        """Arm the transcription debounce timer when silence follows speech.
+
+        Does nothing when no speech has been seen yet (e.g. background noise
+        at call start) or when the timer is already running.
+        """
+        if not self._in_speech or self._transcription_handle is not None:
+            return
+        loop = asyncio.get_event_loop()
+        self._transcription_handle = loop.call_later(
+            self.silence_gap, self._flush_speech_buffer
+        )
+
+    def _flush_speech_buffer(self) -> None:
+        """Concatenate buffered speech audio and schedule async transcription.
+
+        Resets speech state so the next utterance starts with a clean buffer.
+        """
+        self._transcription_handle = None
+        self._in_speech = False
+        if not self._speech_buffer:
+            return
+        audio = np.concatenate(self._speech_buffer)
+        self._speech_buffer.clear()
         asyncio.create_task(self._transcribe(audio))
 
     async def _transcribe(self, audio: np.ndarray) -> None:
@@ -253,8 +328,8 @@ class AgentCall(WhisperCall):
 
         Cancels the silence debounce timer (human is still talking) and, if
         the agent is currently `THINKING` or `SPEAKING`, cancels the active
-        response task and clears buffered transcriptions so the next
-        silence-triggered response starts with a clean slate.
+        response task, clears buffered transcriptions and resets the
+        `WhisperCall` speech buffer so the next utterance starts fresh.
         """
         if self._silence_handle is not None:
             self._silence_handle.cancel()
@@ -268,6 +343,12 @@ class AgentCall(WhisperCall):
                     self._response_task.cancel()
                     self._response_task = None
                 self._pending_text.clear()
+                # Reset WhisperCall transcription state so next utterance starts fresh
+                if self._transcription_handle is not None:
+                    self._transcription_handle.cancel()
+                    self._transcription_handle = None
+                self._speech_buffer.clear()
+                self._in_speech = False
                 self._state = AgentState.LISTENING
 
     def _on_silence(self) -> None:
