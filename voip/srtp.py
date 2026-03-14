@@ -65,8 +65,8 @@ class SRTPSession:
     SRTP pseudo-random function (RFC 3711 §4.3.1).
 
     A fresh session should be created for each answered call via
-    :meth:`generate` and passed to the :class:`~voip.call.Call` instance.
-    The SDP ``a=crypto:`` attribute is produced by :meth:`sdes_attribute`.
+    `generate` and passed to the `Call` instance.
+    The SDP ``a=crypto:`` attribute is produced by `sdes_attribute`.
 
     Attributes:
         master_key: 16-byte AES master key (randomly generated).

@@ -10,8 +10,10 @@ The base `Call` class handles the association between a SIP dialog and the RTP m
 
 ## Audio Handling
 
-For audio calls, use `AudioCall` or `WhisperCall`.
-
 ::: voip.audio.AudioCall
 
-::: voip.audio.WhisperCall
+## AI Calls
+
+::: voip.ai.TranscribeCall
+
+::: voip.ai.AgentCall

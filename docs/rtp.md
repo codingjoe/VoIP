@@ -1,6 +1,6 @@
 # Real-time Transport Protocol (RTP)
 
-The `voip.rtp` module implements the Real-time Transport Protocol (RFC 3550), handling the transmission and reception of media streams.
+::: voip.rtp
 
 ## Protocol Handler
 

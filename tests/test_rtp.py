@@ -285,19 +285,21 @@ class TestRealtimeTransportProtocol:
         assert any("rtp_call_unregistered" in r.message for r in caplog.records)
 
     @pytest.mark.asyncio
-    async def test_packet_received__logs_debug_for_routed_packet(self, caplog):
-        """packet_received logs a debug message when routing to a handler."""
-        import logging  # noqa: PLC0415
+    async def test_packet_received__dispatches_to_handler(self):
+        """packet_received forwards the datagram to the registered handler."""
+        received: list[tuple[bytes, tuple]] = []
 
-        class NoopCall(Call):
-            def datagram_received(self, data, addr): ...
+        class CapturingCall(Call):
+            def datagram_received(self, data, addr):
+                received.append((data, addr))
 
         mux = RealtimeTransportProtocol()
-        handler = NoopCall(rtp=mux, sip=MagicMock())
+        handler = CapturingCall(rtp=mux, sip=MagicMock())
         mux.register_call(None, handler)
-        with caplog.at_level(logging.DEBUG, logger="voip.rtp"):
-            mux.packet_received(make_rtp_packet(), ("1.2.3.4", 5004))
-        assert any("Routing" in r.message for r in caplog.records)
+        packet = make_rtp_packet()
+        mux.packet_received(packet, ("1.2.3.4", 5004))
+        assert len(received) == 1
+        assert received[0][1] == ("1.2.3.4", 5004)
 
     @pytest.mark.asyncio
     async def test_packet_received__logs_debug_for_dropped_packet(self, caplog):

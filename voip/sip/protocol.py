@@ -77,10 +77,11 @@ def _mask_caller(header: str) -> str:
 
 @dataclasses.dataclass(kw_only=True, slots=True)
 class SessionInitiationProtocol(asyncio.Protocol):
-    """SIP User Agent Client (UAC) over TLS/TCP (RFC 3261).
+    """
+    SIP User Agent Client (UAC) over TLS/TCP [RFC 3261].
 
     Handles incoming calls and, optionally, carrier registration with digest
-    authentication (RFC 3261 §22).  All signalling is sent over a single
+    authentication [RFC 3261 §22].  All signalling is sent over a single
     persistent TLS/TCP connection.
 
     RFC 3261 topology overview
@@ -89,17 +90,17 @@ class SessionInitiationProtocol(asyncio.Protocol):
     It may be a carrier edge proxy whose address differs from the registrar.
 
     *Registrar* (§10): the server that maintains location bindings for a
-    domain.  Its URI is derived automatically from the :attr:`aor` by
+    domain.  Its URI is derived automatically from the `aor` by
     stripping the user part (e.g. ``sips:alice@example.com`` →
-    ``sips:example.com``).  When no :attr:`outbound_proxy` is configured,
+    ``sips:example.com``).  When no `outbound_proxy` is configured,
     the UA is expected to connect directly to the registrar server.
 
-    When an :attr:`outbound_proxy` is configured it acts as the first SIP
+    When an `outbound_proxy` is configured it acts as the first SIP
     hop and may differ from the registrar domain — for example when a carrier
     provides a dedicated proxy at ``proxy.carrier.com`` while the AOR domain
     (and thus the registrar Request-URI) is ``carrier.com``.
 
-    Subclass and override :meth:`call_received` to handle incoming calls::
+    Subclass and override `call_received` to handle incoming calls::
 
         class MySession(SessionInitiationProtocol):
             def call_received(self, request: Request) -> None:
@@ -114,6 +115,9 @@ class SessionInitiationProtocol(asyncio.Protocol):
             # Optional: connect via a separate outbound proxy
             # outbound_proxy=("proxy.carrier.com", 5061),
         )
+
+    [RFC 3261]: https://datatracker.ietf.org/doc/html/rfc3261
+    [RFC 3261 §22]: https://datatracker.ietf.org/doc/html/rfc3261#section-22
     """
 
     #: RFC 3261 §8.1.1.7 Via branch magic cookie (indicates RFC 3261 compliance).
@@ -142,7 +146,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
     #: RFC 3261 §8.1.2 — outbound SIP proxy address ``(host, port)``.
     #: When ``None`` the caller connects directly to the registrar server.
     #: The address may differ from the registrar domain derived from
-    #: :attr:`aor` (e.g. ``proxy.carrier.com`` vs ``carrier.com``).
+    #: `aor` (e.g. ``proxy.carrier.com`` vs ``carrier.com``).
     outbound_proxy: tuple[str, int] | None = None
     aor: str
     username: str | None = None
@@ -491,15 +495,13 @@ class SessionInitiationProtocol(asyncio.Protocol):
             await self.answer(request=request, call_class=MyCall)
 
         Args:
-            request: The SIP INVITE request (from :meth:`call_received`).
-            call_class: A :class:`~voip.call.Call` subclass whose
-                :meth:`~voip.call.Call.negotiate_codec` selects the codec.
+            request: The SIP INVITE request (from `call_received`).
+            call_class: A `Call` subclass whose `negotiate_codec` selects the codec.
                 The class is constructed with ``rtp``, ``sip``, ``caller``,
                 and ``media`` keyword arguments.
 
         Raises:
-            NotImplementedError: When :meth:`~voip.call.Call.negotiate_codec`
-                raises (no supported codec in the remote SDP offer).
+            NotImplementedError: When `negotiate_codec` raises (no supported codec in the remote SDP offer).
         """
         await self._answer(request, call_class)
 
@@ -669,7 +671,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
     def _build_contact(self, user: str | None = None) -> str:
         """Return a ``Contact:`` header value for this UA.
 
-        The URI scheme mirrors :attr:`aor`: a ``sips:`` AOR produces a
+        The URI scheme mirrors `aor`: a ``sips:`` AOR produces a
         ``sips:`` Contact (the strongest TLS guarantee); a ``sip:`` AOR over
         TLS produces ``sip:`` with ``transport=tls``; plain TCP produces plain
         ``sip:``.
@@ -690,11 +692,11 @@ class SessionInitiationProtocol(asyncio.Protocol):
     def ringing(self, request: Request) -> None:
         """Send a 180 Ringing provisional response to the caller.
 
-        Call this from :meth:`call_received` before answering to indicate
+        Call this from `call_received` before answering to indicate
         that the call is being processed (e.g. while a user is alerted).
 
         Args:
-            request: The SIP INVITE request (from :meth:`call_received`).
+            request: The SIP INVITE request (from `call_received`).
         """
         call_id = request.headers.get("Call-ID", "")
         if call_id not in self._pending_invites:
@@ -731,7 +733,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
         """Reject an incoming call.
 
         Args:
-            request: The SIP INVITE request (from :meth:`call_received`).
+            request: The SIP INVITE request (from `call_received`).
             status_code: SIP response status code (default: 486 Busy Here).
             reason: SIP response reason phrase.
         """
@@ -780,7 +782,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
     def registrar_uri(self) -> str:
         """Registrar Request-URI derived from the AOR, preserving its scheme.
 
-        The scheme (``sip:`` or ``sips:``) is taken directly from :attr:`aor`
+        The scheme (``sip:`` or ``sips:``) is taken directly from `aor`
         so the client honours whatever security contract the administrator has
         configured.  The user part is stripped; only the host (and optional
         port) is kept, per RFC 3261 §10.2.
@@ -803,8 +805,8 @@ class SessionInitiationProtocol(asyncio.Protocol):
     ) -> None:
         """Send a REGISTER request to the registrar, optionally with credentials.
 
-        The REGISTER Request-URI is the registrar URI derived from :attr:`aor`
-        (RFC 3261 §10.2).  When an :attr:`outbound_proxy` is configured, the
+        The REGISTER Request-URI is the registrar URI derived from `aor`
+        (RFC 3261 §10.2).  When an `outbound_proxy` is configured, the
         request is sent over the existing TLS/TCP connection to that proxy,
         which routes it to the registrar on our behalf.
         """
@@ -860,7 +862,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 params[key.strip()] = value.strip().strip('"')
         return params
 
-    #: Map from :class:`~voip.types.DigestAlgorithm` to the hashlib name.
+    #: Map from `DigestAlgorithm` to the hashlib name.
     _DIGEST_HASH_NAME: typing.ClassVar[dict[str, str]] = {
         DigestAlgorithm.MD5: "md5",
         DigestAlgorithm.MD5_SESS: "md5",
@@ -892,7 +894,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
         it defaults to ``SHA-256``.
 
         Raises:
-            ValueError: If ``algorithm`` is not a recognised :class:`DigestAlgorithm`,
+            ValueError: If ``algorithm`` is not a recognised `DigestAlgorithm`,
                 or if a ``*-sess`` algorithm is requested without a ``cnonce``.
         """
         try:
@@ -921,5 +923,5 @@ class SessionInitiationProtocol(asyncio.Protocol):
         self.transport = None
 
 
-#: Short alias for :class:`SessionInitiationProtocol`.
+#: Short alias for `SessionInitiationProtocol`.
 SIP = SessionInitiationProtocol

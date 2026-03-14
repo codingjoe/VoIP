@@ -1,8 +1,9 @@
 """Call handler hierarchy for RTP/SIP sessions.
 
-This module provides the :class:`Call` base dataclass that represents an
+This module provides the `Call` base dataclass that represents an
 individual call leg managed by the RTP multiplexer.  Audio-specific
-subclasses live in :mod:`voip.audio`.
+subclasses live in `voip.audio`; AI-powered subclasses live in
+`voip.ai`.
 
 Relationship to the rest of the stack::
 
@@ -18,7 +19,9 @@ Relationship to the rest of the stack::
             │
          AudioCall  (audio.py)  (audio buffering + codec decode)
             │
-         WhisperCall (audio.py) (speech-to-text via Whisper)
+         WhisperCall (ai.py)    (speech-to-text via Whisper)
+            │
+         AgentCall   (ai.py)    (Ollama LLM + Pocket TTS response)
 """
 
 from __future__ import annotations
@@ -28,13 +31,20 @@ from typing import TYPE_CHECKING
 
 from voip.rtp import RealtimeTransportProtocol
 from voip.sdp.types import MediaDescription
-from voip.sip.types import CallerID
 from voip.srtp import SRTPSession
 
 if TYPE_CHECKING:
     from voip.sip.protocol import SessionInitiationProtocol
+    from voip.sip.types import CallerID
 
 __all__ = ["Call"]
+
+
+def _default_caller_id() -> CallerID:
+    """Lazy import to avoid a circular dependency between voip.call and voip.sip."""
+    from voip.sip.types import CallerID as _CallerID
+
+    return _CallerID("")
 
 
 @dataclasses.dataclass
@@ -42,14 +52,14 @@ class Call:
     """Handle basic IO and call functions.
 
     A call handler is associated with one SIP dialog and receives RTP traffic
-    delivered by the shared :class:`~voip.rtp.RealtimeTransportProtocol`
-    multiplexer.  Subclass and override :meth:`datagram_received` to process
+    delivered by the shared `RealtimeTransportProtocol`
+    multiplexer.  Subclass and override `datagram_received` to process
     incoming media.
 
-    The :attr:`rtp` and :attr:`sip` back-references allow the handler to send
+    The `rtp` and `sip` back-references allow the handler to send
     data back to the caller and to terminate the call via SIP BYE.
 
-    Subclass :class:`~voip.audio.AudioCall` for audio calls with codec
+    Subclass `AudioCall` for audio calls with codec
     negotiation, buffering, and decoding.
 
     Attributes:
@@ -62,7 +72,7 @@ class Call:
     rtp: RealtimeTransportProtocol
     sip: SessionInitiationProtocol
     #: Caller identifier as received in the SIP From header.
-    caller: CallerID = dataclasses.field(default_factory=lambda: CallerID(""))
+    caller: CallerID = dataclasses.field(default_factory=_default_caller_id)
     #: Negotiated SDP media description for this call leg.
     media: MediaDescription | None = None
     #: SRTP session for encrypting and decrypting media (set by the SIP layer).
@@ -105,7 +115,7 @@ class Call:
             remote_media: The SDP ``m=audio`` section from the remote INVITE.
 
         Returns:
-            A :class:`~voip.sdp.types.MediaDescription` with the chosen codec.
+            A `MediaDescription` with the chosen codec.
 
         Raises:
             NotImplementedError: When not overridden by a subclass.

@@ -44,9 +44,11 @@ FIELD_BY_LETTER: dict[str, Field] = {field.letter: field for field in FIELD_MAP}
 
 @dataclasses.dataclass
 class SessionDescription:
-    """Session Description Protocol message (RFC 4566).
+    """Session Description Protocol message [RFC 4566].
 
     Holds all session-level and media-level fields in their canonical order.
+
+    [RFC 4566]: https://datatracker.ietf.org/doc/html/rfc4566
     """
 
     version: int = 0
@@ -127,7 +129,6 @@ class SessionDescription:
         return media
 
     def __bytes__(self) -> bytes:
-        """Serialize to bytes."""
         return str(self).encode()
 
     def __str__(self) -> str:

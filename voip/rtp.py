@@ -1,7 +1,7 @@
 """
-Real-time Transport Protocol (RTP) implementation of RFC 3550.
+Real-time Transport Protocol (RTP) implementation of [RFC 3550].
 
-See also: https://datatracker.ietf.org/doc/html/rfc3550#section-5
+[RFC 3550]: https://datatracker.ietf.org/doc/html/rfc3550#section-5
 """
 
 from __future__ import annotations
@@ -74,12 +74,12 @@ class RealtimeTransportProtocol(STUNProtocol):
     """RTP multiplexer: routes incoming datagrams to per-call handlers (RFC 3550).
 
     One instance manages multiple simultaneous calls on a single UDP socket.
-    Register per-call :class:`~voip.call.Call` handlers with
-    :meth:`register_call`; each incoming datagram is dispatched to the
-    matching handler's :meth:`~voip.call.Call.datagram_received` method by
+    Register per-call `Call` handlers with
+    `register_call`; each incoming datagram is dispatched to the
+    matching handler's `datagram_received` method by
     remote source address.
 
-    Use ``addr=None`` in :meth:`register_call` as a wildcard catch-all for
+    Use ``addr=None`` in `register_call` as a wildcard catch-all for
     calls whose remote RTP address is not known in advance (no SDP in INVITE).
     """
 
@@ -108,8 +108,8 @@ class RealtimeTransportProtocol(STUNProtocol):
         Args:
             addr: Remote ``(ip, port)`` as it will appear in incoming datagrams,
                 or ``None`` to register a wildcard catch-all handler.
-            handler: A :class:`~voip.call.Call` instance whose
-                :meth:`~voip.call.Call.datagram_received` will be called for
+            handler: A `Call` instance whose
+                `datagram_received` will be called for
                 matching packets.
         """
         logger.info(
@@ -128,7 +128,7 @@ class RealtimeTransportProtocol(STUNProtocol):
         """Remove the handler registered for *addr*.
 
         Args:
-            addr: The same key that was passed to :meth:`register_call`.
+            addr: The same key that was passed to `register_call`.
                 Silently ignored when no handler is registered for *addr*.
         """
         if addr in self.calls:
@@ -168,12 +168,6 @@ class RealtimeTransportProtocol(STUNProtocol):
                     )
                     return
                 data = decrypted
-            logger.debug(
-                "Routing RTP packet from %s:%s to %s",
-                addr[0],
-                addr[1],
-                type(handler).__name__,
-            )
             handler.datagram_received(data, addr)
         else:
             logger.debug(

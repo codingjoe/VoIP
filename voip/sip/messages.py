@@ -6,17 +6,22 @@ import dataclasses
 
 from voip.sdp.messages import SessionDescription
 
+from ..types import ByteSerializableObject
 from .types import CallerID
 
 __all__ = ["Request", "Response", "Message"]
 
-#: Headers whose values are parsed as :class:`CallerID` objects.
+#: Headers whose values are parsed as `CallerID` objects.
 _CALLER_HEADERS = frozenset({"From", "To"})
 
 
 @dataclasses.dataclass(kw_only=True)
-class Message:
-    """A SIP message (RFC 3261 §7)."""
+class Message(ByteSerializableObject):
+    """
+    A SIP message [RFC 3261 §7].
+
+    [RFC 3261 §7]: https://datatracker.ietf.org/doc/html/rfc3261#section-7
+    """
 
     headers: dict[str, str] = dataclasses.field(default_factory=dict)
     body: SessionDescription | None = dataclasses.field(default=None, repr=False)
@@ -75,15 +80,16 @@ class Message:
         )
         return f"{self._first_line()}\r\n{header_lines}\r\n".encode() + raw_body
 
-    def __str__(self) -> str:
-        return self.__bytes__().decode()
-
     def _first_line(self) -> str: ...
 
 
 @dataclasses.dataclass(kw_only=True)
 class Request(Message):
-    """A SIP request message (RFC 3261 §7.1)."""
+    """
+    A SIP request message [RFC 3261 §7.1].
+
+    [RFC 3261 §7.1]: https://datatracker.ietf.org/doc/html/rfc3261#section-7.1
+    """
 
     method: str
     uri: str
@@ -94,7 +100,11 @@ class Request(Message):
 
 @dataclasses.dataclass(kw_only=True)
 class Response(Message):
-    """A SIP response message (RFC 3261 §7.2)."""
+    """
+    A SIP response message [RFC 3261 §7.2].
+
+    [RFC 3261 §7.2]: https://datatracker.ietf.org/doc/html/rfc3261#section-7.2
+    """
 
     status_code: int
     reason: str

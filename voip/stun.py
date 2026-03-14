@@ -39,15 +39,15 @@ class STUNProtocol(asyncio.DatagramProtocol):
     Use this as the base class for any protocol that shares a UDP socket with
     STUN. Incoming datagrams whose first byte is in ``[0, 3]`` (RFC 7983) are
     treated as STUN messages and routed to the STUN handler. All other
-    datagrams are forwarded to :meth:`packet_received`.
+    datagrams are forwarded to `packet_received`.
 
     When the socket is ready and the reachable address is known,
-    :meth:`stun_connection_made` is called.  If ``stun_server_address`` is
-    ``None`` this happens synchronously from :meth:`connection_made` with the
+    `stun_connection_made` is called.  If ``stun_server_address`` is
+    ``None`` this happens synchronously from `connection_made` with the
     local socket address.  If STUN is configured it is called from
-    :meth:`datagram_received` when the Binding Response arrives, with the
+    `datagram_received` when the Binding Response arrives, with the
     discovered public address.  Subclasses only need to override
-    :meth:`stun_connection_made` — no :meth:`connection_made` override is
+    `stun_connection_made` — no `connection_made` override is
     required::
 
         class MyProtocol(STUNProtocol):
@@ -94,9 +94,9 @@ class STUNProtocol(asyncio.DatagramProtocol):
 
         When STUN is configured, *addr* is the **public** ``(ip, port)``
         discovered from the STUN Binding Response and this method is called
-        by :meth:`datagram_received`.  When ``stun_server_address=None``,
+        by `datagram_received`.  When ``stun_server_address=None``,
         *addr* is the local socket address and this method is called
-        synchronously from :meth:`connection_made`.
+        synchronously from `connection_made`.
 
         Subclasses override this method to trigger protocol-specific
         initialisation once the socket is ready.
