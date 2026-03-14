@@ -479,7 +479,10 @@ class TestAgentCall:
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
         call = make_agent_call(MagicMock(), tts_mock)
-        with patch("voip.ai.asyncio.create_task") as mock_ct:
+        with patch(
+            "voip.ai.asyncio.create_task",
+            side_effect=lambda c: c.close() or MagicMock(),
+        ) as mock_ct:
             call.transcription_received("hello")
         assert call._pending_text == ["hello"]
         mock_ct.assert_called_once()
@@ -489,10 +492,13 @@ class TestAgentCall:
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
         call = make_agent_call(MagicMock(), tts_mock)
-        with patch("voip.ai.asyncio.create_task") as mock_ct:
+        task_mock = MagicMock()
+        with patch(
+            "voip.ai.asyncio.create_task", side_effect=lambda c: c.close() or task_mock
+        ) as mock_ct:
             call.transcription_received("hello world")
         mock_ct.assert_called_once()
-        assert call._response_task is mock_ct.return_value
+        assert call._response_task is task_mock
 
     def test_transcription_received__cancels_running_task_before_creating_new(self):
         """transcription_received cancels any existing response task."""
@@ -502,7 +508,7 @@ class TestAgentCall:
         old_task = MagicMock()
         old_task.done.return_value = False
         call._response_task = old_task
-        with patch("voip.ai.asyncio.create_task"):
+        with patch("voip.ai.asyncio.create_task", side_effect=lambda c: c.close()):
             call.transcription_received("hello")
         old_task.cancel.assert_called_once()
 
