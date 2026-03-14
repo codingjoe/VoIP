@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import enum
 import logging
 import os
 import secrets
@@ -25,12 +26,30 @@ from faster_whisper import WhisperModel
 from pocket_tts import TTSModel
 
 from voip.audio import SAMPLE_RATE, AudioCall
-from voip.rtp import RTPPayloadType
+from voip.rtp import RTPPacket, RTPPayloadType
 from voip.sdp.types import RTPPayloadFormat
 
-__all__ = ["AgentCall", "WhisperCall"]
+__all__ = ["AgentCall", "AgentState", "WhisperCall"]
 
 logger = logging.getLogger(__name__)
+
+
+class AgentState(enum.Enum):
+    """Conversation state for :class:`AgentCall`.
+
+    The state machine drives conversation flow: audio is collected while the
+    human speaks, the LLM is queried when silence is detected, and the
+    synthesised reply is streamed while the agent speaks.  Inbound speech
+    during `THINKING` or `SPEAKING` cancels the current response and returns
+    control to the human.
+    """
+
+    #: Human speaking; agent collects audio and buffers transcriptions.
+    LISTENING = "listening"
+    #: Human silent; agent is querying the LLM (Ollama).
+    THINKING = "thinking"
+    #: Agent transmitting TTS audio via RTP.
+    SPEAKING = "speaking"
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -172,6 +191,11 @@ class AgentCall(WhisperCall):
     #: is saved to ``<debug_audio_dir>/agent_<timestamp>.wav`` at 8 kHz mono
     #: int16 PCM so you can verify TTS output independently of RTP encoding.
     debug_audio_dir: str | None = dataclasses.field(default=None)
+    #: Normalised RMS threshold (0–1) above which inbound audio is classified
+    #: as speech.  Lower values make the VAD more sensitive.
+    vad_threshold: float = dataclasses.field(default=0.02)
+    #: Seconds of continuous silence required before the LLM is queried.
+    silence_duration: float = dataclasses.field(default=1.0)
 
     _tts_instance: TTSModel = dataclasses.field(init=False, repr=False)
     _voice_state: Any = dataclasses.field(init=False, repr=False)
@@ -179,7 +203,12 @@ class AgentCall(WhisperCall):
     _rtp_seq: int = dataclasses.field(init=False, repr=False, default=0)
     _rtp_ts: int = dataclasses.field(init=False, repr=False, default=0)
     _rtp_ssrc: int = dataclasses.field(init=False, repr=False)
-    _response_lock: asyncio.Lock = dataclasses.field(init=False, repr=False)
+    _state: AgentState = dataclasses.field(init=False, repr=False)
+    _pending_text: list[str] = dataclasses.field(init=False, repr=False)
+    _silence_handle: asyncio.TimerHandle | None = dataclasses.field(
+        init=False, repr=False
+    )
+    _response_task: asyncio.Task | None = dataclasses.field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -187,33 +216,133 @@ class AgentCall(WhisperCall):
         self._voice_state = self._tts_instance.get_state_for_audio_prompt(self.voice)
         self._messages = [{"role": "system", "content": self._SYSTEM_PROMPT}]
         self._rtp_ssrc = secrets.randbits(32)
-        self._response_lock = asyncio.Lock()
+        self._state = AgentState.LISTENING
+        self._pending_text = []
+        self._silence_handle = None
+        self._response_task = None
+
+    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+        """Process an inbound RTP datagram and drive VAD state transitions.
+
+        Estimates the energy of the payload to classify the packet as speech
+        or silence.  Speech cancels any in-progress response and arms the
+        LISTENING state; sustained silence arms the debounce timer that
+        eventually triggers the LLM query.
+
+        Args:
+            data: Raw (decrypted) RTP datagram bytes.
+            addr: Source ``(host, port)`` of the datagram.
+        """
+        super().datagram_received(data, addr)
+        # Parse again (separately from the parent) to inspect individual packets
+        # for real-time VAD without waiting for a full 5-second Whisper chunk.
+        try:
+            packet = RTPPacket.parse(data)
+        except ValueError:
+            return
+        if not packet.payload:
+            return
+        rms = self._estimate_payload_rms(packet.payload)
+        if rms > self.vad_threshold:
+            self._on_speech()
+        else:
+            self._on_silence()
+
+    def _on_speech(self) -> None:
+        """React to a speech-energy packet: cancel any running response.
+
+        Cancels the silence debounce timer (human is still talking) and, if
+        the agent is currently `THINKING` or `SPEAKING`, cancels the active
+        response task and clears buffered transcriptions so the next
+        silence-triggered response starts with a clean slate.
+        """
+        if self._silence_handle is not None:
+            self._silence_handle.cancel()
+            self._silence_handle = None
+        match self._state:
+            case AgentState.THINKING | AgentState.SPEAKING:
+                logger.debug(
+                    "Speech detected during %s — cancelling response", self._state.value
+                )
+                if self._response_task is not None and not self._response_task.done():
+                    self._response_task.cancel()
+                    self._response_task = None
+                self._pending_text.clear()
+                self._state = AgentState.LISTENING
+
+    def _on_silence(self) -> None:
+        """React to a silence-energy packet: arm the debounce timer.
+
+        Only arms the timer when in `LISTENING` state and no timer is already
+        running.  The timer calls `_trigger_response` after
+        `silence_duration` seconds of continuous silence.
+        """
+        if self._state is not AgentState.LISTENING:
+            return
+        if self._silence_handle is not None:
+            return
+        loop = asyncio.get_event_loop()
+        self._silence_handle = loop.call_later(
+            self.silence_duration, self._trigger_response
+        )
+
+    def _trigger_response(self) -> None:
+        """Combine buffered transcriptions and schedule the LLM response.
+
+        Called by the silence debounce timer.  Transitions to `THINKING` and
+        creates the `_respond` task.  Does nothing when no transcriptions have
+        been buffered (e.g. background noise caused a false silence transition).
+        """
+        self._silence_handle = None
+        if not self._pending_text:
+            return
+        text = " ".join(self._pending_text)
+        self._pending_text.clear()
+        self._state = AgentState.THINKING
+        self._response_task = asyncio.create_task(self._respond(text))
 
     def transcription_received(self, text: str) -> None:
-        """Schedule an async Ollama→TTS→RTP response for *text*.
+        """Buffer *text* for the next LLM query.
 
-        Silently ignores empty strings (Whisper occasionally emits them).
+        Appends non-empty transcription snippets to the pending buffer.
+        The buffer is flushed and sent to the LLM when the silence debounce
+        timer fires (see `_trigger_response`).
+
+        Args:
+            text: Transcribed text (already stripped; empty strings are ignored).
         """
         if text:
-            asyncio.create_task(self._respond(text))
+            self._pending_text.append(text)
 
     async def _respond(self, text: str) -> None:
-        """Fetch an Ollama reply for *text* and send as speech via RTP."""
-        async with self._response_lock:
-            try:
-                self._messages.append({"role": "user", "content": text})
-                response = await ollama.AsyncClient().chat(
-                    model=self.ollama_model,
-                    messages=self._messages,
-                )
-                reply = response.message.content
-                self._messages.append({"role": "assistant", "content": reply})
-                logger.info("Agent reply: %r", reply)
-                await self._send_speech(reply)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Error while generating agent response")
+        """Fetch an Ollama reply for *text* and stream it as speech via RTP.
+
+        Manages state transitions: `THINKING` while waiting for the LLM,
+        `SPEAKING` while transmitting TTS audio, `LISTENING` on completion.
+        On cancellation (human started speaking) the partial user turn is
+        removed from the chat history so the history stays consistent.
+        """
+        try:
+            self._messages.append({"role": "user", "content": text})
+            response = await ollama.AsyncClient().chat(
+                model=self.ollama_model,
+                messages=self._messages,
+            )
+            reply = response.message.content
+            self._messages.append({"role": "assistant", "content": reply})
+            logger.info("Agent reply: %r", reply)
+            self._state = AgentState.SPEAKING
+            await self._send_speech(reply)
+        except asyncio.CancelledError:
+            # Remove the partial user turn so history stays consistent.
+            if self._messages and self._messages[-1]["role"] == "user":
+                self._messages.pop()
+            raise
+        except Exception:
+            logger.exception("Error while generating agent response")
+        finally:
+            if self._state is not AgentState.LISTENING:
+                self._state = AgentState.LISTENING
 
     async def _send_speech(self, text: str) -> None:
         """Stream synthesised speech from Pocket TTS and send via RTP.
@@ -322,6 +451,24 @@ class AgentCall(WhisperCall):
             np.arange(len(audio)),
             audio,
         ).astype(np.float32)
+
+    @staticmethod
+    def _estimate_payload_rms(payload: bytes) -> float:
+        """Estimate normalised RMS energy from a raw G.711 RTP payload.
+
+        G.711 codecs (PCMU/PCMA) encode silence as a fixed codeword, so speech
+        energy manifests as byte variance around that codeword.  Standard
+        deviation over the byte values, divided by 128, gives a normalised
+        proxy for RMS in the range ``[0, 1]`` that is suitable for thresholding.
+
+        Args:
+            payload: Raw RTP payload bytes from a G.711-encoded packet.
+
+        Returns:
+            Normalised energy estimate in ``[0, 1]``.
+        """
+        samples = np.frombuffer(payload, dtype=np.uint8).astype(np.float32)
+        return float(np.std(samples) / 128.0)
 
     @staticmethod
     def _encode_pcmu(samples: np.ndarray) -> bytes:
