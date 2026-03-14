@@ -341,9 +341,11 @@ class AgentCall(WhisperCall):
         # 4-bit quantisation step within the segment
         mantissa = ((biased >> (exp + 3)) & 0x0F).astype(np.uint8)
         # Compose codeword and invert all bits (G.711 §A.2 requirement)
-        return (~(sign | (exp.astype(np.uint8) << 4) | mantissa)).astype(
-            np.uint8
-        ).tobytes()
+        return (
+            (~(sign | (exp.astype(np.uint8) << 4) | mantissa))
+            .astype(np.uint8)
+            .tobytes()
+        )
 
     def _build_rtp_packet(self, payload: bytes) -> bytes:
         """Wrap *payload* in a minimal RTP header (RFC 3550 §5.1).
