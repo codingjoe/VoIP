@@ -90,7 +90,9 @@ class TestRegistry:
             import voip.codecs as fresh  # noqa: PLC0415
 
             for name in ("G722", "Opus", "PyAVCodec"):
-                assert name not in fresh.__all__, f"{name!r} must not be in __all__ without av"
+                assert name not in fresh.__all__, (
+                    f"{name!r} must not be in __all__ without av"
+                )
         finally:
             for k in list(sys.modules):
                 if k in _PYAV_MODULE_KEYS:

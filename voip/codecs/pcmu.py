@@ -53,7 +53,9 @@ class PCMU(RTPCodec):
         # ITU-T G.711 §A: magnitude = (((mantissa << 3) + BIAS) << exp) - BIAS
         magnitude = (((mantissa << 3) + _MU_LAW_BIAS) << exp) - _MU_LAW_BIAS
         linear = (magnitude.astype(np.float32) / 32768.0).astype(np.float32)
-        source_rate_hz = input_rate_hz if input_rate_hz is not None else cls.sample_rate_hz
+        source_rate_hz = (
+            input_rate_hz if input_rate_hz is not None else cls.sample_rate_hz
+        )
         return cls.resample(
             (sign * linear).astype(np.float32), source_rate_hz, output_rate_hz
         )

@@ -65,7 +65,9 @@ class PCMA(RTPCodec):
         t_segN = np.left_shift(t_bias, shift)
         t = np.where(segment == 0, t_seg0, t_segN).astype(np.float32)
         normalized = (sign * t / 32768.0).astype(np.float32)
-        source_rate_hz = input_rate_hz if input_rate_hz is not None else cls.sample_rate_hz
+        source_rate_hz = (
+            input_rate_hz if input_rate_hz is not None else cls.sample_rate_hz
+        )
         return cls.resample(normalized, source_rate_hz, output_rate_hz)
 
     @classmethod
@@ -88,4 +90,3 @@ class PCMA(RTPCodec):
         mantissa = (np.right_shift(magnitude, shift) & 0x0F).astype(np.uint8)
         aval = (seg.astype(np.uint8) << 4) | mantissa
         return (aval ^ mask).astype(np.uint8).tobytes()
-
