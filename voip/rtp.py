@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from voip.sip.protocol import SessionInitiationProtocol
     from voip.sip.types import CallerID
 
-__all__ = ["Call", "RTP", "RTPCall", "RTPPacket", "RTPPayloadType", "RealtimeTransportProtocol"]
+__all__ = ["RTP", "RTPCall", "RTPPacket", "RTPPayloadType", "RealtimeTransportProtocol"]
 
 logger = logging.getLogger(__name__)
 
@@ -287,5 +287,3 @@ class RealtimeTransportProtocol(STUNProtocol):
 
 
 RTP = RealtimeTransportProtocol
-#: Backward-compatible alias for :class:`RTPCall`.
-Call = RTPCall
