@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import enum
 import logging
 from typing import Any, ClassVar
 
@@ -20,32 +19,13 @@ import ollama
 from faster_whisper import WhisperModel
 from pocket_tts import TTSModel
 
-from voip.audio import SAMPLE_RATE, AudioCall
+from voip.audio import AudioCall
 from voip.rtp import RTPPayloadType
 from voip.sdp.types import RTPPayloadFormat
 
-__all__ = ["AgentCall", "AgentState", "TranscribeCall"]
+__all__ = ["TranscribeCall", "AgentCall"]
 
 logger = logging.getLogger(__name__)
-
-
-class AgentState(enum.Enum):
-    """Conversation state for :class:`AgentCall`.
-
-    The state machine represents the current phase of the conversation.
-    Audio is collected while the human speaks (`LISTENING`), the LLM is
-    queried when silence is detected (`THINKING`), and the synthesised reply
-    is streamed while the agent speaks (`SPEAKING`).  When a new transcription
-    arrives while the agent is already responding, the current `_respond` task
-    is cancelled and a new one is started with the latest text.
-    """
-
-    #: Human speaking; agent collects audio and buffers transcriptions.
-    LISTENING = "listening"
-    #: Human silent; agent is querying the LLM (Ollama).
-    THINKING = "thinking"
-    #: Agent transmitting TTS audio via RTP.
-    SPEAKING = "speaking"
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -104,17 +84,6 @@ class TranscribeCall(AudioCall):
         self._transcription_handle = None
 
     def audio_received(self, *, audio: np.ndarray, rms: float) -> None:
-        """Classify incoming audio as speech or silence and buffer accordingly.
-
-        Uses RMS energy of *audio* to detect speech.  Speech audio is
-        accumulated in the buffer; when silence is sustained for
-        `silence_gap` seconds the buffer is flushed and sent to Whisper as a
-        single utterance.
-
-        Args:
-            audio: Float32 mono PCM array at :data:`~voip.audio.SAMPLE_RATE` Hz.
-            rms: Normalised RMS energy proxy from the raw RTP payload.
-        """
         self._speech_buffer.append(audio)
         if rms > self.speech_threshold:
             self._on_audio_speech()
@@ -144,7 +113,7 @@ class TranscribeCall(AudioCall):
         """
         self._transcription_handle = None
         # Ensure at least one second of audio to avoid cutting words in half.
-        if sum(len(c) for c in self._speech_buffer) < SAMPLE_RATE:
+        if sum(len(c) for c in self._speech_buffer) < self.resampling_rate:
             self._speech_buffer.clear()
             return
         audio = np.concatenate(self._speech_buffer)
@@ -247,15 +216,6 @@ class AgentCall(TranscribeCall):
         self._response_task = None
 
     def transcription_received(self, text: str) -> None:
-        """Buffer *text* for the next LLM query and schedule a response.
-
-        Empty strings are silently ignored. When a response task is already
-        running it is cancelled first so the latest transcription takes
-        priority.
-
-        Args:
-            text: Transcribed text (already stripped).
-        """
         match text:
             case "":
                 return

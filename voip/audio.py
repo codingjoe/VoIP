@@ -19,6 +19,7 @@ import logging
 import os
 import secrets
 import struct
+import typing
 from collections.abc import Iterator
 from typing import ClassVar, cast
 
@@ -31,8 +32,6 @@ from voip.sdp.types import MediaDescription, RTPPayloadFormat
 
 __all__ = ["AudioCall"]
 
-#: Native sample rate expected by Whisper models.
-SAMPLE_RATE = 16000
 
 logger = logging.getLogger(__name__)
 
@@ -145,9 +144,8 @@ class AudioCall(RTPCall):
     #: RTP timestamp increment per packet (clock-rate dependent).
     _rtp_ts_increment: int = dataclasses.field(init=False, repr=False)
     #: Wall-clock duration of one RTP packet in seconds (used for pacing).
-    _rtp_packet_duration: float = dataclasses.field(
-        init=False, repr=False, default=0.02
-    )
+    _rtp_packet_duration: typing.ClassVar[float] = 0.02
+    resampling_rate: typing.ClassVar[int] = 16000
 
     def __post_init__(self) -> None:
         fmt = self.media.fmt[0]
@@ -329,7 +327,7 @@ class AudioCall(RTPCall):
             Float32 mono PCM array at :data:`SAMPLE_RATE` Hz.
         """
         resampler = av.audio.resampler.AudioResampler(
-            format="fltp", layout="mono", rate=SAMPLE_RATE
+            format="fltp", layout="mono", rate=self.resampling_rate
         )
         frames: list[np.ndarray] = []
         with av.open(
