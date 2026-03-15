@@ -573,3 +573,36 @@ class TestEstimatePayloadRMS:
     def test_estimate_payload_rms__varying_bytes_return_positive(self):
         """Mixed byte values (speech-like signal) give positive RMS."""
         assert AudioCall._estimate_payload_rms(bytes([0, 255] * 80)) > 0.5
+
+
+class TestAudioCallInit:
+    def test_init__raises_value_error_for_none_encoding_name(self):
+        """Raise ValueError when the negotiated format has no encoding name."""
+        media = MediaDescription(
+            media="audio",
+            port=0,
+            proto="RTP/AVP",
+            fmt=[
+                RTPPayloadFormat(payload_type=96)
+            ],  # dynamic PT, no rtpmap → no encoding name
+        )
+        with pytest.raises(ValueError, match="No encoding name"):
+            make_audio_call(media=media)
+
+
+class TestDecodeRaw:
+    def test_decode_raw__raises_not_implemented_for_unsupported_codec(self):
+        """Raise NotImplementedError when _decode_raw is called with an unknown codec."""
+        media = MediaDescription(
+            media="audio",
+            port=0,
+            proto="RTP/AVP",
+            fmt=[
+                RTPPayloadFormat(
+                    payload_type=96, encoding_name="speex", sample_rate=8000
+                )
+            ],
+        )
+        call = make_audio_call(media=media)
+        with pytest.raises(NotImplementedError, match="Unsupported inbound codec"):
+            call._decode_raw(b"\x00" * 160)

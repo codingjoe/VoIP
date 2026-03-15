@@ -20,9 +20,10 @@ import os
 import secrets
 import struct
 from collections.abc import Iterator
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import av
+import av.audio.resampler
 import numpy as np
 
 from voip.rtp import RTPCall, RTPPacket, RTPPayloadType
@@ -150,6 +151,8 @@ class AudioCall(RTPCall):
 
     def __post_init__(self) -> None:
         fmt = self.media.fmt[0]
+        if fmt.encoding_name is None:
+            raise ValueError(f"No encoding name for payload type {fmt.payload_type}")
         self._encoding_name = fmt.encoding_name.lower()
         self._payload_type = fmt.payload_type
         self._sample_rate = fmt.sample_rate or 8000
@@ -229,6 +232,7 @@ class AudioCall(RTPCall):
             for remote_fmt in remote_media.fmt:
                 if (
                     remote_fmt.encoding_name is not None
+                    and preferred.encoding_name is not None
                     and remote_fmt.encoding_name.lower()
                     == preferred.encoding_name.lower()
                 ):
@@ -320,6 +324,10 @@ class AudioCall(RTPCall):
                     input_format="mulaw",
                     input_sample_rate=self.sample_rate,
                 )
+            case _:
+                raise NotImplementedError(
+                    f"Unsupported inbound codec: {self._encoding_name!r}"
+                )
 
     def _decode_via_av(
         self,
@@ -344,6 +352,7 @@ class AudioCall(RTPCall):
         frames: list[np.ndarray] = []
         with av.open(
             io.BytesIO(data),
+            mode="r",
             format=input_format,
             options=(
                 {"sample_rate": str(input_sample_rate)}
@@ -537,7 +546,9 @@ class AudioCall(RTPCall):
         Returns:
             Encoded audio bytes for one RTP payload.
         """
-        codec = av.CodecContext.create(codec_name, "w")
+        codec: av.AudioCodecContext = cast(
+            av.AudioCodecContext, av.CodecContext.create(codec_name, "w")
+        )
         codec.sample_rate = sample_rate
         codec.format = av.AudioFormat("s16")
         codec.layout = av.AudioLayout("mono")

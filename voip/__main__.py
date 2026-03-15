@@ -6,10 +6,12 @@ import ssl
 import time
 
 from voip.sip import messages
+from voip.sip.protocol import SessionInitiationProtocol
 
 try:
     import click
-    from pygments import formatters, highlight
+    from pygments import highlight
+    from pygments.formatters import TerminalFormatter  # type: ignore[unresolved-import]
 
     from voip.sip.lexers import SIPLexer
 except ImportError as e:
@@ -107,14 +109,16 @@ def _parse_stun_server(ctx, param, value: str | None) -> tuple[str, int] | None:
 _parse_server = _parse_hostport
 
 
-class ConsoleMessageProcessor:
+class ConsoleMessageProcessor(SessionInitiationProtocol):
     """Mixin that prints messages to stdout."""
 
     def request_received(self, request: messages.Request, addr: tuple[str, int]):
         self.pprint(request)
         super().request_received(request, addr)
 
-    def response_received(self, response: messages.Response, addr: tuple[str, int]):
+    def response_received(
+        self, response: messages.Response, addr: tuple[str, int] | None
+    ):
         self.pprint(response)
         super().response_received(response, addr)
 
@@ -138,7 +142,7 @@ class ConsoleMessageProcessor:
             prefix = f"{host}:{port} - - [{time.asctime()}]"
         else:
             prefix = f"[unknown] - - [{time.asctime()}]"
-        pretty_msg = highlight(str(msg), SIPLexer(), formatters.TerminalFormatter())
+        pretty_msg = highlight(str(msg), SIPLexer(), TerminalFormatter())
         click.echo(f"{prefix} {pretty_msg}")
 
 

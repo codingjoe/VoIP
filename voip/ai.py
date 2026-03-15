@@ -233,7 +233,7 @@ class AgentCall(TranscribeCall):
     def __post_init__(self) -> None:
         super().__post_init__()
         self._tts_instance = self.tts_model or TTSModel.load_model()
-        self._voice_state = self._tts_instance.get_state_for_audio_prompt(self.voice)
+        self._voice_state = self._tts_instance.get_state_for_audio_prompt(self.voice)  # type: ignore[arg-type]
         self._messages = [
             {
                 "role": "system",
@@ -278,7 +278,7 @@ class AgentCall(TranscribeCall):
                 model=self.ollama_model,
                 messages=self._messages,
             )
-            reply = response.message.content.encode("ascii", "ignore").decode()
+            reply = (response.message.content or "").encode("ascii", "ignore").decode()
             self._messages.append({"role": "assistant", "content": reply})
             logger.info("Agent reply: %r", reply)
             await self._send_speech(reply)
@@ -305,7 +305,8 @@ class AgentCall(TranscribeCall):
 
         def _generate() -> None:
             for chunk in self._tts_instance.generate_audio_stream(
-                self._voice_state, text
+                self._voice_state,
+                text,  # type: ignore[too-many-positional-arguments]
             ):
                 asyncio.run_coroutine_threadsafe(
                     queue.put(chunk.numpy()), loop
