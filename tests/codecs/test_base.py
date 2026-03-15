@@ -49,9 +49,9 @@ class TestToPayloadFormat:
 
     def test_to_payload_format__uses_rtp_clock_rate_for_sdp(self):
         """to_payload_format uses rtp_clock_rate_hz as the SDP sample_rate."""
+        pytest.importorskip("av")
         from voip.codecs.g722 import G722  # noqa: PLC0415
 
-        pytest.importorskip("av")
         result = G722.to_payload_format()
         assert result.sample_rate == G722.rtp_clock_rate_hz  # 8000, not 16000
 
