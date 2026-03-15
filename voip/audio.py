@@ -266,8 +266,9 @@ class AudioCall(RTPCall):
         loop = asyncio.get_running_loop()
         audio = await loop.run_in_executor(None, self._decode_raw, packet.payload)
         if audio.size > 0:
-            rms = float(np.sqrt(np.mean(audio**2)))
-            self.audio_received(audio=audio, rms=rms)
+            self.audio_received(
+                audio=audio, rms=float(np.sqrt(np.mean(np.square(audio))))
+            )
 
     def _decode_raw(self, packet: bytes) -> np.ndarray:
         """Decode raw RTP payloads to a float32 PCM array at :data:`SAMPLE_RATE` Hz.

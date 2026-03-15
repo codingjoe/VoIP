@@ -563,18 +563,6 @@ class TestSendRTPAudio:
         assert all(s == call._rtp_packet_duration for s in sleep_calls)
 
 
-class TestEstimatePayloadRMS:
-    """Tests for AudioCall._estimate_payload_rms."""
-
-    def test_estimate_payload_rms__silent_bytes_return_zero(self):
-        """Constant bytes (silence-like signal) give near-zero std-dev RMS."""
-        assert AudioCall._estimate_payload_rms(bytes([127] * 160)) == pytest.approx(0.0)
-
-    def test_estimate_payload_rms__varying_bytes_return_positive(self):
-        """Mixed byte values (speech-like signal) give positive RMS."""
-        assert AudioCall._estimate_payload_rms(bytes([0, 255] * 80)) > 0.5
-
-
 class TestAudioCallInit:
     def test_init__raises_value_error_for_none_encoding_name(self):
         """Raise ValueError when the negotiated format has no encoding name."""

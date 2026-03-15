@@ -83,7 +83,7 @@ class TranscribeCall(AudioCall):
     model: str | WhisperModel = dataclasses.field(default="kyutai/stt-1b-en_fr-trfs")
     _whisper_model: WhisperModel = dataclasses.field(init=False, repr=False)
 
-    speech_threshold: float = dataclasses.field(default=0.5)
+    speech_threshold: float = dataclasses.field(default=0.001)
     silence_gap: float = dataclasses.field(default=0.5)
 
     _speech_buffer: list[np.ndarray] = dataclasses.field(
@@ -143,7 +143,8 @@ class TranscribeCall(AudioCall):
         Resets speech state so the next utterance starts with a clean buffer.
         """
         self._transcription_handle = None
-        if sum(len(c) for c in self._speech_buffer) < SAMPLE_RATE * self.silence_gap:
+        # Ensure at least one second of audio to avoid cutting words in half.
+        if sum(len(c) for c in self._speech_buffer) < SAMPLE_RATE:
             self._speech_buffer.clear()
             return
         audio = np.concatenate(self._speech_buffer)
