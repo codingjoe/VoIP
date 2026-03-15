@@ -18,15 +18,25 @@ with SDES key exchange carried inline in the SDP `a=crypto:` attribute
 
 ### NAT Traversal (STUN)
 
-STUN Binding Request / Response with `XOR-MAPPED-ADDRESS` for RTP public
-address discovery ([RFC 5389]). Uses Cloudflare's STUN server by default;
+STUN Binding Request / Response with `XOR-MAPPED-ADDRESS` and `MAPPED-ADDRESS`
+for RTP public address discovery ([RFC 5389]). Full IPv4 and IPv6 address
+parsing for both attribute types. Uses Cloudflare's STUN server by default;
 configurable or disabled per session.
 
 ### Session Description (SDP)
 
 Offer / answer model for audio calls. Codec negotiation for Opus ([RFC 7587]),
 G.722, PCMU, and PCMA ([RFC 3551]). Full SDP lexer with Pygments syntax
-highlighting.
+highlighting. IPv6 connection addresses advertised with `IP6` address type
+per [RFC 4566 §5.7].
+
+### IPv6
+
+Full dual-stack support across SIP signalling, RTP media, and STUN discovery.
+IPv6 addresses in SIP URIs and Via/Contact headers are wrapped in square
+brackets per [RFC 2732]. The RTP UDP socket is bound to `::` when the SIP
+signalling connection is over IPv6. STUN XOR-MAPPED-ADDRESS and MAPPED-ADDRESS
+attributes with IPv6 address family are correctly decoded per [RFC 5389 §15.2].
 
 ### Audio Codecs
 
@@ -59,12 +69,15 @@ ______________________________________________________________________
 [ollama]: https://ollama.com/
 [pocket tts]: https://github.com/pocket-ai/pocket-tts
 [pyav]: https://pyav.org/
+[rfc 2732]: https://datatracker.ietf.org/doc/html/rfc2732
 [rfc 3261]: https://datatracker.ietf.org/doc/html/rfc3261
 [rfc 3550]: https://datatracker.ietf.org/doc/html/rfc3550
 [rfc 3551]: https://datatracker.ietf.org/doc/html/rfc3551
 [rfc 3711]: https://datatracker.ietf.org/doc/html/rfc3711
+[rfc 4566 §5.7]: https://datatracker.ietf.org/doc/html/rfc4566#section-5.7
 [rfc 4568]: https://datatracker.ietf.org/doc/html/rfc4568
 [rfc 5389]: https://datatracker.ietf.org/doc/html/rfc5389
+[rfc 5389 §15.2]: https://datatracker.ietf.org/doc/html/rfc5389#section-15.2
 [rfc 7587]: https://datatracker.ietf.org/doc/html/rfc7587
 [rfc 7983]: https://datatracker.ietf.org/doc/html/rfc7983
 [rfc 8760]: https://datatracker.ietf.org/doc/html/rfc8760

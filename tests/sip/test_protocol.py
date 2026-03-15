@@ -3,7 +3,8 @@
 import asyncio
 import dataclasses
 import hashlib
-from unittest.mock import MagicMock
+import re
+from unittest.mock import MagicMock, patch
 
 import pytest
 from voip.rtp import RealtimeTransportProtocol, RTPCall
@@ -727,6 +728,37 @@ class TestAnswer:
         await self._run_answer(protocol, invite, fake_rtp_transport)
         response, _ = protocol._sent_responses[-1]
         assert "Record-Route" not in response.headers
+
+    @pytest.mark.asyncio
+    async def test_answer__ipv6_public_address_uses_ip6_addrtype(self):
+        """When the RTP public address is IPv6, the SDP uses addrtype IP6."""
+        protocol = FakeProtocol()
+        addr = ("2001:db8::1", 5060)
+        sdp_body = SessionDescription.parse(
+            "v=0\r\n"
+            "o=- 0 0 IN IP6 2001:db8::1\r\n"
+            "s=-\r\n"
+            "c=IN IP6 2001:db8::1\r\n"
+            "t=0 0\r\n"
+            "m=audio 49170 RTP/AVP 0\r\n"
+        )
+        invite = self._make_invite("answer-ipv6-1", sdp_body)
+        protocol.request_received(invite, addr)
+
+        loop = asyncio.get_running_loop()
+        mux = RealtimeTransportProtocol()
+        mux.public_address = loop.create_future()
+        mux.public_address.set_result(("2001:db8::2", 12000))
+        protocol._rtp_protocol = mux
+        protocol._rtp_transport = FakeTransport(("2001:db8::2", 12000))
+        protocol.local_address = ("2001:db8::2", 5061)
+
+        await protocol._answer(invite, _CodecAwareCall)
+        response, _ = protocol._sent_responses[-1]
+        assert response.body.origin.addrtype == "IP6"
+        assert response.body.connection.addrtype == "IP6"
+        assert response.body.origin.unicast_address == "2001:db8::2"
+        assert response.body.connection.connection_address == "2001:db8::2"
 
 
 class TestCANCELHandler:
@@ -1663,6 +1695,39 @@ class TestRegistration:
         # sip: AOR → sip: registrar URI even over TLS.
         assert b"REGISTER sip:example.com SIP/2.0" in data
 
+    async def test_initialize__ipv6_local_address_binds_rtp_to_double_colon(self):
+        """When the SIP connection is IPv6, RTP is bound to '::' instead of '0.0.0.0'."""
+        bound_addresses: list[tuple] = []
+
+        class _TrackingSession(SessionInitiationProtocol):
+            pass
+
+        p = _TrackingSession(
+            outbound_proxy=("2001:db8::1", 5061),
+            aor="sips:alice@example.com",
+            rtp_stun_server_address=None,
+        )
+        p.local_address = ("2001:db8::2", 5061)
+        p._is_tls = True
+
+        loop = asyncio.get_running_loop()
+
+        async def fake_create_datagram(factory, *, local_addr=None, **kwargs):
+            if local_addr is not None:
+                bound_addresses.append(local_addr)
+            transport = MagicMock()
+            transport.get_extra_info.return_value = local_addr or ("::1", 0)
+            proto = factory()
+            proto.connection_made(transport)
+            return transport, proto
+
+        with patch.object(loop, "create_datagram_endpoint", fake_create_datagram):
+            p.transport = make_mock_transport("2001:db8::2", 5061)
+            await p._initialize()
+
+        assert bound_addresses, "create_datagram_endpoint was not called"
+        assert bound_addresses[0][0] == "::"
+
     async def test_register__includes_required_headers(self):
         """REGISTER request includes From, To, Call-ID, CSeq, Contact and Expires."""
         p = make_register_session()
@@ -1825,8 +1890,6 @@ class TestRegistration:
 
     async def test_register__via_header_has_rport(self):
         """REGISTER request includes a Via header with the rport parameter."""
-        import re
-
         p = make_register_session()
         p.local_address = "192.0.2.10", 5061
         transport = make_mock_transport("192.0.2.10", 5061)
@@ -1839,8 +1902,6 @@ class TestRegistration:
 
     async def test_register__via_branch_is_unique_per_request(self):
         """Each REGISTER generates a unique Via branch."""
-        import re
-
         p = make_register_session()
         p.local_address = "127.0.0.1", 5061
         transport = make_mock_transport()
@@ -1875,6 +1936,28 @@ class TestRegistration:
         await p.register()
         (data,) = transport.write.call_args[0]
         assert b"Contact: <sips:alice@10.0.0.5:5061>" in data
+
+    async def test_register__contact_wraps_ipv6_in_brackets(self):
+        """Contact header wraps an IPv6 local address in square brackets."""
+        p = make_register_session(aor="sips:alice@example.com")
+        p.local_address = "2001:db8::1", 5061
+        transport = make_mock_transport("2001:db8::1", 5061)
+        p.transport = transport
+        p._is_tls = True
+        await p.register()
+        (data,) = transport.write.call_args[0]
+        assert b"Contact: <sips:alice@[2001:db8::1]:5061>" in data
+
+    async def test_register__via_wraps_ipv6_in_brackets(self):
+        """Via header wraps an IPv6 local address in square brackets."""
+        p = make_register_session()
+        p.local_address = "::1", 5061
+        transport = make_mock_transport("::1", 5061)
+        p.transport = transport
+        p._is_tls = True
+        await p.register()
+        (data,) = transport.write.call_args[0]
+        assert b"Via: SIP/2.0/TLS [::1]:5061" in data
 
     async def test_response_received__403_raises_registration_error(self):
         """403 Forbidden for REGISTER raises RegistrationError with the response message."""

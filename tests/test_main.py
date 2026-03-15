@@ -80,6 +80,39 @@ class TestParseAOR:
         with pytest.raises(click.BadParameter):
             _parse_aor("alice@example.com")
 
+    def test_parse_aor__invalid_empty_host(self):
+        """Raise BadParameter when host is empty (e.g. sip:alice@:5060)."""
+        import click
+        from voip.__main__ import _parse_aor
+
+        with pytest.raises(click.BadParameter):
+            _parse_aor("sip:alice@:5060")
+
+    def test_parse_aor__ipv6_with_port(self):
+        """Parse scheme, user, bare IPv6 host and port from a bracketed IPv6 URI."""
+        from voip.__main__ import _parse_aor
+
+        assert _parse_aor("sip:alice@[::1]:5060") == ("sip", "alice", "::1", 5060)
+
+    def test_parse_aor__ipv6_without_port(self):
+        """Parse scheme, user and bare IPv6 host from a bracketed URI without port."""
+        from voip.__main__ import _parse_aor
+
+        assert _parse_aor("sips:alice@[2001:db8::1]") == (
+            "sips",
+            "alice",
+            "2001:db8::1",
+            None,
+        )
+
+    def test_parse_aor__ipv6_unclosed_bracket(self):
+        """Raise BadParameter when the IPv6 bracket is not closed."""
+        import click
+        from voip.__main__ import _parse_aor
+
+        with pytest.raises(click.BadParameter):
+            _parse_aor("sip:alice@[::1:5060")
+
 
 class TestParseHostport:
     def test_parse_hostport__without_port(self):
@@ -99,6 +132,42 @@ class TestParseHostport:
             "sip.example.com",
             5080,
         )
+
+    def test_parse_hostport__ipv6_with_port(self):
+        """Parse bare IPv6 host and port from [IPv6]:PORT format."""
+        from voip.__main__ import _parse_hostport
+
+        assert _parse_hostport(None, None, "[::1]:5061") == ("::1", 5061)
+
+    def test_parse_hostport__ipv6_without_port(self):
+        """Return default port when only a bracketed IPv6 host is given."""
+        from voip.__main__ import _parse_hostport
+
+        assert _parse_hostport(None, None, "[::1]") == ("::1", 5061)
+
+    def test_parse_hostport__ipv6_unclosed_bracket(self):
+        """Raise BadParameter when the IPv6 bracket is not closed."""
+        import click
+        from voip.__main__ import _parse_hostport
+
+        with pytest.raises(click.BadParameter):
+            _parse_hostport(None, None, "[::1:5061")
+
+    def test_parse_hostport__ipv6_invalid_port(self):
+        """Raise BadParameter when the port after the IPv6 bracket is not an integer."""
+        import click
+        from voip.__main__ import _parse_hostport
+
+        with pytest.raises(click.BadParameter):
+            _parse_hostport(None, None, "[::1]:notaport")
+
+    def test_parse_hostport__ipv6_missing_colon_after_bracket(self):
+        """Raise BadParameter when ']' is not followed by ':' or end of string."""
+        import click
+        from voip.__main__ import _parse_hostport
+
+        with pytest.raises(click.BadParameter):
+            _parse_hostport(None, None, "[::1]garbage")
 
 
 class TestParseStunServer:

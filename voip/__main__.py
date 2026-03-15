@@ -29,7 +29,10 @@ SIP_TLS_PORT = 5061
 def _parse_aor(value: str) -> tuple[str, str, str, int | None]:
     """Parse a SIP URI into `(scheme, user, host, port)`.
 
-    The port is `None` when not present in the URI.
+    The port is `None` when not present in the URI.  IPv6 addresses in the
+    host part must be enclosed in square brackets per RFC 2732, e.g.
+    ``sip:alice@[::1]:5060``; the returned host is the bare address without
+    brackets.
 
     Examples:
     ```
@@ -37,6 +40,8 @@ def _parse_aor(value: str) -> tuple[str, str, str, int | None]:
     ('sip', 'alice', 'example.com', None)
     >>> _parse_aor("sips:+15551234567@carrier.com:5061")
     ('sips', '+15551234567', 'carrier.com', 5061)
+    >>> _parse_aor("sip:alice@[::1]:5060")
+    ('sip', 'alice', '::1', 5060)
     ```
 
     Args:
@@ -56,17 +61,31 @@ def _parse_aor(value: str) -> tuple[str, str, str, int | None]:
     user_part, _, hostport = rest.partition("@")
     if not hostport:
         raise click.BadParameter(f"Invalid SIP URI: {value!r}. Missing user@host part.")
-    host, _, port_str = hostport.partition(":")
-    if not host:
-        raise click.BadParameter(f"Invalid SIP URI: {value!r}. Missing host.")
-    port: int | None = int(port_str) if port_str else None
+    if hostport.startswith("["):
+        bracket_end = hostport.find("]")
+        if bracket_end == -1:
+            raise click.BadParameter(
+                f"Invalid SIP URI: {value!r}. Unclosed bracket in IPv6 address."
+            )
+        host = hostport[1:bracket_end]
+        remainder = hostport[bracket_end + 1 :]
+        port_str = remainder.removeprefix(":")
+        port: int | None = int(port_str) if port_str else None
+    else:
+        host, _, port_str = hostport.partition(":")
+        if not host:
+            raise click.BadParameter(f"Invalid SIP URI: {value!r}. Missing host.")
+        port = int(port_str) if port_str else None
     return scheme, user_part, host, port
 
 
 def _parse_hostport(
     ctx, param, value: str, default_port: int = 5061
 ) -> tuple[str, int]:
-    """Parse `HOST[:PORT]` into a `(host, port)` tuple.
+    """Parse `HOST[:PORT]` or `[IPv6HOST][:PORT]` into a `(host, port)` tuple.
+
+    IPv6 addresses must be enclosed in square brackets per RFC 2732, e.g.
+    ``[::1]:5061``.  The returned host is the bare address without brackets.
 
     Args:
         ctx: Click context.
@@ -80,6 +99,26 @@ def _parse_hostport(
     Raises:
         click.BadParameter: When port is invalid.
     """
+    if value.startswith("["):
+        bracket_end = value.find("]")
+        if bracket_end == -1:
+            raise click.BadParameter(
+                f"Unclosed bracket in IPv6 address: {value!r}.", param=param
+            )
+        host = value[1:bracket_end]
+        remainder = value[bracket_end + 1 :]
+        if not remainder:
+            return host, default_port
+        if not remainder.startswith(":"):
+            raise click.BadParameter(
+                f"Expected ':port' after ']' in {value!r}.", param=param
+            )
+        try:
+            return host, int(remainder[1:])
+        except ValueError:
+            raise click.BadParameter(
+                f"Invalid port in {value!r}.", param=param
+            ) from None
     host, _, port_str = value.rpartition(":")
     if not host:
         return value, default_port

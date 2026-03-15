@@ -10,6 +10,7 @@ import asyncio
 import collections
 import dataclasses
 import hashlib
+import ipaddress
 import json
 import logging
 import re
@@ -36,6 +37,36 @@ from .types import CallerID, DigestAlgorithm, DigestQoP, Status
 logger = logging.getLogger("voip.sip")
 
 __all__ = ["RegistrationError", "SIP", "SessionInitiationProtocol"]
+
+
+def _is_ipv6_address(host: str) -> bool:
+    """Return ``True`` when *host* is a bare IPv6 address string.
+
+    Args:
+        host: Host string to test (without surrounding brackets).
+
+    Returns:
+        ``True`` for IPv6 addresses, ``False`` for IPv4 and hostnames.
+    """
+    try:
+        return isinstance(ipaddress.ip_address(host), ipaddress.IPv6Address)
+    except ValueError:
+        return False
+
+
+def _format_host(host: str) -> str:
+    """Return *host* wrapped in brackets when it is an IPv6 address.
+
+    RFC 3261 §19.1.1 and RFC 2732 require IPv6 addresses in SIP URIs and
+    Via/Contact headers to be enclosed in square brackets.
+
+    Args:
+        host: Bare host string (IP address or hostname).
+
+    Returns:
+        ``[host]`` for IPv6 addresses, *host* unchanged otherwise.
+    """
+    return f"[{host}]" if _is_ipv6_address(host) else host
 
 
 class RegistrationError(Exception):
@@ -184,14 +215,17 @@ class SessionInitiationProtocol(asyncio.Protocol):
 
         Creates a dedicated UDP socket for RTP (with optional STUN discovery
         for NAT traversal) before sending REGISTER so the SDP answer can
-        advertise the correct public RTP address.
+        advertise the correct public RTP address.  When the SIP connection is
+        over IPv6, the RTP socket is bound to ``::`` so media can also flow
+        over IPv6.
         """
         loop = asyncio.get_running_loop()
+        rtp_bind = "::" if _is_ipv6_address(self.local_address[0]) else "0.0.0.0"  # noqa: S104
         self._rtp_transport, self._rtp_protocol = await loop.create_datagram_endpoint(
             lambda: RealtimeTransportProtocol(
                 stun_server_address=self.rtp_stun_server_address
             ),
-            local_addr=("0.0.0.0", 0),  # noqa: S104
+            local_addr=(rtp_bind, 0),
         )
         await self.register()
 
@@ -643,13 +677,13 @@ class SessionInitiationProtocol(asyncio.Protocol):
                         sess_id=sess_id,
                         sess_version=sess_id,
                         nettype="IN",
-                        addrtype="IP4",
+                        addrtype="IP6" if _is_ipv6_address(rtp_public[0]) else "IP4",
                         unicast_address=rtp_public[0],
                     ),
                     timings=[Timing(start_time=0, stop_time=0)],
                     connection=ConnectionData(
                         nettype="IN",
-                        addrtype="IP4",
+                        addrtype="IP6" if _is_ipv6_address(rtp_public[0]) else "IP4",
                         connection_address=rtp_public[0],
                     ),
                     media=[
@@ -689,7 +723,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 ``<scheme:host:port>``.
         """
         aor_scheme = self.aor.partition(":")[0]  # "sip" or "sips"
-        host_port = f"{self.local_address[0]}:{self.local_address[1]}"
+        host_port = f"{_format_host(self.local_address[0])}:{self.local_address[1]}"
         addr = f"{user}@{host_port}" if user else host_port
         if aor_scheme == "sips":
             return f"<sips:{addr}>"
@@ -839,7 +873,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
         aor_rest = self.aor.partition(":")[2] if self.aor else ""
         user = aor_rest.partition("@")[0] if "@" in aor_rest else aor_rest
         headers = {
-            "Via": f"SIP/2.0/{'TLS' if self._is_tls else 'TCP'} {self.local_address[0]}:{self.local_address[1]};rport;branch={branch}",
+            "Via": f"SIP/2.0/{'TLS' if self._is_tls else 'TCP'} {_format_host(self.local_address[0])}:{self.local_address[1]};rport;branch={branch}",
             "From": self.aor,
             "To": self.aor,
             "Call-ID": self.call_id,

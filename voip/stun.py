@@ -31,6 +31,48 @@ class STUNAttributeType(enum.IntEnum):
     XOR_MAPPED_ADDRESS = 0x0020
 
 
+def _parse_address(value: bytes, xor_key: bytes) -> tuple[str, int] | None:
+    """Decode a STUN MAPPED-ADDRESS or XOR-MAPPED-ADDRESS attribute value.
+
+    When *xor_key* is non-empty the port and address bytes are XORed with
+    the key per RFC 5389 §15.2; pass an empty byte string for plain
+    MAPPED-ADDRESS attributes.
+
+    Args:
+        value: Raw attribute value bytes (everything after the type/length TLV header).
+        xor_key: XOR key bytes — ``MAGIC_COOKIE (4 bytes) || transaction_id (12 bytes)``
+            for XOR-MAPPED-ADDRESS, or empty bytes for plain MAPPED-ADDRESS.
+
+    Returns:
+        ``(ip_address_string, port)`` on success, ``None`` when *value* is
+        too short or the address family is unrecognised.
+    """
+    if len(value) < 4:
+        return None
+    family = value[1]
+    raw_port = struct.unpack(">H", value[2:4])[0]
+    port = raw_port ^ (MAGIC_COOKIE >> 16) if xor_key else raw_port
+    match family:
+        case 0x01 if len(value) >= 8:  # IPv4
+            raw_ip = value[4:8]
+            ip_bytes = (
+                bytes(a ^ b for a, b in zip(raw_ip, xor_key[:4], strict=False))
+                if xor_key
+                else raw_ip
+            )
+            return socket.inet_ntoa(ip_bytes), port
+        case 0x02 if len(value) >= 20:  # IPv6
+            raw_ip = value[4:20]
+            ip_bytes = (
+                bytes(a ^ b for a, b in zip(raw_ip, xor_key, strict=False))
+                if xor_key
+                else raw_ip
+            )
+            return socket.inet_ntop(socket.AF_INET6, ip_bytes), port
+        case _:
+            return None
+
+
 @dataclasses.dataclass(kw_only=True, slots=True)
 class STUNProtocol(asyncio.DatagramProtocol):
     """
@@ -179,28 +221,17 @@ class STUNProtocol(asyncio.DatagramProtocol):
         offset = 20
         xor_mapped: tuple[str, int] | None = None
         mapped: tuple[str, int] | None = None
+        xor_key = struct.pack(">I", MAGIC_COOKIE) + response_tid
         while offset + 4 <= len(data):
             attribute_type, attribute_len = struct.unpack(
                 ">HH", data[offset : offset + 4]
             )
             attribute_value = data[offset + 4 : offset + 4 + attribute_len]
-            if (
-                attribute_type == STUNAttributeType.XOR_MAPPED_ADDRESS
-                and len(attribute_value) >= 8
-                and attribute_value[1] == 0x01  # IPv4
-            ):
-                port = struct.unpack(">H", attribute_value[2:4])[0] ^ (
-                    MAGIC_COOKIE >> 16
-                )
-                ip_int = struct.unpack(">I", attribute_value[4:8])[0] ^ MAGIC_COOKIE
-                xor_mapped = (socket.inet_ntoa(struct.pack(">I", ip_int)), port)
-            elif (
-                attribute_type == STUNAttributeType.MAPPED_ADDRESS
-                and len(attribute_value) >= 8
-                and attribute_value[1] == 0x01  # IPv4
-            ):
-                port = struct.unpack(">H", attribute_value[2:4])[0]
-                mapped = (socket.inet_ntoa(attribute_value[4:8]), port)
+            match attribute_type:
+                case STUNAttributeType.XOR_MAPPED_ADDRESS:
+                    xor_mapped = _parse_address(attribute_value, xor_key)
+                case STUNAttributeType.MAPPED_ADDRESS:
+                    mapped = _parse_address(attribute_value, b"")
             offset += 4 + ((attribute_len + 3) & ~3)  # 4-byte aligned
         result = xor_mapped or mapped
         if result:
