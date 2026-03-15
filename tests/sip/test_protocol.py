@@ -17,8 +17,7 @@ from voip.sip.protocol import (
     SessionInitiationProtocol,
     _mask_caller,
 )
-from voip.sip.types import CallerID
-from voip.types import DigestAlgorithm
+from voip.sip.types import CallerID, DigestAlgorithm
 
 INVITE_WITH_PCMA = (
     b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"

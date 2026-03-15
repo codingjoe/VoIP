@@ -30,10 +30,9 @@ from voip.sdp.types import (
     Timing,
 )
 from voip.srtp import SRTPSession
-from voip.types import DigestAlgorithm, DigestQoP
 
 from .messages import Message, Request, Response
-from .types import CallerID, Status
+from .types import CallerID, DigestAlgorithm, DigestQoP, Status
 
 logger = logging.getLogger("voip.sip")
 
