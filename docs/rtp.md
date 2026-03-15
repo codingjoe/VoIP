@@ -5,3 +5,7 @@
 ## Encryption
 
 ::: voip.srtp
+
+## NAT Traversal
+
+::: voip.stun

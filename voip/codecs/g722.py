@@ -25,8 +25,8 @@ class G722(PyAVCodec):
     16 000 Hz, the RTP timestamp clock runs at 8 000 Hz per RFC 3551 —
     a well-known quirk of the original specification.
 
-    [`packetize`][voip.codecs.g722.G722.packetize] encodes the entire buffer
-    at once to preserve the ADPCM predictor state across packet boundaries.
+    The entire buffer is encoded at once to preserve the ADPCM predictor
+    state across packet boundaries.
 
     [RFC 3551 §4.5.2]: https://datatracker.ietf.org/doc/html/rfc3551#section-4.5.2
     """

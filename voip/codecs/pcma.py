@@ -26,9 +26,7 @@ class PCMA(RTPCodec):
     PCMA is the ITU-T G.711 A-law logarithmic companding codec for PSTN
     telephony, standardised in RFC 3551 with static payload type 8.
 
-    Both [`encode`][voip.codecs.pcma.PCMA.encode] and
-    [`decode`][voip.codecs.pcma.PCMA.decode] are pure-NumPy and require no
-    PyAV dependency.
+    Both encode and decode are pure-NumPy and require no PyAV dependency.
 
     [RFC 3551 §4.5.14]: https://datatracker.ietf.org/doc/html/rfc3551#section-4.5.14
     """

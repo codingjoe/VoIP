@@ -25,9 +25,7 @@ class PCMU(RTPCodec):
     PCMU is the ITU-T G.711 mu-law logarithmic companding codec for PSTN
     telephony, standardised in RFC 3551 with static payload type 0.
 
-    Both [`encode`][voip.codecs.pcmu.PCMU.encode] and
-    [`decode`][voip.codecs.pcmu.PCMU.decode] are pure-NumPy and require no
-    PyAV dependency.
+    Both encode and decode are pure-NumPy and require no PyAV dependency.
 
     [RFC 3551 §4.5.14]: https://datatracker.ietf.org/doc/html/rfc3551#section-4.5.14
     """
