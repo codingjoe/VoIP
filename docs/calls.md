@@ -6,6 +6,10 @@
 
 ::: voip.audio.AudioCall
 
+## Voice Activity Detection
+
+::: voip.audio.VoiceActivityCall
+
 ## Echo Call
 
 ::: voip.audio.EchoCall

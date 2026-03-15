@@ -271,6 +271,60 @@ async def _connect_sip(
 
 
 @sip.command()
+@click.pass_context
+def echo(ctx):
+    r"""Register with a SIP carrier and echo caller speech back.
+
+    Buffers incoming speech and replays it to the caller after sustained
+    silence is detected.  Useful for testing end-to-end audio latency and
+    call-flow debugging.
+
+    \b
+    Transport selection (overridable with --no-tls):
+      sips: URI or port 5061  →  TLS (default)
+      sip:  URI or port 5060  →  plain TCP
+
+    \b
+    Examples:
+      voip sip sips:alice@sip.example.com --password secret echo
+      voip sip sip:alice@sip.example.com:5060 --password secret echo
+    """
+    from voip.sip.protocol import SIP
+
+    from .audio import EchoCall  # noqa: PLC0415
+
+    obj = ctx.obj
+    proxy_addr = obj["proxy_addr"]
+    verbose = obj.get("verbose", 0)
+
+    bases = (ConsoleMessageProcessor, SIP) if verbose >= 3 else (SIP,)
+
+    class EchoSession(*bases):
+        def call_received(self, request) -> None:
+            self.ringing(request=request)
+            asyncio.create_task(self.answer(request=request, call_class=EchoCall))
+
+    async def run():
+        await _connect_sip(
+            lambda: EchoSession(
+                outbound_proxy=proxy_addr,
+                aor=obj["aor"],
+                username=obj["username"],
+                password=obj["password"],
+                rtp_stun_server_address=obj["stun_server"],
+            ),
+            proxy_addr,
+            obj["use_tls"],
+            obj["no_verify_tls"],
+        )
+
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        pass
+
+
+@sip.command()
 @click.option(
     "--model",
     default="tiny",

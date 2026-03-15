@@ -10,7 +10,7 @@ import pytest
 np = pytest.importorskip("numpy")
 av = pytest.importorskip("av")
 
-from voip.audio import AudioCall, EchoCall  # noqa: E402
+from voip.audio import AudioCall, EchoCall, VoiceActivityCall  # noqa: E402
 from voip.codecs.g722 import G722  # noqa: E402
 from voip.codecs.opus import Opus  # noqa: E402
 from voip.codecs.pcma import PCMA  # noqa: E402
@@ -462,93 +462,129 @@ def make_echo_call(**kwargs) -> EchoCall:
     return EchoCall(**defaults)
 
 
-class TestEchoCall:
-    """Tests for EchoCall VAD-based echo playback."""
+def make_vac_call(**kwargs) -> VoiceActivityCall:
+    """Create a VoiceActivityCall with mock rtp/sip for unit testing."""
+    defaults: dict = {
+        "rtp": MagicMock(spec=RealtimeTransportProtocol),
+        "sip": MagicMock(),
+        "media": PCMU_MEDIA,
+        "caller": CallerID(""),
+    }
+    defaults.update(kwargs)
+    return VoiceActivityCall(**defaults)
 
-    def test_echo_call__is_audio_call(self):
-        """EchoCall is a subclass of AudioCall."""
-        assert issubclass(EchoCall, AudioCall)
+
+class TestVoiceActivityCall:
+    """Tests for the shared VAD infrastructure in VoiceActivityCall."""
+
+    def test_voice_activity_call__is_audio_call(self):
+        """VoiceActivityCall is a subclass of AudioCall."""
+        assert issubclass(VoiceActivityCall, AudioCall)
+
+    def test_collect_audio__returns_true_for_speech(self):
+        """collect_audio returns True when RMS exceeds speech_threshold."""
+        call = make_vac_call()
+        assert call.collect_audio(np.ones(160, dtype=np.float32), rms=1.0) is True
+
+    def test_collect_audio__returns_false_for_silence(self):
+        """collect_audio returns False when RMS is at or below speech_threshold."""
+        call = make_vac_call()
+        assert call.collect_audio(np.zeros(160, dtype=np.float32), rms=0.0) is False
 
     def test_audio_received__buffers_speech_frames(self):
         """audio_received buffers frames with RMS above speech_threshold."""
-        call = make_echo_call()
-        audio = np.ones(160, dtype=np.float32)
-        call.audio_received(audio=audio, rms=1.0)
+        call = make_vac_call()
+        call.audio_received(audio=np.ones(160, dtype=np.float32), rms=1.0)
         assert len(call.speech_buffer) == 1
 
     def test_audio_received__does_not_buffer_silence_frames(self):
         """audio_received skips frames with RMS at or below speech_threshold."""
-        call = make_echo_call()
+        call = make_vac_call()
         call.audio_received(audio=np.zeros(160, dtype=np.float32), rms=0.0)
         assert len(call.speech_buffer) == 0
 
-    def test_on_audio_speech__cancels_echo_timer(self):
-        """on_audio_speech cancels a running echo timer."""
-        call = make_echo_call()
+    def test_on_audio_speech__cancels_silence_timer(self):
+        """on_audio_speech cancels a running silence timer."""
+        call = make_vac_call()
         handle = MagicMock()
-        call.echo_handle = handle
+        call.silence_handle = handle
         call.on_audio_speech()
         handle.cancel.assert_called_once()
-        assert call.echo_handle is None
+        assert call.silence_handle is None
 
     def test_on_audio_speech__noop_when_no_timer(self):
-        """on_audio_speech does nothing when no echo timer is running."""
-        call = make_echo_call()
+        """on_audio_speech does nothing when no silence timer is running."""
+        call = make_vac_call()
         call.on_audio_speech()  # must not raise
-        assert call.echo_handle is None
+        assert call.silence_handle is None
 
     @pytest.mark.asyncio
     async def test_on_audio_silence__arms_timer_when_buffer_has_speech(self):
-        """on_audio_silence schedules the echo timer when speech is buffered."""
-        call = make_echo_call()
+        """on_audio_silence schedules the silence timer when speech is buffered."""
+        call = make_vac_call()
         call.speech_buffer.append(np.ones(160, dtype=np.float32))
         call.on_audio_silence()
-        assert call.echo_handle is not None
-        call.echo_handle.cancel()
+        assert call.silence_handle is not None
+        call.silence_handle.cancel()
 
     @pytest.mark.asyncio
     async def test_on_audio_silence__noop_when_buffer_is_empty(self):
         """on_audio_silence does not schedule a timer when no speech is buffered."""
-        call = make_echo_call()
+        call = make_vac_call()
         call.on_audio_silence()
-        assert call.echo_handle is None
+        assert call.silence_handle is None
 
     @pytest.mark.asyncio
     async def test_on_audio_silence__noop_when_timer_already_running(self):
-        """on_audio_silence does not replace a running echo timer."""
-        call = make_echo_call()
+        """on_audio_silence does not replace a running silence timer."""
+        call = make_vac_call()
         call.speech_buffer.append(np.ones(160, dtype=np.float32))
         call.on_audio_silence()
-        first_handle = call.echo_handle
+        first_handle = call.silence_handle
         call.on_audio_silence()
-        assert call.echo_handle is first_handle
-        call.echo_handle.cancel()
+        assert call.silence_handle is first_handle
+        call.silence_handle.cancel()
 
     @pytest.mark.asyncio
-    async def test_flush_speech_buffer__resets_handle_and_schedules_echo(self):
-        """flush_speech_buffer clears the buffer and schedules echo playback."""
-        call = make_echo_call()
+    async def test_flush_speech_buffer__resets_handle_and_schedules_ready(self):
+        """flush_speech_buffer clears the buffer and schedules speech_buffer_ready."""
+        call = make_vac_call()
         call.speech_buffer.append(np.ones(160, dtype=np.float32))
-        with patch.object(call, "echo", new_callable=AsyncMock) as mock_echo:
+        with patch.object(call, "speech_buffer_ready", new_callable=AsyncMock) as mock_ready:
             call.flush_speech_buffer()
             await asyncio.sleep(0)
-        assert call.echo_handle is None
+        assert call.silence_handle is None
         assert len(call.speech_buffer) == 0
-        mock_echo.assert_awaited_once()
+        mock_ready.assert_awaited_once()
 
     def test_flush_speech_buffer__noop_when_buffer_empty(self):
         """flush_speech_buffer does nothing when no speech is buffered."""
-        call = make_echo_call()
-        call.flush_speech_buffer()  # must not raise or create a task
-        assert call.echo_handle is None
+        call = make_vac_call()
+        with patch("voip.audio.asyncio.create_task") as mock_ct:
+            call.flush_speech_buffer()
+        mock_ct.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_echo__sends_resampled_audio(self):
-        """echo resamples from RESAMPLING_RATE_HZ to codec rate and sends via RTP."""
+    async def test_speech_buffer_ready__noop_in_base(self):
+        """speech_buffer_ready is a no-op in the base VoiceActivityCall."""
+        call = make_vac_call()
+        await call.speech_buffer_ready(np.zeros(160, dtype=np.float32))  # must not raise
+
+
+class TestEchoCall:
+    """Tests for EchoCall speech echo playback."""
+
+    def test_echo_call__is_voice_activity_call(self):
+        """EchoCall is a subclass of VoiceActivityCall."""
+        assert issubclass(EchoCall, VoiceActivityCall)
+
+    @pytest.mark.asyncio
+    async def test_speech_buffer_ready__sends_resampled_audio(self):
+        """speech_buffer_ready resamples from RESAMPLING_RATE_HZ to codec rate and sends via RTP."""
         call = make_echo_call(media=PCMU_MEDIA)
         audio = np.ones(160, dtype=np.float32)
         with patch.object(call, "send_rtp_audio", new_callable=AsyncMock) as mock_send:
-            await call.echo(audio)
+            await call.speech_buffer_ready(audio)
         mock_send.assert_awaited_once()
         sent_audio = mock_send.call_args[0][0]
         # PCMU sample_rate_hz == 8000; RESAMPLING_RATE_HZ == 16000 → half length
