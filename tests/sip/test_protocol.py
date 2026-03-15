@@ -6,8 +6,7 @@ import hashlib
 from unittest.mock import MagicMock
 
 import pytest
-from voip.call import Call
-from voip.rtp import RealtimeTransportProtocol
+from voip.rtp import RealtimeTransportProtocol, RTPCall
 from voip.sdp.messages import SessionDescription
 from voip.sdp.types import Timing
 from voip.sip.messages import Message, Request, Response
@@ -17,8 +16,7 @@ from voip.sip.protocol import (
     SessionInitiationProtocol,
     _mask_caller,
 )
-from voip.sip.types import CallerID
-from voip.types import DigestAlgorithm
+from voip.sip.types import CallerID, DigestAlgorithm
 
 INVITE_WITH_PCMA = (
     b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
@@ -664,7 +662,7 @@ class TestAnswer:
         invite = self._make_invite("no-addr-answer-1")
 
         with caplog.at_level("ERROR"):
-            await protocol._answer(invite, Call)
+            await protocol._answer(invite, RTPCall)
         assert "No pending INVITE found" in caplog.text
         assert not protocol._sent_responses
 
@@ -970,7 +968,7 @@ def make_mock_transport(
 
 
 @dataclasses.dataclass
-class _MinimalCall(Call):
+class _MinimalCall(RTPCall):
     """Minimal Call subclass for SIP protocol tests that require codec negotiation."""
 
     @classmethod
@@ -986,7 +984,7 @@ class _MinimalCall(Call):
 
 
 @dataclasses.dataclass
-class _CodecAwareCall(Call):
+class _CodecAwareCall(RTPCall):
     """Call subclass that performs real codec negotiation for SIP answer tests.
 
     Mirrors AudioCall.PREFERRED_CODECS without importing voip.audio.
@@ -1118,7 +1116,7 @@ class TestSIPProtocol:
         protocol._rtp_transport = mock_rtp_transport
         request = make_invite()
         protocol._pending_invites.add(request.headers["Call-ID"])
-        await protocol._answer(request, Call)
+        await protocol._answer(request, RTPCall)
         assert len(protocol._sent) == 1
         response, _ = protocol._sent[0]
         assert response.status_code == 200
@@ -1139,7 +1137,7 @@ class TestSIPProtocol:
         protocol._rtp_transport = mock_rtp_transport
         request = make_invite()
         protocol._pending_invites.add(request.headers["Call-ID"])
-        await protocol._answer(request, Call)
+        await protocol._answer(request, RTPCall)
         response, _ = protocol._sent[0]
         assert b"m=audio" in bytes(response.body)
         assert b"RTP/SAVP 0" in bytes(response.body)
@@ -1249,7 +1247,7 @@ class TestSIPProtocol:
         protocol._rtp_transport = mock_rtp_transport
         request = make_invite()
         protocol._pending_invites.add(request.headers["Call-ID"])
-        await protocol._answer(request, Call)
+        await protocol._answer(request, RTPCall)
         response, _ = protocol._sent[0]
         assert response.headers["Via"] == "SIP/2.0/UDP pc33.atlanta.com"
         assert response.headers["To"] == "sip:alice@atlanta.com"
@@ -1262,7 +1260,7 @@ class TestSIPProtocol:
         created: list[str] = []
 
         @dataclasses.dataclass
-        class MyCall(Call):
+        class MyCall(RTPCall):
             def __post_init__(self) -> None:
                 created.append(str(self.caller))
 
@@ -1283,14 +1281,15 @@ class TestSIPProtocol:
         assert created == ["sip:bob@biloxi.com"]
 
     async def test_answer__rtp_receives_audio(self):
-        """Deliver SRTP payloads to the call handler's datagram_received (decrypted)."""
+        """Deliver SRTP payloads to the call handler's packet_received (decrypted)."""
+        from voip.rtp import RTPPacket  # noqa: PLC0415
+
         received_payloads: list[bytes] = []
 
         @dataclasses.dataclass
-        class DatagramCapture(Call):
-            def datagram_received(self, data: bytes, addr) -> None:
-                # RTP fixed header is 12 bytes; extract raw payload.
-                received_payloads.append(data[12:])
+        class PacketCapture(RTPCall):
+            def packet_received(self, packet: RTPPacket, addr) -> None:
+                received_payloads.append(packet.payload)
 
         loop = asyncio.get_running_loop()
         protocol = self._CapturingSIP()
@@ -1305,7 +1304,7 @@ class TestSIPProtocol:
         request = make_invite()
         protocol._pending_invites.add(request.headers["Call-ID"])
         try:
-            await protocol._answer(request, DatagramCapture)
+            await protocol._answer(request, PacketCapture)
             response, _ = protocol._sent[0]
             sdp_line = next(
                 line
@@ -1330,13 +1329,15 @@ class TestSIPProtocol:
             rtp_transport.close()
 
     async def test_answer__rtp_receives_multiple_packets(self):
-        """Call datagram_received for each SRTP packet that arrives (decrypted)."""
+        """Call packet_received for each SRTP packet that arrives (decrypted)."""
+        from voip.rtp import RTPPacket  # noqa: PLC0415
+
         received_payloads: list[bytes] = []
 
         @dataclasses.dataclass
-        class DatagramCapture(Call):
-            def datagram_received(self, data: bytes, addr) -> None:
-                received_payloads.append(data[12:])
+        class PacketCapture(RTPCall):
+            def packet_received(self, packet: RTPPacket, addr) -> None:
+                received_payloads.append(packet.payload)
 
         loop = asyncio.get_running_loop()
         protocol = self._CapturingSIP()
@@ -1351,7 +1352,7 @@ class TestSIPProtocol:
         request = make_invite()
         protocol._pending_invites.add(request.headers["Call-ID"])
         try:
-            await protocol._answer(request, DatagramCapture)
+            await protocol._answer(request, PacketCapture)
             response, _ = protocol._sent[0]
             sdp_line = next(
                 line
@@ -1390,7 +1391,7 @@ class TestSIPProtocol:
         protocol._rtp_transport = mock_rtp_transport
         request = make_invite()
         protocol._pending_invites.add(request.headers["Call-ID"])
-        await protocol._answer(request, Call)
+        await protocol._answer(request, RTPCall)
         response, _ = protocol._sent[0]
         serialized = bytes(response)
         parsed = Message.parse(serialized)
@@ -1472,7 +1473,7 @@ class TestSIPProtocol:
         request = make_invite()
         protocol._pending_invites.add(request.headers["Call-ID"])
         try:
-            await protocol._answer(request, Call)
+            await protocol._answer(request, RTPCall)
             assert None in mux.calls
 
             bye = Request(
@@ -1509,7 +1510,7 @@ class TestSIPProtocol:
         request = make_invite()
         protocol._pending_invites.add(request.headers["Call-ID"])
         with caplog.at_level(logging.INFO, logger="voip.sip"):
-            await protocol._answer(request, Call)
+            await protocol._answer(request, RTPCall)
         assert any("call_answered" in r.message for r in caplog.records)
 
     def test_reject__sends_busy_here_by_default(self):
@@ -1827,7 +1828,7 @@ class TestRegistration:
         import re
 
         p = make_register_session()
-        p.local_address = ("192.0.2.10", 5061)
+        p.local_address = "192.0.2.10", 5061
         transport = make_mock_transport("192.0.2.10", 5061)
         p.transport = transport
         p._is_tls = True

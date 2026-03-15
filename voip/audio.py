@@ -1,11 +1,12 @@
-"""Audio call handler and Whisper-based transcription for RTP streams.
+"""Audio call handler for RTP streams.
 
 This module provides :class:`AudioCall`, which buffers RTP packets, negotiates
 codecs, and decodes raw audio payloads (Opus, G.722, PCMA, PCMU) to float32
-PCM via PyAV.  :class:`WhisperCall` extends it to transcribe decoded audio
-with OpenAI Whisper, keeping transcription concerns separate from codec work.
+PCM via PyAV, and re-encodes float32 PCM for outbound transmission.
 
 Requires the ``audio`` extra: ``pip install voip[audio]``.
+AI-powered subclasses (Whisper transcription, Ollama agent) live in
+:mod:`voip.ai` and require the ``ai`` extra.
 """
 
 from __future__ import annotations
@@ -16,18 +17,19 @@ import io
 import json
 import logging
 import os
+import secrets
 import struct
-from typing import ClassVar
+from collections.abc import Iterator
+from typing import ClassVar, cast
 
 import av
+import av.audio.resampler
 import numpy as np
-from faster_whisper import WhisperModel
 
-from voip.call import Call
-from voip.rtp import RTPPacket, RTPPayloadType
+from voip.rtp import RTPCall, RTPPacket, RTPPayloadType
 from voip.sdp.types import MediaDescription, RTPPayloadFormat
 
-__all__ = ["AudioCall", "WhisperCall"]
+__all__ = ["AudioCall"]
 
 #: Native sample rate expected by Whisper models.
 SAMPLE_RATE = 16000
@@ -75,7 +77,7 @@ def _ogg_page(
     return page[:22] + struct.pack("<I", _ogg_crc32(page)) + page[26:]
 
 
-def _build_ogg_opus(packets: list[bytes]) -> bytes:
+def _build_ogg_opus(packet: bytes) -> bytes:
     """Wrap raw Opus RTP payloads in a minimal Ogg Opus container.
 
     Opus always uses 48000 Hz internally (RFC 7587 §4), so no sample-rate
@@ -102,43 +104,14 @@ def _build_ogg_opus(packets: list[bytes]) -> bytes:
     pages = [
         _ogg_page(0x02, 0, serial_number, 0, [opus_head]),  # BOS
         _ogg_page(0x00, 0, serial_number, 1, [opus_tags]),
+        _ogg_page(0x04, 0, serial_number, 2, [packet]),
     ]
-    granule = 0
-    packets_per_page = 50
-    for index, batch_start in enumerate(range(0, len(packets), packets_per_page)):
-        batch = packets[batch_start : batch_start + packets_per_page]
-        granule += 960 * len(batch)
-        is_last = batch_start + packets_per_page >= len(packets)
-        header_type = 0x04 if is_last else 0x00  # EOS flag on last page
-        pages.append(_ogg_page(header_type, granule, serial_number, index + 2, batch))
     return b"".join(pages)
 
 
 @dataclasses.dataclass
-class AudioCall(Call):
-    """RTP call handler with audio buffering, codec negotiation, and decoding.
-
-    Buffers incoming RTP packets and, when :attr:`chunk_duration` seconds of
-    audio have been accumulated, decodes them to a float32 PCM array and
-    delivers the result to :meth:`audio_received`.
-
-    Subclass and override :meth:`audio_received` to process decoded audio::
-
-        class MyCall(AudioCall):
-            def audio_received(self, audio: np.ndarray) -> None:
-                save_to_disk(audio)
-
-    Override :attr:`PREFERRED_CODECS` to change the codec priority list, or
-    :attr:`chunk_duration` to change the buffering window.
-
-    Attributes:
-        chunk_duration: Seconds of audio to buffer (class var; ``0`` = per-packet).
-        PREFERRED_CODECS: Codec priority list for :meth:`negotiate_codec`.
-    """
-
-    #: Seconds of audio to buffer before emitting :meth:`audio_received`.
-    #: ``0`` (default) emits one event per RTP packet.
-    chunk_duration: ClassVar[int] = 0
+class AudioCall(RTPCall):
+    """RTP call handler with audio buffering, codec negotiation, decoding, and encoding."""
 
     #: Preferred codecs in priority order (highest first).
     PREFERRED_CODECS: ClassVar[list[RTPPayloadFormat]] = [
@@ -153,41 +126,67 @@ class AudioCall(Call):
         RTPPayloadFormat(payload_type=RTPPayloadType.PCMU),
     ]
 
+    _encoding_name: str = dataclasses.field(init=False, repr=False)
     _payload_type: int = dataclasses.field(init=False, default=0, repr=False)
     _sample_rate: int = dataclasses.field(init=False, default=8000, repr=False)
     _audio_buffer: list[bytes] = dataclasses.field(
         init=False, default_factory=list, repr=False
     )
-    _packet_threshold: int = dataclasses.field(init=False, default=1, repr=False)
+    #: Outbound RTP sequence counter.
+    _rtp_seq: int = dataclasses.field(init=False, repr=False, default=0)
+    #: Outbound RTP timestamp counter.
+    _rtp_ts: int = dataclasses.field(init=False, repr=False, default=0)
+    #: Outbound RTP synchronisation source identifier.
+    _rtp_ssrc: int = dataclasses.field(init=False, repr=False)
+    #: Audio sample rate for the negotiated outbound codec in Hz.
+    _rtp_sample_rate: int = dataclasses.field(init=False, repr=False)
+    #: PCM samples per 20 ms RTP packet at :attr:`_rtp_sample_rate`.
+    _rtp_chunk_samples: int = dataclasses.field(init=False, repr=False)
+    #: RTP timestamp increment per packet (clock-rate dependent).
+    _rtp_ts_increment: int = dataclasses.field(init=False, repr=False)
+    #: Wall-clock duration of one RTP packet in seconds (used for pacing).
+    _rtp_packet_duration: float = dataclasses.field(
+        init=False, repr=False, default=0.02
+    )
 
     def __post_init__(self) -> None:
-        frame_size = 160  # default for PCMU/PCMA (RFC 3551)
-        if self.media is not None and self.media.fmt:
-            fmt = self.media.fmt[0]
-            self._payload_type = fmt.payload_type
-            self._sample_rate = fmt.sample_rate or 8000
-            logger.info(
-                json.dumps(
-                    {
-                        "event": "call_started",
-                        "caller": repr(self.caller),
-                        "codec": fmt.encoding_name or "unknown",
-                        "sample_rate": fmt.sample_rate or 0,
-                        "channels": fmt.channels,
-                        "payload_type": fmt.payload_type,
-                    }
-                ),
-                extra={
+        fmt = self.media.fmt[0]
+        if fmt.encoding_name is None:
+            raise ValueError(f"No encoding name for payload type {fmt.payload_type}")
+        self._encoding_name = fmt.encoding_name.lower()
+        self._payload_type = fmt.payload_type
+        self._sample_rate = fmt.sample_rate or 8000
+        self._rtp_ssrc = secrets.randbits(32)
+        match self._encoding_name:
+            case "opus":
+                self._rtp_sample_rate = 48000
+                self._rtp_chunk_samples = 960
+                self._rtp_ts_increment = 960
+            case "g722":
+                # G.722 uses an 8 kHz RTP clock despite 16 kHz audio (RFC 3551 §4.5.2).
+                self._rtp_sample_rate = 16000
+                self._rtp_chunk_samples = 320
+                self._rtp_ts_increment = 160
+            case _:  # pcmu, pcma
+                self._rtp_sample_rate = 8000
+                self._rtp_chunk_samples = 160
+                self._rtp_ts_increment = 160
+        logger.info(
+            json.dumps(
+                {
+                    "event": "call_started",
                     "caller": repr(self.caller),
                     "codec": fmt.encoding_name,
+                    "sample_rate": fmt.sample_rate or 0,
+                    "channels": fmt.channels,
                     "payload_type": fmt.payload_type,
-                },
-            )
-            frame_size = fmt.frame_size
-        self._packet_threshold = (
-            self._sample_rate * self.chunk_duration // frame_size
-            if self.chunk_duration
-            else 1
+                }
+            ),
+            extra={
+                "caller": repr(self.caller),
+                "codec": fmt.encoding_name,
+                "payload_type": fmt.payload_type,
+            },
         )
 
     @property
@@ -233,6 +232,7 @@ class AudioCall(Call):
             for remote_fmt in remote_media.fmt:
                 if (
                     remote_fmt.encoding_name is not None
+                    and preferred.encoding_name is not None
                     and remote_fmt.encoding_name.lower()
                     == preferred.encoding_name.lower()
                 ):
@@ -249,73 +249,84 @@ class AudioCall(Call):
             f"Supported: {[c.encoding_name for c in cls.PREFERRED_CODECS]!r}"
         )
 
-    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
-        """Buffer *data* as an RTP packet; emit when the chunk threshold is reached."""
-        try:
-            packet = RTPPacket.parse(data)
-        except ValueError:
-            return
-        if not packet.payload:
-            return
-        self._audio_buffer.append(packet.payload)
-        while len(self._audio_buffer) >= self._packet_threshold:
-            batch = self._audio_buffer[: self._packet_threshold]
-            self._audio_buffer = self._audio_buffer[self._packet_threshold :]
-            asyncio.create_task(self._emit_audio(batch))
+    def packet_received(self, packet: RTPPacket, addr: tuple[str, int]) -> None:
+        """Schedule audio decoding and delivery for *packet*.
 
-    async def _emit_audio(self, raw_packets: list[bytes]) -> None:
+        Ignores packets with an empty payload.
+
+        Args:
+            packet: Parsed RTP packet.
+            addr: Remote ``(host, port)`` the packet arrived from.
+        """
+        if packet.payload:
+            asyncio.create_task(self._emit_audio(packet))
+
+    @staticmethod
+    def _estimate_payload_rms(payload: bytes) -> float:
+        """Estimate normalised RMS energy from a raw G.711 RTP payload.
+
+        G.711 codecs (PCMU/PCMA) encode silence as a fixed codeword, so speech
+        energy manifests as byte variance around that codeword.  Standard
+        deviation over the byte values, divided by 128, gives a normalised
+        proxy for RMS in the range ``[0, 1]`` that is suitable for thresholding.
+
+        Args:
+            payload: Raw RTP payload bytes from a G.711-encoded packet.
+
+        Returns:
+            Normalised energy estimate in ``[0, 1]``.
+        """
+        samples = np.frombuffer(payload, dtype=np.uint8).astype(np.float32)
+        return float(np.std(samples) / 128.0)
+
+    async def _emit_audio(self, packet: RTPPacket) -> None:
         """Decode *raw_packets* and call :meth:`audio_received` with the result."""
         loop = asyncio.get_running_loop()
-        audio = await loop.run_in_executor(None, self._decode_raw, raw_packets)
-        self.audio_received(audio)
+        audio = await loop.run_in_executor(None, self._decode_raw, packet.payload)
+        if audio.size > 0:
+            self.audio_received(
+                audio=audio, rms=self._estimate_payload_rms(packet.payload)
+            )
 
-    def _decode_raw(self, raw_packets: list[bytes]) -> np.ndarray:
+    def _decode_raw(self, packet: bytes) -> np.ndarray:
         """Decode raw RTP payloads to a float32 PCM array at :data:`SAMPLE_RATE` Hz.
 
         The codec is identified from the negotiated :attr:`media` encoding name.
 
         Args:
-            raw_packets: Raw RTP payload bytes for one buffered chunk.
+            packet: Raw RTP payload bytes for one buffered chunk.
 
         Returns:
             Float32 mono PCM array resampled to :data:`SAMPLE_RATE` Hz.
         """
-        encoding = (
-            self.media.fmt[0].encoding_name if self.media and self.media.fmt else ""
-        ) or ""
-        match encoding.lower():
+        match self._encoding_name:
             case "opus":
                 return self._decode_via_av(
-                    _build_ogg_opus(raw_packets),
+                    _build_ogg_opus(packet),
                     input_format="ogg",
                     input_sample_rate=None,
                 )
             case "g722":
                 return self._decode_via_av(
-                    b"".join(raw_packets),
+                    packet,
                     input_format="g722",
                     input_sample_rate=self.sample_rate,
                 )
             case "pcma":
                 return self._decode_via_av(
-                    b"".join(raw_packets),
+                    packet,
                     input_format="alaw",
                     input_sample_rate=self.sample_rate,
                 )
             case "pcmu":
                 return self._decode_via_av(
-                    b"".join(raw_packets),
+                    packet,
                     input_format="mulaw",
                     input_sample_rate=self.sample_rate,
                 )
             case _:
-                encoding_name = encoding or str(self._payload_type)
-                supported = [
-                    c.encoding_name for c in self.PREFERRED_CODECS if c.encoding_name
-                ]
                 raise NotImplementedError(
-                    f"Unsupported codec: {encoding_name!r}. "
-                    f"Supported: {', '.join(supported)}."
+                    f"Unsupported inbound codec: {self._encoding_name!r}"
                 )
 
     def _decode_via_av(
@@ -339,121 +350,242 @@ class AudioCall(Call):
             format="fltp", layout="mono", rate=SAMPLE_RATE
         )
         frames: list[np.ndarray] = []
-        try:
-            with av.open(
-                io.BytesIO(data),
-                format=input_format,
-                options=(
-                    {"sample_rate": str(input_sample_rate)}
-                    if input_sample_rate is not None
-                    else {}
-                ),
-            ) as container:
-                for frame in container.decode(audio=0):
-                    for resampled in resampler.resample(frame):
-                        frames.append(resampled.to_ndarray().flatten())
-            for resampled in resampler.resample(None):
-                frames.append(resampled.to_ndarray().flatten())
-        except av.AVError as exc:
-            raise RuntimeError(f"Audio decoding failed: {exc}") from exc
+        with av.open(
+            io.BytesIO(data),
+            mode="r",
+            format=input_format,
+            options=(
+                {"sample_rate": str(input_sample_rate)}
+                if input_sample_rate is not None
+                else {}
+            ),
+        ) as container:
+            for frame in container.decode(audio=0):
+                for resampled in resampler.resample(frame):
+                    frames.append(resampled.to_ndarray().flatten())
+        for resampled in resampler.resample(None):
+            frames.append(resampled.to_ndarray().flatten())
         return np.concatenate(frames) if frames else np.array([], dtype=np.float32)
 
-    def audio_received(self, audio: np.ndarray) -> None:
+    def audio_received(self, *, audio: np.ndarray, rms: float) -> None:
         """Handle decoded audio.  Override in subclasses.
 
         Args:
-            audio: Float32 mono PCM array at :data:`SAMPLE_RATE` Hz
-                (16 kHz) covering :attr:`chunk_duration` seconds of audio
-                (or one RTP packet when ``chunk_duration == 0``).
+            audio: Float32 mono PCM array at :data:`SAMPLE_RATE` Hz.
+            rms: Estimated root mean square of the raw RTP payload bytes, as a
+                proxy for signal strength.
         """
 
+    async def _send_rtp_audio(self, audio: np.ndarray) -> None:
+        """Encode *audio* with the negotiated codec and transmit to the caller via RTP.
 
-@dataclasses.dataclass
-class WhisperCall(AudioCall):
-    """RTP call handler that transcribes audio with OpenAI Whisper.
-
-    Audio is decoded by :class:`AudioCall` and delivered as float32 PCM to
-    :meth:`audio_received`, which schedules an async transcription job.
-    Override :meth:`transcription_received` to handle the resulting text::
-
-        class MySession(SessionInitiationProtocol):
-            def call_received(self, request: Request) -> None:
-                self.answer(request=request, call_class=WhisperCall)
-
-    To share one model instance across multiple calls (recommended to avoid
-    loading it multiple times) pass a pre-loaded :class:`~faster_whisper.WhisperModel`
-    as the *model* argument::
-
-        shared_model = WhisperModel("base")
-
-        class MyCall(WhisperCall):
-            model = shared_model
-    """
-
-    #: Audio buffered (in seconds) before each transcription is triggered.
-    chunk_duration: ClassVar[int] = 5
-
-    #: Whisper model.  Either a model name string (e.g. ``"base"``,
-    #: ``"small"``, ``"large-v3"``) that will be loaded on first use, or a
-    #: pre-loaded :class:`~faster_whisper.WhisperModel` instance.  Pass a
-    #: shared instance to avoid loading the model separately for each call.
-    model: str | WhisperModel = dataclasses.field(default="kyutai/stt-1b-en_fr-trfs")
-    #: Loaded Whisper model instance (not part of ``__init__``).
-    _whisper_model: WhisperModel = dataclasses.field(init=False, repr=False)
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        if isinstance(self.model, str):
-            logger.debug("Loading Whisper model %r", self.model)
-            self._whisper_model = WhisperModel(self.model)
-        else:
-            self._whisper_model = self.model
-
-    def audio_received(self, audio: np.ndarray) -> None:
-        """Schedule async transcription for a decoded audio chunk.
+        Looks up the caller's remote RTP address from the shared
+        :class:`~voip.rtp.RealtimeTransportProtocol` call registry and
+        transmits the encoded audio as 20 ms RTP packets, sleeping
+        :attr:`_rtp_packet_duration` seconds between each packet so that
+        packets arrive at the UAS at the correct real-time rate.
 
         Args:
-            audio: Float32 mono PCM array at :data:`SAMPLE_RATE` Hz.
+            audio: Float32 mono PCM at :attr:`_rtp_sample_rate` Hz.
         """
-        logger.debug(
-            "Audio received: %d samples (%.1f s)", len(audio), len(audio) / SAMPLE_RATE
+        remote_addr = next(
+            (addr for addr, call in self.rtp.calls.items() if call is self),
+            None,
         )
-        asyncio.create_task(self._transcribe(audio))
+        if remote_addr is None:
+            logger.warning("No remote RTP address for this call; dropping audio")
+            return
+        for payload in self._packetize(audio):
+            self.send_packet(self._next_rtp_packet(payload), remote_addr)
+            await asyncio.sleep(self._rtp_packet_duration)
 
-    async def _transcribe(self, audio: np.ndarray) -> None:
-        """Transcribe decoded audio and deliver the text."""
-        loop = asyncio.get_running_loop()
-        logger.debug(
-            "Transcribing %d samples (%.1f s)",
-            len(audio),
-            len(audio) / SAMPLE_RATE,
-        )
-        try:
-            text = await loop.run_in_executor(None, self._run_transcription, audio)
-            self.transcription_received(text.strip())
-        except asyncio.CancelledError:
-            logger.debug("Transcription task was cancelled", exc_info=True)
-            raise
-        except Exception:
-            logger.exception("Error while transcribing audio chunk")
+    def _packetize(self, audio: np.ndarray) -> Iterator[bytes]:
+        """Encode *audio* and yield one payload bytes object per 20 ms RTP packet.
 
-    def _run_transcription(self, audio: np.ndarray) -> str:
-        """Transcribe a float32 PCM array using the Whisper model.
+        G.722 is an ADPCM codec that maintains predictor state across samples.
+        Encoding the whole buffer at once preserves that state so the decoded
+        audio is continuous.  PCMU, PCMA, and Opus are stateless per-packet and
+        are encoded via :meth:`_encode_audio` one chunk at a time.
 
         Args:
-            audio: Float32 mono PCM array at :data:`SAMPLE_RATE` Hz.
+            audio: Float32 mono PCM at :attr:`_rtp_sample_rate` Hz.
+
+        Yields:
+            Encoded bytes ready to use as an RTP payload.
+        """
+        match self._encoding_name:
+            case "g722":
+                # Encode the whole buffer at once to preserve ADPCM predictor state.
+                # G.722 has a fixed 2:1 sample-to-byte ratio, so _rtp_chunk_samples
+                # (320) input samples map to 160 output bytes per packet.
+                encoded = self._encode_via_av(audio, "g722", self._rtp_sample_rate)
+                payload_size = self._rtp_chunk_samples // 2
+                for i in range(0, len(encoded), payload_size):
+                    yield encoded[i : i + payload_size]
+            case _:
+                for i in range(0, len(audio), self._rtp_chunk_samples):
+                    yield self._encode_audio(audio[i : i + self._rtp_chunk_samples])
+
+    def _next_rtp_packet(self, payload: bytes) -> RTPPacket:
+        """Create the next outbound RTP packet with incremented sequence and timestamp.
+
+        Args:
+            payload: Encoded audio payload bytes.
 
         Returns:
-            Concatenated transcription text from all segments.
+            RTP packet ready for transmission.
         """
-        segments, _ = self._whisper_model.transcribe(audio)
-        result = "".join(segment.text for segment in segments)
-        logger.debug("Transcription result: %r", result)
-        return result
+        packet = RTPPacket(
+            payload_type=self._payload_type,
+            sequence_number=self._rtp_seq & 0xFFFF,
+            timestamp=self._rtp_ts & 0xFFFFFFFF,
+            ssrc=self._rtp_ssrc,
+            payload=payload,
+        )
+        self._rtp_seq += 1
+        self._rtp_ts += self._rtp_ts_increment
+        return packet
 
-    def transcription_received(self, text: str) -> None:
-        """Handle a transcription result.  Override in subclasses.
+    def _encode_audio(self, samples: np.ndarray) -> bytes:
+        """Encode float32 PCM to the negotiated outbound codec's bytes.
+
+        Used for stateless per-packet encoding (PCMU, PCMA, Opus).  G.722 is
+        handled separately by :meth:`_packetize` which encodes the whole TTS
+        buffer at once to preserve the ADPCM predictor state.
 
         Args:
-            text: Transcribed text for this audio chunk.
+            samples: Float32 mono PCM array in the range ``[-1, 1]``.
+
+        Returns:
+            Encoded bytes for one RTP payload.
+
+        Raises:
+            NotImplementedError: When the negotiated codec is not supported
+                for outbound encoding.
         """
+        match self._encoding_name:
+            case "pcmu":
+                return self._encode_pcmu(samples)
+            case "pcma":
+                return self._encode_pcma(samples)
+            case "opus":
+                return self._encode_via_av(samples, "libopus", self._rtp_sample_rate)
+            case _:
+                raise NotImplementedError(
+                    f"Unsupported outbound codec: {self._encoding_name!r}"
+                )
+
+    @staticmethod
+    def _encode_pcmu(samples: np.ndarray) -> bytes:
+        """Encode float32 PCM samples to G.711 µ-law (PCMU) bytes per ITU-T G.711.
+
+        The algorithm compresses 16-bit linear PCM using logarithmic µ-law
+        companding and inverts all output bits as required by G.711 §A.2.
+
+        Args:
+            samples: Float32 mono PCM array in the range ``[-1, 1]``.
+
+        Returns:
+            µ-law encoded bytes, one byte per input sample.
+        """
+        BIAS = 0x84  # 132 — G.711 µ-law bias constant
+        CLIP = 32635  # maximum biased magnitude (14-bit saturate)
+        # Scale float32 to 16-bit signed linear PCM
+        pcm = np.clip(np.round(samples * 32768.0), -32768, 32767).astype(np.int32)
+        # Sign bit: 0x80 for positive/zero, 0x00 for negative
+        sign = np.where(pcm >= 0, 0x80, 0x00).astype(np.uint8)
+        # Biased magnitude, clipped to fit in the encoding table
+        biased = np.minimum(np.abs(pcm) + BIAS, CLIP)
+        # Segment (chord): floor(log2(biased)) − 7, clamped to [0, 7]
+        exp = np.clip(
+            np.floor(np.log2(np.maximum(biased, 1))).astype(np.int32) - 7, 0, 7
+        )
+        # 4-bit quantisation step within the segment
+        mantissa = ((biased >> (exp + 3)) & 0x0F).astype(np.uint8)
+        # Compose codeword and invert all bits (G.711 §A.2 requirement)
+        return (
+            (~(sign | (exp.astype(np.uint8) << 4) | mantissa))
+            .astype(np.uint8)
+            .tobytes()
+        )
+
+    @staticmethod
+    def _encode_pcma(samples: np.ndarray) -> bytes:
+        """Encode float32 PCM samples to G.711 A-law (PCMA) bytes per ITU-T G.711.
+
+        Args:
+            samples: Float32 mono PCM array in the range ``[-1, 1]``.
+
+        Returns:
+            A-law encoded bytes, one byte per input sample.
+        """
+        a_law = 87.6  # G.711 A-law compression parameter
+        pcm = np.clip(np.abs(samples), 0, 1.0)
+        low = pcm < (1.0 / a_law)
+        compressed = np.where(
+            low,
+            a_law * pcm / (1.0 + np.log(a_law)),
+            (1.0 + np.log(np.maximum(a_law * pcm, 1e-10))) / (1.0 + np.log(a_law)),
+            # 1e-10 prevents log(0) when pcm is exactly 0.0 in the high range
+        )
+        # Map to 7-bit integer value
+        quantized = np.clip(np.round(compressed * 127), 0, 127).astype(np.uint8)
+        sign = np.where(samples >= 0, 0x80, 0x00).astype(np.uint8)
+        # XOR even bits per G.711 §A (toggle bits via 0x55)
+        return ((sign | quantized) ^ 0x55).astype(np.uint8).tobytes()
+
+    @staticmethod
+    def _encode_via_av(samples: np.ndarray, codec_name: str, sample_rate: int) -> bytes:
+        """Encode float32 mono PCM to raw codec bytes via PyAV.
+
+        Args:
+            samples: Float32 mono PCM array.
+            codec_name: PyAV codec name (``"g722"`` or ``"libopus"``).
+            sample_rate: Sample rate of *samples* in Hz.
+
+        Returns:
+            Encoded audio bytes for one RTP payload.
+        """
+        codec: av.AudioCodecContext = cast(
+            av.AudioCodecContext, av.CodecContext.create(codec_name, "w")
+        )
+        codec.sample_rate = sample_rate
+        codec.format = av.AudioFormat("s16")
+        codec.layout = av.AudioLayout("mono")
+        codec.open()
+        pcm = np.clip(np.round(samples * 32768.0), -32768, 32767).astype(np.int16)
+        frame = av.AudioFrame.from_ndarray(
+            pcm[np.newaxis, :], format="s16", layout="mono"
+        )
+        frame.sample_rate = sample_rate
+        frame.pts = 0
+        return b"".join(
+            bytes(packet)
+            for segment in (codec.encode(frame), codec.encode(None))
+            for packet in segment
+        )
+
+    @classmethod
+    def _resample(
+        cls, audio: np.ndarray, source_rate: int, destination_rate: int
+    ) -> np.ndarray:
+        """Resample *audio* from *source_rate* to *destination_rate*.
+
+        Uses linear interpolation via :func:`numpy.interp`.
+
+        Args:
+            audio: Float32 mono PCM array.
+            source_rate: Sample rate of *audio* in Hz.
+            destination_rate: Target sample rate in Hz.
+
+        Returns:
+            Resampled float32 array at *destination_rate* Hz.
+        """
+        if source_rate == destination_rate:
+            return audio
+        n_out = round(len(audio) * destination_rate / source_rate)
+        return np.interp(
+            np.linspace(0, len(audio) - 1, n_out),
+            np.arange(len(audio)),
+            audio,
+        ).astype(np.float32)

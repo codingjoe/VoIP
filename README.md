@@ -25,7 +25,13 @@ Async VoIP Python library for the AI age.
 Answer calls and transcribe them live from the terminal:
 
 ```console
-uvx voip sip transcribe sips:alice@sip.example.com --password secret
+SIP_PASSWORD=******** uvx voip sip sips:alice@sip.example.com transcribe
+```
+
+You can also talk to a local agent (needs [Ollama]):
+
+```console
+SIP_PASSWORD=******** uvx voip sip sips:alice@sip.example.com agent
 ```
 
 ### Python API
@@ -40,11 +46,11 @@ Pass it as `call_class` when answering an incoming call:
 ```python
 import asyncio
 import ssl
-from voip.audio import WhisperCall
+from voip.ai import TranscribeCall
 from voip.sip.protocol import SIP
 
 
-class MyCall(WhisperCall):
+class MyCall(TranscribeCall):
     def transcription_received(self, text: str) -> None:
         print(f"[{self.caller}] {text}")
 
@@ -75,3 +81,5 @@ asyncio.run(main())
 
 For raw audio access without transcription, subclass `AudioCall` and override
 `audio_received(self, audio: np.ndarray)` instead.
+
+[ollama]: https://ollama.com/

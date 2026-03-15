@@ -7,10 +7,11 @@ nav:
   - Home: index.md
   - Usage: usage.md
   - Feature Roadmap: roadmap.md
-  - API-Reference:
-      - SIP: sip.md
-      - RTP: rtp.md
+  - API Reference:
       - Calls: calls.md
+      - RTP: rtp.md
+      - SDP: sdp.md
+      - SIP: sip.md
   - Changelog: https://github.com/codingjoe/VoIP/releases
   - Community Support: https://github.com/codingjoe/VoIP/discussions
 plugins:

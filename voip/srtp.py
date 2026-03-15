@@ -1,11 +1,14 @@
-"""Secure Real-time Transport Protocol (SRTP) implementation of RFC 3711.
+"""Secure Real-time Transport Protocol (SRTP) implementation of [RFC 3711].
 
 Provides symmetric key encryption and authentication for RTP media streams
 using the AES_CM_128_HMAC_SHA1_80 cipher suite.  Keys are negotiated via SDP
-Security Descriptions (SDES, RFC 4568) carried in the SIP 200 OK SDP body,
+Security Descriptions (SDES, [RFC 4568]) carried in the SIP 200 OK SDP body,
 which is itself protected by TLS.
 
-Requires the ``cryptography`` package (included in any installation).
+Requires the `cryptography` package (included in any installation).
+
+[RFC 3711]: https://datatracker.ietf.org/doc/html/rfc3711
+[RFC 4568]: https://datatracker.ietf.org/doc/html/rfc456
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 __all__ = ["CIPHER_SUITE", "SRTPSession"]
 
-#: SRTP cipher suite identifier used in SDP ``a=crypto:`` attributes.
+#: SRTP cipher suite identifier used in SDP `a=crypto:` attributes.
 CIPHER_SUITE = "AES_CM_128_HMAC_SHA1_80"
 
 #: AES key size in bytes (128-bit).
@@ -44,7 +47,7 @@ def _prf(master_key: bytes, label: int, master_salt: bytes, length: int) -> byte
         length: Number of output bytes required.
 
     Returns:
-        ``length`` bytes of pseudo-random keying material.
+        `length` bytes of pseudo-random keying material.
     """
     # x = (label * 2^48) XOR master_salt  (both treated as 112-bit integers)
     x = ((label << 48) ^ int.from_bytes(master_salt, "big")) & ((1 << 112) - 1)
@@ -61,12 +64,12 @@ class SRTPSession:
     """SRTP session for one call leg using AES_CM_128_HMAC_SHA1_80.
 
     Handles symmetric encryption and authentication of RTP packets.
-    Key material is derived from ``master_key`` and ``master_salt`` via the
+    Key material is derived from `master_key` and `master_salt` via the
     SRTP pseudo-random function (RFC 3711 §4.3.1).
 
-    A fresh session should be created for each answered call via
-    :meth:`generate` and passed to the :class:`~voip.call.Call` instance.
-    The SDP ``a=crypto:`` attribute is produced by :meth:`sdes_attribute`.
+    Create a fresh session for each answered call via `generate` and pass
+    it to the `RTPCall` instance.  The SDP `a=crypto:` attribute is produced
+    by `sdes_attribute`.
 
     Attributes:
         master_key: 16-byte AES master key (randomly generated).
@@ -100,13 +103,15 @@ class SRTPSession:
 
     @property
     def sdes_attribute(self) -> str:
-        """SDP ``a=crypto:`` attribute value for SDES key exchange (RFC 4568).
+        """SDP `a=crypto:` attribute value for SDES key exchange (RFC 4568).
 
         The key material (master key followed by master salt) is base64-encoded
-        and wrapped in the standard SDES inline format.  Include this in the
-        SDP ``a=crypto:`` attribute of the answered media description::
+        and wrapped in the standard SDES inline format.  Include this value in
+        the SDP `a=crypto:` attribute of the answered media description:
 
-            a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:<value>
+        ```
+        a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:<value>
+        ```
         """
         key_salt = base64.b64encode(self.master_key + self.master_salt).decode()
         return f"1 {CIPHER_SUITE} inline:{key_salt}"
@@ -140,8 +145,8 @@ class SRTPSession:
             seq: The 16-bit sequence number from the received RTP header.
 
         Returns:
-            A ``(index, roc_guess)`` tuple where ``index`` is the estimated
-            48-bit packet index and ``roc_guess`` is the ROC value used.
+            A `(index, roc_guess)` tuple where `index` is the estimated
+            48-bit packet index and `roc_guess` is the ROC value used.
         """
         s_l = self._last_recv_seq
         roc = self._recv_roc
@@ -207,7 +212,7 @@ class SRTPSession:
             packet: Raw SRTP packet bytes (at least 12 + 10 bytes).
 
         Returns:
-            Decrypted RTP packet bytes, or ``None`` when authentication fails
+            Decrypted RTP packet bytes, or `None` when authentication fails
             or the packet is too short.
         """
         if len(packet) < 12 + _AUTH_TAG_SIZE:

@@ -39,8 +39,9 @@ requires-python = ">=3.13"
 dependencies = ["cryptography"]
 
 [project.optional-dependencies]
-audio = ["faster-whisper", "numpy", "av"]
-cli = ["click", "pygments", "faster-whisper", "numpy", "av"]
+audio = ["numpy", "av"]
+ai = ["faster-whisper", "numpy", "av", "ollama", "pocket-tts"]
+cli = ["click", "pygments", "faster-whisper", "numpy", "av", "ollama", "pocket-tts"]
 pygments = ["Pygments"]
 
 [project.scripts]

@@ -89,7 +89,14 @@ class Origin:
 
     @classmethod
     def parse(cls, value: str) -> Origin:
-        """Parse an o= line value into an Origin."""
+        """Parse an `o=` line value into an `Origin`.
+
+        Args:
+            value: Raw text after the `o=` field letter.
+
+        Returns:
+            Parsed `Origin` with username, session ID, version, network type, address type, and unicast address.
+        """
         username, sess_id, sess_version, nettype, addrtype, unicast_address = (
             value.split(" ", 5)
         )
@@ -146,7 +153,14 @@ class Bandwidth:
 
     @classmethod
     def parse(cls, value: str) -> Bandwidth:
-        """Parse a b= line value into a Bandwidth."""
+        """Parse a `b=` line value into a `Bandwidth`.
+
+        Args:
+            value: Raw text after the `b=` field letter, e.g. `"AS:64"`.
+
+        Returns:
+            Parsed `Bandwidth` with bandwidth type and value.
+        """
         bwtype, _, bandwidth = value.partition(":")
         return cls(bwtype=bwtype, bandwidth=int(bandwidth))
 
@@ -210,9 +224,9 @@ class PayloadTypeSpec(NamedTuple):
 class StaticPayloadType(PayloadTypeSpec, enum.Enum):
     """Static RTP payload types as defined by RFC 3551 §6.
 
-    Each member's :attr:`value` is a :class:`PayloadTypeSpec` carrying the
+    Each member's `value` is a `PayloadTypeSpec` carrying the
     payload type number, sample rate, canonical encoding name, channel count,
-    and frame size.  Use :meth:`from_pt` to look up a member by its PT number.
+    and frame size.  Use `from_pt` to look up a member by its PT number.
     """
 
     #: G.711 µ-law
@@ -263,7 +277,7 @@ class RTPPayloadFormat:
     """RTP payload format descriptor (RFC 3551 §6 / RFC 4566 §6).
 
     Codec parameters from ``a=rtpmap`` are merged in by the SDP parser.
-    Static payload types fall back to the :class:`StaticPayloadType` table.
+    Static payload types fall back to the `StaticPayloadType` table.
     Dynamic payload types (PT ≥ 96) require an explicit ``a=rtpmap``.
 
     Serialises to the ``a=rtpmap`` value when codec fields are present.
@@ -304,16 +318,16 @@ class RTPPayloadFormat:
 
     @classmethod
     def from_pt(cls, pt: int) -> RTPPayloadFormat:
-        """Create an :class:`RTPPayloadFormat` from a payload type number."""
+        """Create an `RTPPayloadFormat` from a payload type number."""
         return cls(payload_type=pt)
 
     @property
     def frame_size(self) -> int:
         """Samples per standard 20 ms RTP frame.
 
-        For static payload types the value comes from :class:`StaticPayloadType`.
+        For static payload types the value comes from `StaticPayloadType`.
         For dynamic payload types (e.g. Opus, PT ≥ 96) it is derived from
-        :attr:`sample_rate` assuming a 20 ms packetisation interval.
+        `sample_rate` assuming a 20 ms packetisation interval.
         """
         try:
             spec = StaticPayloadType.from_pt(self.payload_type)
@@ -343,7 +357,7 @@ class MediaDescription:
     attributes: list[Attribute] = dataclasses.field(default_factory=list)
 
     def get_format(self, pt: int | str) -> RTPPayloadFormat | None:
-        """Return the :class:`RTPPayloadFormat` for payload type *pt*, or ``None``."""
+        """Return the `RTPPayloadFormat` for payload type *pt*, or ``None``."""
         target = int(pt)
         return next((f for f in self.fmt if f.payload_type == target), None)
 
@@ -351,7 +365,7 @@ class MediaDescription:
         """Apply a media-level ``a=`` attribute, returning ``True`` if consumed.
 
         Handles ``a=rtpmap`` and ``a=fmtp`` by updating the matching
-        :class:`RTPPayloadFormat` entry.  Other attributes go to :attr:`attributes`.
+        `RTPPayloadFormat` entry.  Other attributes go to `attributes`.
         """
         if attr.name == "rtpmap" and attr.value is not None:
             rtpfmt = RTPPayloadFormat.parse(attr.value)
