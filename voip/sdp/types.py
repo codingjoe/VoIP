@@ -89,7 +89,14 @@ class Origin:
 
     @classmethod
     def parse(cls, value: str) -> Origin:
-        """Parse an o= line value into an Origin."""
+        """Parse an `o=` line value into an `Origin`.
+
+        Args:
+            value: Raw text after the `o=` field letter.
+
+        Returns:
+            Parsed `Origin` with username, session ID, version, network type, address type, and unicast address.
+        """
         username, sess_id, sess_version, nettype, addrtype, unicast_address = (
             value.split(" ", 5)
         )
@@ -146,7 +153,14 @@ class Bandwidth:
 
     @classmethod
     def parse(cls, value: str) -> Bandwidth:
-        """Parse a b= line value into a Bandwidth."""
+        """Parse a `b=` line value into a `Bandwidth`.
+
+        Args:
+            value: Raw text after the `b=` field letter, e.g. `"AS:64"`.
+
+        Returns:
+            Parsed `Bandwidth` with bandwidth type and value.
+        """
         bwtype, _, bandwidth = value.partition(":")
         return cls(bwtype=bwtype, bandwidth=int(bandwidth))
 

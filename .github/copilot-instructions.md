@@ -23,6 +23,9 @@ Avoid overly complex functions. Break them into smaller functions if necessary.
 
 Write docstrings with the Google notation, type annotations for all functions, classes, and methods.
 We use `mkdocstrings` to generate documentation from docstrings, so they must use Markdown syntax.
+You may use Markdown links in docstrings to link to other functions, classes, or methods. The link target must be the full Python path to the function.
+For external links use the \<>-notation or reference-style notation with the links at the end of the docstring.
+We don't write docstrings for inherited methods or properties nor for functions we don't want to expose in the documentation.
 Docstrings should be written in present tense and imperative mood.
 They must start with a capital letter and end with a period.
 Docstrings must describe the external behavior of the function, class, or method.

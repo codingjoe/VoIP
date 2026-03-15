@@ -34,33 +34,35 @@ class STUNAttributeType(enum.IntEnum):
 @dataclasses.dataclass(kw_only=True, slots=True)
 class STUNProtocol(asyncio.DatagramProtocol):
     """
-    Demultiplexes STUN (RFC 5389/7983) from other traffic.
+    Protocol for demultiplexing STUN (RFC 5389/7983) from other traffic.
 
     Use this as the base class for any protocol that shares a UDP socket with
-    STUN. Incoming datagrams whose first byte is in ``[0, 3]`` (RFC 7983) are
+    STUN. Incoming datagrams whose first byte is in `[0, 3]` (RFC 7983) are
     treated as STUN messages and routed to the STUN handler. All other
     datagrams are forwarded to `packet_received`.
 
     When the socket is ready and the reachable address is known,
-    `stun_connection_made` is called.  If ``stun_server_address`` is
-    ``None`` this happens synchronously from `connection_made` with the
+    `stun_connection_made` is called.  If `stun_server_address` is
+    `None` this happens synchronously from `connection_made` with the
     local socket address.  If STUN is configured it is called from
     `datagram_received` when the Binding Response arrives, with the
     discovered public address.  Subclasses only need to override
     `stun_connection_made` — no `connection_made` override is
-    required::
+    required:
 
-        class MyProtocol(STUNProtocol):
-            def stun_connection_made(
-                self,
-                transport: asyncio.DatagramTransport,
-                addr: tuple[str, int],
-            ) -> None:
-                # socket is ready; addr is the reachable (public or local) address
-                ...
+    ```python
+    class MyProtocol(STUNProtocol):
+        def stun_connection_made(
+            self,
+            transport: asyncio.DatagramTransport,
+            addr: tuple[str, int],
+        ) -> None:
+            # socket is ready; addr is the reachable (public or local) address
+            ...
 
-            def packet_received(self, data: bytes, addr: tuple[str, int]) -> None:
-                process(data)
+        def packet_received(self, data: bytes, addr: tuple[str, int]) -> None:
+            process(data)
+    ```
     """
 
     stun_server_address: tuple[str, int] | None = ("stun.cloudflare.com", 3478)

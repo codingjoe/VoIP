@@ -18,8 +18,7 @@ import socket
 import typing
 import uuid
 
-from voip.call import Call
-from voip.rtp import RealtimeTransportProtocol
+from voip.rtp import RealtimeTransportProtocol, RTPCall
 from voip.sdp.messages import SessionDescription
 from voip.sdp.types import (
     Attribute,
@@ -482,7 +481,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
             request: The SIP CANCEL request.
         """
 
-    async def answer(self, request: Request, *, call_class: type[Call]) -> None:
+    async def answer(self, request: Request, *, call_class: type[RTPCall]) -> None:
         """Answer an incoming call by setting up RTP and sending 200 OK with SDP.
 
         This coroutine can be awaited directly or wrapped in a task::
@@ -504,7 +503,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
         """
         await self._answer(request, call_class)
 
-    async def _answer(self, request: Request, call_class: type[Call]) -> None:
+    async def _answer(self, request: Request, call_class: type[RTPCall]) -> None:
         """Perform the asynchronous part of answering: set up RTP, send 200 OK."""
         call_id = request.headers.get("Call-ID", "")
         if call_id not in self._pending_invites:

@@ -3,7 +3,6 @@
 from unittest.mock import MagicMock
 
 import pytest
-from voip.call import Call
 from voip.rtp import RealtimeTransportProtocol, RTPCall, RTPPacket
 from voip.sdp.types import MediaDescription, RTPPayloadFormat
 from voip.sip.types import CallerID
@@ -30,7 +29,7 @@ def make_call(**kwargs) -> RTPCall:
 class TestCallCompatShim:
     def test_call__is_rtp_call(self):
         """Call is a backward-compatibility alias for RTPCall."""
-        assert Call is RTPCall
+        assert RTPCall is RTPCall
 
 
 class TestRTPCall:

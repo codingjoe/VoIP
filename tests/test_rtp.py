@@ -8,8 +8,7 @@ import struct
 from unittest.mock import MagicMock
 
 import pytest
-from voip.call import Call
-from voip.rtp import RTP, RealtimeTransportProtocol, RTPPacket, RTPPayloadType
+from voip.rtp import RTP, RealtimeTransportProtocol, RTPCall, RTPPacket, RTPPayloadType
 from voip.sdp.types import MediaDescription, RTPPayloadFormat
 
 
@@ -145,7 +144,7 @@ class TestRealtimeTransportProtocol:
         """Non-STUN datagrams from registered addr are forwarded to the handler."""
         routed: list[RTPPacket] = []
 
-        class RecordCall(Call):
+        class RecordCall(RTPCall):
             def packet_received(self, packet: RTPPacket, addr):
                 routed.append(packet)
 
@@ -169,7 +168,7 @@ class TestRealtimeTransportProtocol:
         """A STUN packet (first byte < 4) must not reach any Call handler."""
         routed: list[RTPPacket] = []
 
-        class RecordCall(Call):
+        class RecordCall(RTPCall):
             def packet_received(self, packet: RTPPacket, addr):
                 routed.append(packet)
 
@@ -239,11 +238,11 @@ class TestRealtimeTransportProtocol:
         received_wildcard: list[RTPPacket] = []
         received_call: list[RTPPacket] = []
 
-        class WildcardCall(Call):
+        class WildcardCall(RTPCall):
             def packet_received(self, packet: RTPPacket, addr):
                 received_wildcard.append(packet)
 
-        class SpecificCall(Call):
+        class SpecificCall(RTPCall):
             def packet_received(self, packet: RTPPacket, addr):
                 received_call.append(packet)
 
@@ -265,7 +264,7 @@ class TestRealtimeTransportProtocol:
         """Packets from an unknown addr reach the None-key wildcard handler."""
         received: list[RTPPacket] = []
 
-        class WildcardCall(Call):
+        class WildcardCall(RTPCall):
             def packet_received(self, packet: RTPPacket, addr):
                 received.append(packet)
 
@@ -283,7 +282,7 @@ class TestRealtimeTransportProtocol:
         """After unregister_call, packets from that addr are no longer routed to handler."""
         received: list[RTPPacket] = []
 
-        class RecordCall(Call):
+        class RecordCall(RTPCall):
             def packet_received(self, packet: RTPPacket, addr):
                 received.append(packet)
 
@@ -302,7 +301,7 @@ class TestRealtimeTransportProtocol:
         import logging  # noqa: PLC0415
 
         mux = RealtimeTransportProtocol()
-        handler = Call(rtp=mux, sip=MagicMock(), media=make_media())
+        handler = RTPCall(rtp=mux, sip=MagicMock(), media=make_media())
         with caplog.at_level(logging.INFO, logger="voip.rtp"):
             mux.register_call(("1.2.3.4", 5004), handler)
         assert any("rtp_call_registered" in r.message for r in caplog.records)
@@ -313,7 +312,7 @@ class TestRealtimeTransportProtocol:
         import logging  # noqa: PLC0415
 
         mux = RealtimeTransportProtocol()
-        handler = Call(rtp=mux, sip=MagicMock(), media=make_media())
+        handler = RTPCall(rtp=mux, sip=MagicMock(), media=make_media())
         addr = ("1.2.3.4", 5004)
         mux.register_call(addr, handler)
         with caplog.at_level(logging.INFO, logger="voip.rtp"):
@@ -325,7 +324,7 @@ class TestRealtimeTransportProtocol:
         """packet_received forwards the datagram to the registered handler."""
         received: list[tuple[RTPPacket, tuple]] = []
 
-        class CapturingCall(Call):
+        class CapturingCall(RTPCall):
             def packet_received(self, packet: RTPPacket, addr):
                 received.append((packet, addr))
 
@@ -365,7 +364,7 @@ class TestSRTPIntegration:
         received: list[RTPPacket] = []
 
         @dataclasses.dataclass
-        class SRTPCapture(Call):
+        class SRTPCapture(RTPCall):
             def packet_received(self, packet: RTPPacket, addr) -> None:
                 received.append(packet)
 
@@ -393,7 +392,7 @@ class TestSRTPIntegration:
         received: list[RTPPacket] = []
 
         @dataclasses.dataclass
-        class SRTPCapture(Call):
+        class SRTPCapture(RTPCall):
             def packet_received(self, packet: RTPPacket, addr) -> None:
                 received.append(packet)
 
