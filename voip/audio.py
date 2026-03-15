@@ -269,7 +269,7 @@ class AudioCall(RTPCall):
             )
 
     def _decode_raw(self, packet: bytes) -> np.ndarray:
-        """Decode raw RTP payloads to a float32 PCM array at :data:`SAMPLE_RATE` Hz.
+        """Decode raw RTP payloads to a float32 PCM array at :attr:`resampling_rate` Hz.
 
         The codec is identified from the negotiated :attr:`media` encoding name.
 
@@ -277,7 +277,7 @@ class AudioCall(RTPCall):
             packet: Raw RTP payload bytes for one buffered chunk.
 
         Returns:
-            Float32 mono PCM array resampled to :data:`SAMPLE_RATE` Hz.
+            Float32 mono PCM array resampled to :attr:`resampling_rate` Hz.
         """
         match self._encoding_name:
             case "opus":
@@ -315,7 +315,7 @@ class AudioCall(RTPCall):
         input_format: str,
         input_sample_rate: int | None,
     ) -> np.ndarray:
-        """Decode audio bytes via PyAV into float32 PCM at :data:`SAMPLE_RATE` Hz.
+        """Decode audio bytes via PyAV into float32 PCM at :attr:`resampling_rate` Hz.
 
         Args:
             data: Raw audio bytes in the codec's wire format.
@@ -324,7 +324,7 @@ class AudioCall(RTPCall):
                 for self-describing formats like Ogg.
 
         Returns:
-            Float32 mono PCM array at :data:`SAMPLE_RATE` Hz.
+            Float32 mono PCM array at :attr:`resampling_rate` Hz.
         """
         resampler = av.audio.resampler.AudioResampler(
             format="fltp", layout="mono", rate=self.resampling_rate
