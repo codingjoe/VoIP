@@ -72,7 +72,7 @@ class TestRTPCall:
             payload_type=8, sequence_number=1, timestamp=0, ssrc=0, payload=b"x"
         )
         call.send_packet(packet, ("192.0.2.1", 5004))
-        mock_rtp.send.assert_called_once_with(packet.build(), ("192.0.2.1", 5004))
+        mock_rtp.send.assert_called_once_with(bytes(packet), ("192.0.2.1", 5004))
 
     def test_send_packet__encrypts_with_srtp_when_set(self):
         """send_packet encrypts the payload when an SRTP session is attached."""
@@ -86,7 +86,7 @@ class TestRTPCall:
         )
         call.send_packet(packet, ("192.0.2.1", 5004))
         sent_data = mock_rtp.send.call_args[0][0]
-        assert sent_data != packet.build()
+        assert sent_data != bytes(packet)
 
     def test_negotiate_codec__raises_not_implemented(self):
         """negotiate_codec raises NotImplementedError in the base class."""

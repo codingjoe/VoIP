@@ -824,7 +824,7 @@ class TestAgentCall:
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
         call = make_agent_call(MagicMock(), tts_mock)
         payload = b"\x00" * 160
-        data = call._next_rtp_packet(payload).build()
+        data = bytes(call._next_rtp_packet(payload))
         assert len(data) == 12 + len(payload)
         assert data[0] == 0x80  # V=2, P=0, X=0, CC=0
 
@@ -846,7 +846,7 @@ class TestAgentCall:
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
         call = make_agent_call(MagicMock(), tts_mock, media=PCMA_MEDIA)
         packet = call._next_rtp_packet(b"\x00" * 160)
-        assert packet.build()[1] == RTPPayloadType.PCMA
+        assert bytes(packet)[1] == RTPPayloadType.PCMA
 
     def test_preferred_codecs__opus_is_first(self):
         """AgentCall prefers Opus as the highest-priority outbound codec."""

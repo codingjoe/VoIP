@@ -112,7 +112,7 @@ class TestRTPPacket:
                 payload=b"hello",
             )
         )
-        rebuilt = RTPPacket.parse(original.build())
+        rebuilt = RTPPacket.parse(bytes(original))
         assert rebuilt.payload_type == original.payload_type
         assert rebuilt.sequence_number == original.sequence_number
         assert rebuilt.timestamp == original.timestamp
@@ -124,7 +124,7 @@ class TestRTPPacket:
         packet = RTPPacket(
             payload_type=0, sequence_number=0, timestamp=0, ssrc=0, payload=b""
         )
-        assert packet.build()[0] == 0x80
+        assert bytes(packet)[0] == 0x80
 
 
 class TestRealtimeTransportProtocol:

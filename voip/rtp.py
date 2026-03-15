@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from voip.sdp.types import MediaDescription
 from voip.srtp import SRTPSession
 from voip.stun import STUNProtocol
+from voip.types import ByteSerializableObject
 
 if TYPE_CHECKING:
     from voip.sip.protocol import SessionInitiationProtocol
@@ -43,7 +44,7 @@ class RTPPayloadType(enum.IntEnum):
 
 
 @dataclasses.dataclass
-class RTPPacket:
+class RTPPacket(ByteSerializableObject):
     """A parsed RTP packet (RFC 3550 §5.1)."""
 
     payload_type: int
@@ -72,7 +73,7 @@ class RTPPacket:
             payload=data[12:],
         )
 
-    def build(self) -> bytes:
+    def __bytes__(self) -> bytes:
         """Serialize this packet to raw RTP bytes (RFC 3550 §5.1).
 
         Returns:
@@ -143,7 +144,7 @@ class RTPCall:
             packet: RTP packet to send.
             addr: Destination ``(host, port)``.
         """
-        data = packet.build()
+        data = bytes(packet)
         if self.srtp is not None:
             data = self.srtp.encrypt(data)
         self.rtp.send(data, addr)

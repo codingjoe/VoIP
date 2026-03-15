@@ -25,7 +25,7 @@ class DigestQoP(enum.StrEnum):
     AUTH_INT = "auth-int"
 
 
-class ByteSerializableObject:
+class ByteSerializableObject(typing.Protocol):
     """Parse and serialize objects to and from raw bytes."""
 
     __slots__ = ()
