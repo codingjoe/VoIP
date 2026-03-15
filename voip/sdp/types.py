@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import dataclasses
 import enum
+from collections.abc import Generator
 from typing import ClassVar, NamedTuple, Protocol, runtime_checkable
+
+from ..types import ByteSerializableObject
 
 __all__ = [
     "Field",
@@ -46,7 +49,6 @@ class StrField:
 
     @staticmethod
     def parse(value: str) -> str:
-        """Return the raw string value unchanged."""
         return value
 
 
@@ -61,12 +63,11 @@ class IntField:
 
     @staticmethod
     def parse(value: str) -> int:
-        """Parse the raw string value as an integer."""
         return int(value)
 
 
 @dataclasses.dataclass(slots=True)
-class Origin:
+class Origin(ByteSerializableObject):
     """Origin field (o=) as defined by RFC 4566 §5.2."""
 
     letter: ClassVar[str] = "o"
@@ -81,15 +82,15 @@ class Origin:
     addrtype: str
     unicast_address: str
 
-    def __str__(self) -> str:
+    def __bytes__(self) -> bytes:
         return (
             f"{self.username} {self.sess_id} {self.sess_version}"
             f" {self.nettype} {self.addrtype} {self.unicast_address}"
-        )
+        ).encode()
 
     @classmethod
-    def parse(cls, value: str) -> Origin:
-        """Parse an o= line value into an Origin."""
+    def parse(cls, data: bytes | str) -> Origin:
+        value = data.decode() if isinstance(data, bytes) else data
         username, sess_id, sess_version, nettype, addrtype, unicast_address = (
             value.split(" ", 5)
         )
@@ -104,7 +105,7 @@ class Origin:
 
 
 @dataclasses.dataclass(slots=True)
-class ConnectionData:
+class ConnectionData(ByteSerializableObject):
     """Connection data field (c=) as defined by RFC 4566 §5.7."""
 
     letter: ClassVar[str] = "c"
@@ -116,11 +117,12 @@ class ConnectionData:
     addrtype: str
     connection_address: str
 
-    def __str__(self) -> str:
-        return f"{self.nettype} {self.addrtype} {self.connection_address}"
+    def __bytes__(self) -> bytes:
+        return f"{self.nettype} {self.addrtype} {self.connection_address}".encode()
 
     @classmethod
-    def parse(cls, value: str) -> ConnectionData:
+    def parse(cls, data: bytes | str) -> ConnectionData:
+        value = data.decode() if isinstance(data, bytes) else data
         nettype, addrtype, connection_address = value.split(" ", 2)
         return cls(
             nettype=nettype,
@@ -130,7 +132,7 @@ class ConnectionData:
 
 
 @dataclasses.dataclass(slots=True)
-class Bandwidth:
+class Bandwidth(ByteSerializableObject):
     """Bandwidth field (b=) as defined by RFC 4566 §5.8."""
 
     letter: ClassVar[str] = "b"
@@ -141,18 +143,18 @@ class Bandwidth:
     bwtype: str
     bandwidth: int
 
-    def __str__(self) -> str:
-        return f"{self.bwtype}:{self.bandwidth}"
+    def __bytes__(self) -> bytes:
+        return f"{self.bwtype}:{self.bandwidth}".encode()
 
     @classmethod
-    def parse(cls, value: str) -> Bandwidth:
-        """Parse a b= line value into a Bandwidth."""
+    def parse(cls, data: bytes | str) -> Bandwidth:
+        value = data.decode() if isinstance(data, bytes) else data
         bwtype, _, bandwidth = value.partition(":")
         return cls(bwtype=bwtype, bandwidth=int(bandwidth))
 
 
 @dataclasses.dataclass(slots=True)
-class Timing:
+class Timing(ByteSerializableObject):
     """Timing field (t=) as defined by RFC 4566 §5.9."""
 
     letter: ClassVar[str] = "t"
@@ -163,17 +165,18 @@ class Timing:
     start_time: int
     stop_time: int
 
-    def __str__(self) -> str:
-        return f"{self.start_time} {self.stop_time}"
+    def __bytes__(self) -> bytes:
+        return f"{self.start_time} {self.stop_time}".encode()
 
     @classmethod
-    def parse(cls, value: str) -> Timing:
+    def parse(cls, data: bytes | str) -> Timing:
+        value = data.decode() if isinstance(data, bytes) else data
         start_time, stop_time = value.split(" ", 1)
         return cls(start_time=int(start_time), stop_time=int(stop_time))
 
 
 @dataclasses.dataclass(slots=True)
-class Attribute:
+class Attribute(ByteSerializableObject):
     """Attribute field (a=) as defined by RFC 4566 §5.13."""
 
     letter: ClassVar[str] = "a"
@@ -184,14 +187,16 @@ class Attribute:
     name: str
     value: str | None = None
 
-    def __str__(self) -> str:
-        if self.value is None:
-            return self.name
-        return f"{self.name}:{self.value}"
+    def __bytes__(self) -> bytes:
+        match self.value:
+            case None:
+                return self.name.encode()
+            case _:
+                return f"{self.name}:{self.value}".encode()
 
     @classmethod
-    def parse(cls, value: str) -> Attribute:
-        """Parse an a= line value into an Attribute."""
+    def parse(cls, data: bytes | str) -> Attribute:
+        value = data.decode() if isinstance(data, bytes) else data
         name, _, attr_value = value.partition(":")
         return cls(name=name, value=attr_value or None)
 
@@ -210,9 +215,9 @@ class PayloadTypeSpec(NamedTuple):
 class StaticPayloadType(PayloadTypeSpec, enum.Enum):
     """Static RTP payload types as defined by RFC 3551 §6.
 
-    Each member's :attr:`value` is a :class:`PayloadTypeSpec` carrying the
+    Each member's `value` is a `PayloadTypeSpec` carrying the
     payload type number, sample rate, canonical encoding name, channel count,
-    and frame size.  Use :meth:`from_pt` to look up a member by its PT number.
+    and frame size.  Use `from_pt` to look up a member by its PT number.
     """
 
     #: G.711 µ-law
@@ -259,11 +264,11 @@ class StaticPayloadType(PayloadTypeSpec, enum.Enum):
 
 
 @dataclasses.dataclass(slots=True)
-class RTPPayloadFormat:
+class RTPPayloadFormat(ByteSerializableObject):
     """RTP payload format descriptor (RFC 3551 §6 / RFC 4566 §6).
 
     Codec parameters from ``a=rtpmap`` are merged in by the SDP parser.
-    Static payload types fall back to the :class:`StaticPayloadType` table.
+    Static payload types fall back to the `StaticPayloadType` table.
     Dynamic payload types (PT ≥ 96) require an explicit ``a=rtpmap``.
 
     Serialises to the ``a=rtpmap`` value when codec fields are present.
@@ -285,12 +290,17 @@ class RTPPayloadFormat:
             self.encoding_name = self.encoding_name or default.encoding_name
             self.channels = self.channels or default.channels
 
-    def __str__(self) -> str:
+    def __bytes__(self) -> bytes:
         base = f"{self.payload_type} {self.encoding_name}/{self.sample_rate}"
-        return f"{base}/{self.channels}" if self.channels != 1 else base
+        match self.channels:
+            case 1:
+                return base.encode()
+            case _:
+                return f"{base}/{self.channels}".encode()
 
     @classmethod
-    def parse(cls, value: str) -> RTPPayloadFormat:
+    def parse(cls, data: bytes | str) -> RTPPayloadFormat:
+        value = data.decode() if isinstance(data, bytes) else data
         fmt, _, rest = value.partition(" ")
         parts = rest.split("/")
         if len(parts) < 2:
@@ -304,16 +314,16 @@ class RTPPayloadFormat:
 
     @classmethod
     def from_pt(cls, pt: int) -> RTPPayloadFormat:
-        """Create an :class:`RTPPayloadFormat` from a payload type number."""
+        """Create an `RTPPayloadFormat` from a payload type number."""
         return cls(payload_type=pt)
 
     @property
     def frame_size(self) -> int:
         """Samples per standard 20 ms RTP frame.
 
-        For static payload types the value comes from :class:`StaticPayloadType`.
+        For static payload types the value comes from `StaticPayloadType`.
         For dynamic payload types (e.g. Opus, PT ≥ 96) it is derived from
-        :attr:`sample_rate` assuming a 20 ms packetisation interval.
+        `sample_rate` assuming a 20 ms packetisation interval.
         """
         try:
             spec = StaticPayloadType.from_pt(self.payload_type)
@@ -325,7 +335,7 @@ class RTPPayloadFormat:
 
 
 @dataclasses.dataclass(slots=True)
-class MediaDescription:
+class MediaDescription(ByteSerializableObject):
     """Media description section (m=) as defined by RFC 4566 §5.14."""
 
     letter: ClassVar[str] = "m"
@@ -343,7 +353,7 @@ class MediaDescription:
     attributes: list[Attribute] = dataclasses.field(default_factory=list)
 
     def get_format(self, pt: int | str) -> RTPPayloadFormat | None:
-        """Return the :class:`RTPPayloadFormat` for payload type *pt*, or ``None``."""
+        """Return the `RTPPayloadFormat` for payload type *pt*, or ``None``."""
         target = int(pt)
         return next((f for f in self.fmt if f.payload_type == target), None)
 
@@ -351,7 +361,7 @@ class MediaDescription:
         """Apply a media-level ``a=`` attribute, returning ``True`` if consumed.
 
         Handles ``a=rtpmap`` and ``a=fmtp`` by updating the matching
-        :class:`RTPPayloadFormat` entry.  Other attributes go to :attr:`attributes`.
+        `RTPPayloadFormat` entry.  Other attributes go to `attributes`.
         """
         if attr.name == "rtpmap" and attr.value is not None:
             rtpfmt = RTPPayloadFormat.parse(attr.value)
@@ -375,28 +385,33 @@ class MediaDescription:
                     return True
         return False
 
-    def __str__(self) -> str:
-        fmt_str = " ".join(str(f.payload_type) for f in self.fmt)
-        lines = [f"m={self.media} {self.port} {self.proto} {fmt_str}"]
-        if self.title is not None:
-            lines.append(f"i={self.title}")
-        if self.connection is not None:
-            lines.append(f"c={self.connection}")
-        lines.extend(f"b={b}" for b in self.bandwidths)
-        for f in self.fmt:
-            if f.encoding_name is not None and f.sample_rate is not None:
-                lines.append(f"a=rtpmap:{f}")
-            if f.fmtp is not None:
-                lines.append(f"a=fmtp:{f.payload_type} {f.fmtp}")
-        lines.extend(f"a={a}" for a in self.attributes)
-        return "\r\n".join(lines)
+    def _lines(self) -> Generator[str]:
+        """Yield each SDP line in canonical field order."""
+        yield f"m={self.media} {self.port} {self.proto} {' '.join(str(f.payload_type) for f in self.fmt)}"
+        match self.title:
+            case str() as title:
+                yield f"i={title}"
+        match self.connection:
+            case ConnectionData() as connection:
+                yield f"c={connection}"
+        yield from (f"b={b}" for b in self.bandwidths)
+        for fmt in self.fmt:
+            match fmt.encoding_name, fmt.sample_rate:
+                case (str(), int()):
+                    yield f"a=rtpmap:{fmt}"
+            match fmt.fmtp:
+                case str() as fmtp:
+                    yield f"a=fmtp:{fmt.payload_type} {fmtp}"
+        yield from (f"a={a}" for a in self.attributes)
+
+    def __bytes__(self) -> bytes:
+        return "\r\n".join(self._lines()).encode()
 
     @classmethod
-    def parse(cls, value: str) -> MediaDescription:
+    def parse(cls, data: bytes | str) -> MediaDescription:
+        value = data.decode() if isinstance(data, bytes) else data
         lines = value.splitlines()
-        first = lines[0].rstrip("\r")
-        if first.startswith("m="):
-            first = first[2:]
+        first = lines[0].rstrip("\r").removeprefix("m=")
         media_type, port_str, proto, *fmts = first.split()
         fmt = [RTPPayloadFormat.from_pt(int(pt)) for pt in fmts]
         obj = cls(media=media_type, port=int(port_str), proto=proto, fmt=fmt)
