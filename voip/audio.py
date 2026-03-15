@@ -16,16 +16,14 @@ import dataclasses
 import json
 import logging
 import secrets
-import typing
 from typing import ClassVar
+
+import numpy as np
 
 import voip.codecs as codecs
 from voip.codecs import RTPCodec
 from voip.rtp import RTPCall, RTPPacket
 from voip.sdp.types import MediaDescription
-
-if typing.TYPE_CHECKING:
-    import numpy as np
 
 __all__ = ["AudioCall", "EchoCall", "VoiceActivityCall"]
 
