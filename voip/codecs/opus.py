@@ -68,7 +68,7 @@ class Opus(RTPCodec):
         sequence_number: int,
         packets: list[bytes],
     ) -> bytes:
-        """Build a single Ogg page ([RFC 3533][]).
+        """Build a single Ogg page ([RFC 3533](https://datatracker.ietf.org/doc/html/rfc3533)).
 
         Args:
             header_type: Page header type flags (e.g. `0x02` for BOS, `0x04` for EOS).
@@ -79,8 +79,6 @@ class Opus(RTPCodec):
 
         Returns:
             Complete Ogg page bytes including CRC.
-
-        [RFC 3533]: https://datatracker.ietf.org/doc/html/rfc3533
         """
         lacing: list[int] = []
         for packet in packets:
@@ -109,15 +107,13 @@ class Opus(RTPCodec):
 
         Produces a three-page Ogg stream: BOS (OpusHead), comment
         (OpusTags), and the single data page.  Opus always uses 48 000 Hz
-        internally ([RFC 7587 §4][]).
+        internally ([RFC 7587 §4](https://datatracker.ietf.org/doc/html/rfc7587#section-4)).
 
         Args:
             packet: Raw Opus RTP payload bytes.
 
         Returns:
             Ogg Opus container bytes suitable for PyAV decoding.
-
-        [RFC 7587 §4]: https://datatracker.ietf.org/doc/html/rfc7587#section-4
         """
         serial_number = int.from_bytes(os.urandom(4), "little")
         vendor = b"voip"

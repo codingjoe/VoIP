@@ -21,7 +21,7 @@ from typing import ClassVar
 import numpy as np
 
 import voip.codecs as codecs
-from voip.codecs import Codec
+from voip.codecs import RTPCodec
 from voip.codecs.g722 import G722  # noqa: E402
 from voip.codecs.opus import Opus  # noqa: E402
 from voip.codecs.pcma import PCMA  # noqa: E402
@@ -55,7 +55,7 @@ class AudioCall(RTPCall):
     """
 
     #: Preferred codecs in priority order (highest priority first).
-    PREFERRED_CODECS: ClassVar[list[type[Codec]]] = [Opus, G722, PCMA, PCMU]
+    PREFERRED_CODECS: ClassVar[list[type[RTPCodec]]] = [Opus, G722, PCMA, PCMU]
 
     #: Target sample rate for decoded audio delivered to `audio_received`.
     RESAMPLING_RATE_HZ: ClassVar[int] = 16000
@@ -64,7 +64,7 @@ class AudioCall(RTPCall):
     RTP_PACKET_DURATION_SECS: ClassVar[float] = 0.02
 
     #: Resolved codec class for this call, set in `__post_init__`.
-    codec: type[Codec] = dataclasses.field(init=False, repr=False)
+    codec: type[RTPCodec] = dataclasses.field(init=False, repr=False)
 
     #: Outbound RTP sequence counter.
     rtp_sequence_number: int = dataclasses.field(init=False, repr=False, default=0)

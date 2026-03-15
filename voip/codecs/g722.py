@@ -62,6 +62,17 @@ class G722(RTPCodec):
 
     @classmethod
     def packetize(cls, audio: np.ndarray) -> Iterator[bytes]:
+        """Packetize a G.722 audio buffer into 160-byte RTP payloads.
+
+        Encodes the entire *audio* buffer at once so that the ADPCM predictor
+        state is preserved across packet boundaries.
+
+        Args:
+            audio: Float32 PCM samples at 16 000 Hz.
+
+        Yields:
+            160-byte G.722 encoded RTP payloads.
+        """
         encoded = cls.encode(audio)
         # G.722 2:1 sample-to-byte ratio: frame_size (320) samples → 160 bytes.
         payload_size = cls.frame_size // 2

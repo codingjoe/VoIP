@@ -1,8 +1,9 @@
-"""PyAV-based codec base class for RTP audio streams.
+"""Base class for RTP audio codecs.
 
-All concrete codec classes in this package inherit from [`PyAVCodec`][voip.codecs.av.PyAVCodec],
-which provides shared [`decode_pcm`][voip.codecs.av.PyAVCodec.decode_pcm] and
-[`encode_pcm`][voip.codecs.av.PyAVCodec.encode_pcm] helpers backed by [PyAV][].
+All concrete codec classes in this package inherit from
+[`RTPCodec`][voip.codecs.base.RTPCodec], which provides shared
+[`decode_pcm`][voip.codecs.base.RTPCodec.decode_pcm] and
+[`encode_pcm`][voip.codecs.base.RTPCodec.encode_pcm] helpers backed by [PyAV][].
 
 [PyAV]: https://pyav.basswood-io.com/
 """
@@ -28,10 +29,18 @@ __all__ = ["RTPCodec"]
 class RTPCodec:
     """Base class for RTP audio codecs that decode and encode via PyAV.
 
+    Concrete implementations: [`Opus`][voip.codecs.Opus],
+    [`G722`][voip.codecs.G722], [`PCMA`][voip.codecs.PCMA],
+    [`PCMU`][voip.codecs.PCMU].
+
+    All codec implementations are stateless: every method is a classmethod or
+    staticmethod and codecs are referenced as `type[RTPCodec]`, never
+    instantiated.
+
     Concrete subclasses define codec-specific class variables and may override
-    [`decode`][voip.codecs.av.PyAVCodec.decode],
-    [`encode`][voip.codecs.av.PyAVCodec.encode], and
-    [`packetize`][voip.codecs.av.PyAVCodec.packetize].
+    [`decode`][voip.codecs.base.RTPCodec.decode],
+    [`encode`][voip.codecs.base.RTPCodec.encode], and
+    [`packetize`][voip.codecs.base.RTPCodec.packetize].
 
     Subclasses that produce variable-length output across frames (e.g. G.722
     ADPCM) should override `packetize` to encode the whole buffer at once and

@@ -20,7 +20,7 @@ from faster_whisper import WhisperModel
 from pocket_tts import TTSModel
 
 from voip.audio import VoiceActivityCall
-from voip.codecs import Codec
+from voip.codecs import RTPCodec
 from voip.codecs.g722 import G722
 from voip.codecs.opus import Opus
 from voip.codecs.pcma import PCMA
@@ -160,7 +160,7 @@ class AgentCall(TranscribeCall):
         "Keep your answers very brief and conversational."
     )
     #: Preferred codecs in priority order (highest first).
-    PREFERRED_CODECS: ClassVar[list[type[Codec]]] = [Opus, G722, PCMU, PCMA]
+    PREFERRED_CODECS: ClassVar[list[type[RTPCodec]]] = [Opus, G722, PCMU, PCMA]
 
     #: Ollama model name for generating replies.
     ollama_model: str = dataclasses.field(default="llama3")
