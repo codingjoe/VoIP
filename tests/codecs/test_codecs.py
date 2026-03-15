@@ -46,6 +46,11 @@ class TestGet:
             get("unknown")
 
 
+_PYAV_MODULE_KEYS: frozenset[str] = frozenset(
+    {"av", "voip.codecs", "voip.codecs.av", "voip.codecs.g722", "voip.codecs.opus"}
+)
+
+
 class TestRegistry:
     def test_registry__always_contains_numpy_codecs(self):
         """REGISTRY always contains PCMA and PCMU regardless of PyAV availability."""
@@ -58,18 +63,7 @@ class TestRegistry:
         """REGISTRY excludes G722 and Opus when av is not importable."""
         import voip.codecs as target  # noqa: PLC0415
 
-        keys_to_remove = [
-            k
-            for k in list(sys.modules)
-            if k
-            in {
-                "av",
-                "voip.codecs",
-                "voip.codecs.av",
-                "voip.codecs.g722",
-                "voip.codecs.opus",
-            }
-        ]
+        keys_to_remove = [k for k in sys.modules if k in _PYAV_MODULE_KEYS]
         saved = {k: sys.modules.pop(k) for k in keys_to_remove}
         sys.modules["av"] = None  # causes ImportError on `import av`
 
@@ -88,18 +82,7 @@ class TestRegistry:
 
     def test_all__excludes_pyav_names_when_av_unavailable(self):
         """__all__ excludes G722, Opus, and PyAVCodec when av is not importable."""
-        keys_to_remove = [
-            k
-            for k in list(sys.modules)
-            if k
-            in {
-                "av",
-                "voip.codecs",
-                "voip.codecs.av",
-                "voip.codecs.g722",
-                "voip.codecs.opus",
-            }
-        ]
+        keys_to_remove = [k for k in sys.modules if k in _PYAV_MODULE_KEYS]
         saved = {k: sys.modules.pop(k) for k in keys_to_remove}
         sys.modules["av"] = None  # causes ImportError on `import av`
 
@@ -110,6 +93,6 @@ class TestRegistry:
                 assert name not in fresh.__all__, f"{name!r} must not be in __all__ without av"
         finally:
             for k in list(sys.modules):
-                if k in {"av", "voip.codecs", "voip.codecs.av", "voip.codecs.g722", "voip.codecs.opus"}:
+                if k in _PYAV_MODULE_KEYS:
                     sys.modules.pop(k, None)
             sys.modules.update(saved)

@@ -15,17 +15,11 @@ from voip.codecs.base import RTPCodec
 
 __all__ = ["PCMA"]
 
-# G.711 A-law segment thresholds (13-bit PCM magnitude boundaries).
-# Each entry is the inclusive upper bound of that segment in 16-bit PCM scale.
-_ALAW_SEG_THRESHOLDS: tuple[int, ...] = (
-    0xFF,
-    0x1FF,
-    0x3FF,
-    0x7FF,
-    0xFFF,
-    0x1FFF,
-    0x3FFF,
-    0x7FFF,
+# G.711 A-law segment upper bounds (16-bit PCM magnitude, inclusive per segment).
+# Vectorised segment lookup via np.searchsorted uses side='left' to count thresholds
+# strictly exceeded (v > threshold), giving the correct 0–7 segment index.
+_ALAW_SEG_UBOUND: np.ndarray = np.array(
+    (0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF, 0x1FFF, 0x3FFF, 0x7FFF), dtype=np.int32
 )
 
 
@@ -82,11 +76,12 @@ class PCMA(RTPCodec):
         # Positive samples: mask 0xD5.  Negative samples: mask 0x55, negate−1.
         magnitude = np.where(pcm >= 0, pcm, -pcm - 1).astype(np.int32)
         mask = np.where(pcm >= 0, np.uint8(0xD5), np.uint8(0x55))
-        # Find the segment index (0–7) by counting exceeded thresholds.
-        seg = np.zeros(len(samples), dtype=np.int32)
-        for thresh in _ALAW_SEG_THRESHOLDS:
-            seg = np.where(magnitude > thresh, seg + 1, seg)
-        seg = np.minimum(seg, 7)
+        # Find the segment index (0–7) via vectorised binary search on the upper bounds.
+        # side='left' counts thresholds strictly less than magnitude, i.e. exceeded.
+        seg = np.minimum(
+            np.searchsorted(_ALAW_SEG_UBOUND, magnitude, side="left").astype(np.int32),
+            7,
+        )
         # Quantise: shift right by 1 for segments 0–1, by seg for segments ≥ 2.
         shift = np.maximum(seg, 1)
         mantissa_low = (magnitude >> 1) & 0x0F
