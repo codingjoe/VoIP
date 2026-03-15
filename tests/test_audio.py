@@ -10,7 +10,11 @@ import pytest
 np = pytest.importorskip("numpy")
 av = pytest.importorskip("av")
 
-from voip.audio import AudioCall, _build_ogg_opus  # noqa: E402
+from voip.audio import AudioCall  # noqa: E402
+from voip.codecs.g722 import G722  # noqa: E402
+from voip.codecs.opus import Opus  # noqa: E402
+from voip.codecs.pcma import PCMA  # noqa: E402
+from voip.codecs.pcmu import PCMU  # noqa: E402
 from voip.rtp import RealtimeTransportProtocol, RTPPayloadType  # noqa: E402
 from voip.sdp.types import MediaDescription, RTPPayloadFormat  # noqa: E402
 from voip.sip.types import CallerID  # noqa: E402
@@ -31,40 +35,6 @@ OPUS_MEDIA = _make_media("111", "111 opus/48000/2")
 PCMA_MEDIA = _make_media("8", "8 PCMA/8000")
 PCMU_MEDIA = _make_media("0")  # static PT, no rtpmap
 G722_MEDIA = _make_media("9", "9 G722/8000")
-
-
-class TestBuildOggOpus:
-    def test_build_ogg_opus__starts_with_ogg_magic(self):
-        """The resulting container starts with the Ogg capture pattern 'OggS'."""
-        assert _build_ogg_opus(b"packet").startswith(b"OggS")
-
-    def test_build_ogg_opus__contains_opus_head(self):
-        """The resulting container includes the OpusHead identification header."""
-        assert b"OpusHead" in _build_ogg_opus(b"packet")
-
-    def test_build_ogg_opus__contains_opus_tags(self):
-        """The resulting container includes the OpusTags comment header."""
-        assert b"OpusTags" in _build_ogg_opus(b"packet")
-
-    def test_build_ogg_opus__non_empty_for_single_packet(self):
-        """Produce a non-empty Ogg container for a single Opus packet."""
-        assert len(_build_ogg_opus(b"x" * 100)) > 100
-
-    def test_build_ogg_opus__empty_payload(self):
-        """Produce a valid Ogg container even when the payload is empty bytes."""
-        result = _build_ogg_opus(b"")
-        assert b"OggS" in result
-
-    def test_build_ogg_opus__large_packet_uses_255_lacing(self):
-        """Produce a valid Ogg container when a packet exceeds 254 bytes (lacing spans 255)."""
-        result = _build_ogg_opus(b"x" * 256)
-        assert b"OggS" in result
-        assert len(result) > 256
-
-    def test_build_ogg_opus__produces_three_pages(self):
-        """Produce exactly three Ogg pages: BOS, tags, and data."""
-        result = _build_ogg_opus(b"x" * 10)
-        assert result.count(b"OggS") == 3
 
 
 def make_audio_call(**kwargs) -> AudioCall:
@@ -105,8 +75,6 @@ class TestAudioCall:
 
     def test_init__stores_media(self):
         """Media parameter is stored on the AudioCall instance."""
-        from voip.sdp.types import MediaDescription, RTPPayloadFormat  # noqa: PLC0415
-
         media = MediaDescription(
             media="audio",
             port=49170,
@@ -120,8 +88,6 @@ class TestAudioCall:
 
     def test_init__derives_sample_rate_from_media(self):
         """sample_rate is derived from the RTPPayloadFormat sample_rate."""
-        from voip.sdp.types import MediaDescription, RTPPayloadFormat  # noqa: PLC0415
-
         media = MediaDescription(
             media="audio",
             port=49170,
@@ -139,8 +105,6 @@ class TestAudioCall:
 
     def test_init__derives_payload_type_from_media(self):
         """payload_type is derived from the first fmt entry of the MediaDescription."""
-        from voip.sdp.types import MediaDescription, RTPPayloadFormat  # noqa: PLC0415
-
         media = MediaDescription(
             media="audio",
             port=49170,
@@ -157,8 +121,6 @@ class TestAudioCall:
     def test_init__logs_codec_info(self, caplog):
         """Log codec name, sample rate and payload type at INFO level on init."""
         import logging  # noqa: PLC0415
-
-        from voip.sdp.types import MediaDescription, RTPPayloadFormat  # noqa: PLC0415
 
         media = MediaDescription(
             media="audio",
@@ -180,7 +142,7 @@ class TestAudioCall:
         received: list = []
 
         class ConcreteCall(AudioCall):
-            def _decode_raw(self, packet: bytes) -> np.ndarray:
+            def decode_payload(self, packet: bytes) -> np.ndarray:
                 return np.array([1.0], dtype=np.float32)
 
             def audio_received(self, *, audio: np.ndarray, rms: float) -> None:
@@ -221,8 +183,6 @@ class TestAudioCall:
 class TestNegotiateCodec:
     def _make_media(self, fmts: list[str], rtpmaps: list[str] | None = None):
         """Build a MediaDescription with given format list and optional rtpmap attributes."""
-        from voip.sdp.types import MediaDescription, RTPPayloadFormat  # noqa: PLC0415
-
         rtpmap_by_pt: dict[int, RTPPayloadFormat] = {}
         for rtpmap in rtpmaps or []:
             f = RTPPayloadFormat.parse(rtpmap)
@@ -274,8 +234,6 @@ class TestNegotiateCodec:
 
     def test_negotiate_codec__returns_media_description(self):
         """negotiate_codec returns a MediaDescription object."""
-        from voip.sdp.types import MediaDescription  # noqa: PLC0415
-
         media = self._make_media(["0", "8", "111"], ["111 opus/48000/2"])
         result = AudioCall.negotiate_codec(media)
         assert isinstance(result, MediaDescription)
@@ -284,12 +242,9 @@ class TestNegotiateCodec:
 
     def test_negotiate_codec__subclass_can_override_preferences(self):
         """A subclass with a different PREFERRED_CODECS list uses its own preferences."""
-        from voip.sdp.types import RTPPayloadFormat  # noqa: PLC0415
 
         class PCMAOnlyCall(AudioCall):
-            PREFERRED_CODECS = [
-                RTPPayloadFormat(payload_type=8, encoding_name="PCMA", sample_rate=8000)
-            ]
+            PREFERRED_CODECS = [PCMA]
 
         media = self._make_media(["0", "8", "111"])
         result = PCMAOnlyCall.negotiate_codec(media)
@@ -297,228 +252,160 @@ class TestNegotiateCodec:
 
     def test_preferred_codecs__class_attribute(self):
         """PREFERRED_CODECS is a class attribute on AudioCall with Opus first."""
-        from voip.sdp.types import RTPPayloadFormat  # noqa: PLC0415
-
-        codecs = AudioCall.PREFERRED_CODECS
-        assert isinstance(codecs, list)
-        assert all(isinstance(c, RTPPayloadFormat) for c in codecs)
-        pts = [c.payload_type for c in codecs]
+        codec_classes = AudioCall.PREFERRED_CODECS
+        assert isinstance(codec_classes, list)
+        pts = [c.payload_type for c in codec_classes]
         assert pts[0] == 111  # Opus is highest priority
         assert 8 in pts  # PCMA present
         assert 0 in pts  # PCMU present
 
 
-class TestOutboundRTPInit:
-    """Tests for outbound RTP state initialised in AudioCall.__post_init__."""
+class TestCodecAssignment:
+    """Tests that __post_init__ assigns the correct codec class."""
 
-    def test_opus_media__sets_rtp_fields(self):
-        """Opus media sets 48 kHz sample rate, 960-sample chunks, and 960 ts-increment."""
+    def test_opus_media__codec_is_opus(self):
+        """Opus media assigns the Opus codec class."""
         call = make_audio_call(media=OPUS_MEDIA)
-        assert call._rtp_sample_rate == 48000
-        assert call._rtp_chunk_samples == 960
-        assert call._rtp_ts_increment == 960
+        assert call.codec is Opus
+        assert call.codec.sample_rate_hz == 48000
+        assert call.codec.frame_size == 960
+        assert call.codec.timestamp_increment == 960
 
-    def test_g722_media__sets_rtp_fields(self):
-        """G.722 media sets 16 kHz audio but uses 8 kHz RTP clock (160 ts-increment)."""
+    def test_g722_media__codec_is_g722(self):
+        """G.722 media assigns the G722 codec class with correct rates."""
         call = make_audio_call(media=G722_MEDIA)
-        assert call._rtp_sample_rate == 16000
-        assert call._rtp_chunk_samples == 320
-        assert call._rtp_ts_increment == 160
+        assert call.codec is G722
+        assert call.codec.sample_rate_hz == 16000
+        assert call.codec.frame_size == 320
+        assert call.codec.timestamp_increment == 160
 
-    def test_pcmu_media__sets_rtp_fields(self):
-        """PCMU media sets 8 kHz sample rate, 160-sample chunks and ts-increment."""
+    def test_pcmu_media__codec_is_pcmu(self):
+        """PCMU media assigns the PCMU codec class."""
         call = make_audio_call(media=PCMU_MEDIA)
-        assert call._rtp_sample_rate == 8000
-        assert call._rtp_chunk_samples == 160
-        assert call._rtp_ts_increment == 160
+        assert call.codec is PCMU
+        assert call.codec.sample_rate_hz == 8000
+        assert call.codec.frame_size == 160
+        assert call.codec.timestamp_increment == 160
+
+    def test_pcma_media__codec_is_pcma(self):
+        """PCMA media assigns the PCMA codec class."""
+        call = make_audio_call(media=PCMA_MEDIA)
+        assert call.codec is PCMA
 
 
 class TestResample:
-    """Tests for AudioCall._resample."""
+    """Tests for AudioCall.resample."""
 
     def test_resample__downsamples_from_24khz_to_8khz(self):
-        """_resample reduces 24 000 samples at 24 kHz to 8 000 samples at 8 kHz."""
+        """Resample reduces 24 000 samples at 24 kHz to 8 000 samples at 8 kHz."""
         audio = np.zeros(24000, dtype=np.float32)
-        assert len(AudioCall._resample(audio, 24000, 8000)) == 8000
+        assert len(AudioCall.resample(audio, 24000, 8000)) == 8000
 
     def test_resample__passthrough_when_rate_matches(self):
-        """_resample returns the original array unchanged when rates are equal."""
+        """Resample returns the original array unchanged when rates are equal."""
         audio = np.zeros(8000, dtype=np.float32)
-        assert AudioCall._resample(audio, 8000, 8000) is audio
+        assert AudioCall.resample(audio, 8000, 8000) is audio
 
 
-class TestEncodePCMU:
-    """Tests for AudioCall._encode_pcmu."""
+class TestDecodePayload:
+    """Tests for AudioCall.decode_payload."""
 
-    def test_encode_pcmu__returns_one_byte_per_sample(self):
-        """_encode_pcmu returns a bytes object with one byte per input sample."""
-        assert len(AudioCall._encode_pcmu(np.zeros(160, dtype=np.float32))) == 160
-
-    def test_encode_pcmu__silence_encodes_to_midpoint(self):
-        """Zero-amplitude samples encode to the µ-law midpoint value."""
-        result = AudioCall._encode_pcmu(np.zeros(10, dtype=np.float32))
-        assert result[0] in (127, 128)
-
-    def test_encode_pcmu__silence_is_0x7f(self):
-        """Silence (0.0) must encode to 0x7F (127) per ITU-T G.711."""
-        assert AudioCall._encode_pcmu(np.zeros(1, dtype=np.float32))[0] == 0x7F
-
-    def test_encode_pcmu__max_positive_is_0x00(self):
-        """Maximum positive amplitude must encode to 0x00 per ITU-T G.711."""
-        assert AudioCall._encode_pcmu(np.array([1.0], dtype=np.float32))[0] == 0x00
-
-    def test_encode_pcmu__max_negative_is_0x80(self):
-        """Maximum negative amplitude must encode to 0x80 per ITU-T G.711."""
-        assert AudioCall._encode_pcmu(np.array([-1.0], dtype=np.float32))[0] == 0x80
-
-
-class TestEncodePCMA:
-    """Tests for AudioCall._encode_pcma."""
-
-    def test_encode_pcma__returns_one_byte_per_sample(self):
-        """_encode_pcma returns a bytes object with one byte per input sample."""
-        assert len(AudioCall._encode_pcma(np.zeros(160, dtype=np.float32))) == 160
-
-    def test_encode_pcma__silence_encodes_consistently(self):
-        """Zero-amplitude samples all encode to the same A-law codeword."""
-        result = AudioCall._encode_pcma(np.zeros(10, dtype=np.float32))
-        assert all(b == result[0] for b in result)
-
-
-class TestEncodeViaAV:
-    """Tests for AudioCall._encode_via_av."""
-
-    def test_encode_via_av__g722_returns_bytes(self):
-        """_encode_via_av produces non-empty bytes for G.722."""
-        result = AudioCall._encode_via_av(
-            np.zeros(320, dtype=np.float32), "g722", 16000
-        )
-        assert isinstance(result, bytes)
-        assert len(result) > 0
-
-    def test_encode_via_av__opus_returns_bytes(self):
-        """_encode_via_av produces non-empty bytes for Opus (libopus)."""
-        result = AudioCall._encode_via_av(
-            np.zeros(960, dtype=np.float32), "libopus", 48000
-        )
-        assert isinstance(result, bytes)
-        assert len(result) > 0
-
-
-class TestEncodeAudio:
-    """Tests for AudioCall._encode_audio dispatch."""
-
-    def test_encode_audio__dispatches_to_pcmu(self):
-        """_encode_audio delegates to _encode_pcmu for PCMU media."""
-        call = make_audio_call(media=PCMU_MEDIA)
-        with patch.object(
-            AudioCall, "_encode_pcmu", return_value=b"x" * 160
-        ) as mock_enc:
-            call._encode_audio(np.zeros(160, dtype=np.float32))
-        mock_enc.assert_called_once()
-
-    def test_encode_audio__dispatches_to_pcma(self):
-        """_encode_audio delegates to _encode_pcma for PCMA media."""
+    def test_decode_payload__delegates_to_codec(self):
+        """decode_payload calls self.codec.decode with output and input rates."""
         call = make_audio_call(media=PCMA_MEDIA)
         with patch.object(
-            AudioCall, "_encode_pcma", return_value=b"x" * 160
-        ) as mock_enc:
-            call._encode_audio(np.zeros(160, dtype=np.float32))
-        mock_enc.assert_called_once()
+            PCMA, "decode", return_value=np.zeros(16000, dtype=np.float32)
+        ) as mock_decode:
+            call.decode_payload(b"payload")
+        mock_decode.assert_called_once_with(
+            b"payload",
+            AudioCall.RESAMPLING_RATE_HZ,
+            input_rate_hz=call.sample_rate,
+        )
 
-    def test_encode_audio__dispatches_to_opus(self):
-        """_encode_audio delegates to _encode_via_av with libopus for Opus media."""
-        call = make_audio_call(media=OPUS_MEDIA)
-        samples = np.zeros(960, dtype=np.float32)
-        with patch.object(AudioCall, "_encode_via_av", return_value=b"x") as mock_enc:
-            call._encode_audio(samples)
-        mock_enc.assert_called_once_with(samples, "libopus", 48000)
-
-    def test_encode_audio__raises_for_unsupported_codec(self):
-        """_encode_audio raises NotImplementedError for unrecognised encoding names."""
-        call = make_audio_call(media=PCMU_MEDIA)
-        call._encoding_name = "h264"
-        with pytest.raises(NotImplementedError, match="Unsupported outbound codec"):
-            call._encode_audio(np.zeros(160, dtype=np.float32))
-
-    def test_encode_audio__raises_for_g722(self):
-        """_encode_audio raises NotImplementedError for G.722 (handled by _packetize)."""
-        call = make_audio_call(media=PCMU_MEDIA)
-        call._encoding_name = "g722"
-        with pytest.raises(NotImplementedError, match="Unsupported outbound codec"):
-            call._encode_audio(np.zeros(320, dtype=np.float32))
-
-
-class TestPacketize:
-    """Tests for AudioCall._packetize."""
-
-    def test_packetize__g722_encodes_whole_buffer_at_once(self):
-        """_packetize calls _encode_via_av on the full audio buffer for G.722.
-
-        Encoding the whole buffer at once preserves the ADPCM predictor state
-        across 20 ms packet boundaries so the decoded audio is continuous.
-        """
-        call = make_audio_call(media=G722_MEDIA)
-        audio = np.zeros(640, dtype=np.float32)
-        fake_encoded = b"\xab" * 320
+    def test_decode_payload__passes_sample_rate_from_media(self):
+        """decode_payload passes the SDP-negotiated sample rate as input_rate_hz."""
+        wideband_pcma = _make_media("8", "8 PCMA/16000")
+        call = make_audio_call(media=wideband_pcma)
+        assert call.sample_rate == 16000
         with patch.object(
-            AudioCall, "_encode_via_av", return_value=fake_encoded
-        ) as mock_enc:
-            packets = list(call._packetize(audio))
-        mock_enc.assert_called_once_with(audio, "g722", 16000)
-        assert len(packets) == 2
-        assert packets[0] == b"\xab" * 160
-        assert packets[1] == b"\xab" * 160
+            PCMA, "decode", return_value=np.zeros(16000, dtype=np.float32)
+        ) as mock_decode:
+            call.decode_payload(b"pkt")
+        mock_decode.assert_called_once_with(
+            b"pkt",
+            AudioCall.RESAMPLING_RATE_HZ,
+            input_rate_hz=16000,
+        )
 
-    def test_packetize__pcmu_encodes_per_chunk(self):
-        """_packetize calls _encode_audio once per 20 ms chunk for PCMU."""
-        call = make_audio_call(media=PCMU_MEDIA)
-        audio = np.zeros(320, dtype=np.float32)
-        with patch.object(
-            call, "_encode_audio", return_value=b"\x7f" * 160
-        ) as mock_enc:
-            packets = list(call._packetize(audio))
-        assert mock_enc.call_count == 2
-        assert len(packets) == 2
+    def test_decode_payload__raises_for_unsupported_codec(self):
+        """Raise NotImplementedError when constructed with an unsupported codec."""
+        media = MediaDescription(
+            media="audio",
+            port=0,
+            proto="RTP/AVP",
+            fmt=[
+                RTPPayloadFormat(
+                    payload_type=96, encoding_name="speex", sample_rate=8000
+                )
+            ],
+        )
+        with pytest.raises(NotImplementedError, match="Unsupported codec"):
+            make_audio_call(media=media)
+
+
+class TestAudioCallInit:
+    def test_init__raises_value_error_for_none_encoding_name(self):
+        """Raise ValueError when the negotiated format has no encoding name."""
+        media = MediaDescription(
+            media="audio",
+            port=0,
+            proto="RTP/AVP",
+            fmt=[
+                RTPPayloadFormat(payload_type=96)
+            ],  # dynamic PT, no rtpmap -> no encoding name
+        )
+        with pytest.raises(ValueError, match="No encoding name"):
+            make_audio_call(media=media)
 
 
 class TestNextRTPPacket:
-    """Tests for AudioCall._next_rtp_packet."""
+    """Tests for AudioCall.next_rtp_packet."""
 
     def test_next_rtp_packet__has_twelve_byte_header(self):
-        """_next_rtp_packet produces a packet whose build() has a 12-byte RTP header."""
+        """next_rtp_packet produces a packet whose build() has a 12-byte RTP header."""
         call = make_audio_call(media=PCMU_MEDIA)
-        data = bytes(call._next_rtp_packet(b"\x00" * 160))
+        data = bytes(call.next_rtp_packet(b"\x00" * 160))
         assert len(data) == 12 + 160
         assert data[0] == 0x80  # V=2, P=0, X=0, CC=0
 
     def test_next_rtp_packet__increments_seq_and_ts_each_call(self):
-        """Each _next_rtp_packet call increments seq by 1 and ts by chunk size."""
+        """Each next_rtp_packet call increments seq by 1 and ts by chunk size."""
         call = make_audio_call(media=PCMU_MEDIA)
-        call._next_rtp_packet(b"\x00" * 160)
-        assert call._rtp_seq == 1
-        assert call._rtp_ts == 160
-        call._next_rtp_packet(b"\x00" * 160)
-        assert call._rtp_seq == 2
-        assert call._rtp_ts == 320
+        call.next_rtp_packet(b"\x00" * 160)
+        assert call.rtp_sequence_number == 1
+        assert call.rtp_timestamp == 160
+        call.next_rtp_packet(b"\x00" * 160)
+        assert call.rtp_sequence_number == 2
+        assert call.rtp_timestamp == 320
 
     def test_next_rtp_packet__uses_negotiated_payload_type(self):
-        """_next_rtp_packet uses the negotiated payload type in the RTP header."""
+        """next_rtp_packet uses the negotiated payload type in the RTP header."""
         call = make_audio_call(media=PCMA_MEDIA)
-        assert bytes(call._next_rtp_packet(b"\x00" * 160))[1] == RTPPayloadType.PCMA
+        assert bytes(call.next_rtp_packet(b"\x00" * 160))[1] == RTPPayloadType.PCMA
 
 
 class TestSendRTPAudio:
-    """Tests for AudioCall._send_rtp_audio."""
+    """Tests for AudioCall.send_rtp_audio."""
 
     async def test_send_rtp_audio__sends_to_remote_addr(self):
-        """_send_rtp_audio sends RTP packets to the caller's registered address."""
+        """send_rtp_audio sends RTP packets to the caller's registered address."""
         call = make_audio_call(media=PCMU_MEDIA)
         remote_addr = ("10.0.0.1", 5004)
         call.rtp.calls = {remote_addr: call}
 
         with patch.object(call, "send_packet") as mock_send:
-            await call._send_rtp_audio(np.zeros(160, dtype=np.float32))
+            await call.send_rtp_audio(np.zeros(160, dtype=np.float32))
             mock_send.assert_called_once()
         data, addr = mock_send.call_args[0]
         assert addr == remote_addr
@@ -535,12 +422,12 @@ class TestSendRTPAudio:
             caplog.at_level(logging.WARNING, logger="voip.audio"),
             patch.object(call, "send_packet") as mock_send,
         ):
-            await call._send_rtp_audio(np.zeros(160, dtype=np.float32))
+            await call.send_rtp_audio(np.zeros(160, dtype=np.float32))
         mock_send.assert_not_called()
         assert any("dropping audio" in r.message for r in caplog.records)
 
     async def test_send_rtp_audio__paces_packets_at_20ms_intervals(self):
-        """_send_rtp_audio sleeps _rtp_packet_duration seconds between each packet."""
+        """send_rtp_audio sleeps RTP_PACKET_DURATION_SECS between each packet."""
         call = make_audio_call(media=PCMU_MEDIA)
         remote_addr = ("10.0.0.2", 5006)
         call.rtp.calls = {remote_addr: call}
@@ -549,48 +436,15 @@ class TestSendRTPAudio:
         sleep_calls: list[float] = []
         original_sleep = asyncio.sleep
 
-        async def _capture_sleep(delay: float) -> None:
+        async def capture_sleep(delay: float) -> None:
             sleep_calls.append(delay)
             await original_sleep(0)
 
         with (
-            patch("voip.audio.asyncio.sleep", side_effect=_capture_sleep),
+            patch("voip.audio.asyncio.sleep", side_effect=capture_sleep),
             patch.object(call, "send_packet"),
         ):
-            await call._send_rtp_audio(audio)
+            await call.send_rtp_audio(audio)
 
         assert len(sleep_calls) == 2
-        assert all(s == call._rtp_packet_duration for s in sleep_calls)
-
-
-class TestAudioCallInit:
-    def test_init__raises_value_error_for_none_encoding_name(self):
-        """Raise ValueError when the negotiated format has no encoding name."""
-        media = MediaDescription(
-            media="audio",
-            port=0,
-            proto="RTP/AVP",
-            fmt=[
-                RTPPayloadFormat(payload_type=96)
-            ],  # dynamic PT, no rtpmap → no encoding name
-        )
-        with pytest.raises(ValueError, match="No encoding name"):
-            make_audio_call(media=media)
-
-
-class TestDecodeRaw:
-    def test_decode_raw__raises_not_implemented_for_unsupported_codec(self):
-        """Raise NotImplementedError when _decode_raw is called with an unknown codec."""
-        media = MediaDescription(
-            media="audio",
-            port=0,
-            proto="RTP/AVP",
-            fmt=[
-                RTPPayloadFormat(
-                    payload_type=96, encoding_name="speex", sample_rate=8000
-                )
-            ],
-        )
-        call = make_audio_call(media=media)
-        with pytest.raises(NotImplementedError, match="Unsupported inbound codec"):
-            call._decode_raw(b"\x00" * 160)
+        assert all(s == call.RTP_PACKET_DURATION_SECS for s in sleep_calls)

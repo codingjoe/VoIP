@@ -51,7 +51,7 @@ class RTPPacket(ByteSerializableObject):
     [RFC 3550 §5.1]: https://datatracker.ietf.org/doc/html/rfc3550#section-5.1
     """
 
-    payload_type: int
+    payload_type: RTPPayloadType | int
     sequence_number: int
     timestamp: int
     ssrc: int
