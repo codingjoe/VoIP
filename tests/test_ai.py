@@ -12,7 +12,7 @@ pytest.importorskip("faster_whisper")
 pytest.importorskip("ollama")
 pytest.importorskip("pocket_tts")
 
-from voip.ai import AgentCall, AgentState, TranscribeCall  # noqa: E402
+from voip.ai import AgentCall, TranscribeCall  # noqa: E402
 from voip.audio import AudioCall  # noqa: E402
 from voip.rtp import RTPPayloadType  # noqa: E402
 from voip.sdp.types import MediaDescription, RTPPayloadFormat  # noqa: E402
@@ -629,15 +629,3 @@ class TestAgentCall:
     def test_preferred_codecs__opus_is_first(self):
         """AgentCall prefers Opus as the highest-priority outbound codec."""
         assert AgentCall.PREFERRED_CODECS[0].payload_type == RTPPayloadType.OPUS
-
-
-class TestAgentState:
-    def test_agent_state__has_three_members(self):
-        """AgentState defines LISTENING, THINKING, and SPEAKING."""
-        assert {s.value for s in AgentState} == {"listening", "thinking", "speaking"}
-
-    def test_agent_state__is_exported(self):
-        """AgentState is listed in __all__."""
-        import voip.ai
-
-        assert "AgentState" in voip.ai.__all__
