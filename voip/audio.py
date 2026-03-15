@@ -402,7 +402,7 @@ class EchoCall(VoiceActivityCall):
         """Resample and transmit buffered speech audio back to the caller.
 
         Args:
-            audio: Float32 mono PCM array at [`RESAMPLING_RATE_HZ`][voip.audio.AudioCall.RESAMPLING_RATE_HZ] Hz.
+            audio: Float32 mono PCM array at `RESAMPLING_RATE_HZ` Hz.
         """
         resampled = self.resample(
             audio, self.RESAMPLING_RATE_HZ, self.codec.sample_rate_hz

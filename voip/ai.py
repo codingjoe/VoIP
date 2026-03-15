@@ -19,7 +19,7 @@ import ollama
 from faster_whisper import WhisperModel
 from pocket_tts import TTSModel
 
-from voip.audio import AudioCall, VoiceActivityCall
+from voip.audio import VoiceActivityCall
 from voip.codecs import Codec
 from voip.codecs.g722 import G722
 from voip.codecs.opus import Opus
@@ -36,7 +36,7 @@ class TranscribeCall(VoiceActivityCall):
     """RTP call handler that transcribes audio with faster-whisper.
 
     Audio is decoded by [`AudioCall`][voip.audio.AudioCall] on a per-packet
-    basis and delivered to [`audio_received`][voip.audio.VoiceActivityCall.audio_received],
+    basis and delivered to [`audio_received`][voip.audio.AudioCall.audio_received],
     which applies an energy-based voice activity detector (VAD) from
     [`VoiceActivityCall`][voip.audio.VoiceActivityCall].  All audio frames
     (speech and silence) are accumulated until silence is sustained for
