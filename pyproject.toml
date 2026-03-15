@@ -41,7 +41,7 @@ dependencies = ["cryptography"]
 [project.optional-dependencies]
 audio = ["numpy"]
 hd-audio = ["numpy", "av"]
-ai = ["faster-whisper", "numpy", "ollama", "pocket-tts"]
+ai = ["faster-whisper", "numpy", "av", "ollama", "pocket-tts"]
 cli = ["click", "pygments", "faster-whisper", "numpy", "ollama", "pocket-tts"]
 pygments = ["Pygments"]
 
