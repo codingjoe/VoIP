@@ -550,7 +550,9 @@ class TestVoiceActivityCall:
         """flush_speech_buffer clears the buffer and schedules speech_buffer_ready."""
         call = make_vac_call()
         call.speech_buffer.append(np.ones(160, dtype=np.float32))
-        with patch.object(call, "speech_buffer_ready", new_callable=AsyncMock) as mock_ready:
+        with patch.object(
+            call, "speech_buffer_ready", new_callable=AsyncMock
+        ) as mock_ready:
             call.flush_speech_buffer()
             await asyncio.sleep(0)
         assert call.silence_handle is None
@@ -568,7 +570,9 @@ class TestVoiceActivityCall:
     async def test_speech_buffer_ready__noop_in_base(self):
         """speech_buffer_ready is a no-op in the base VoiceActivityCall."""
         call = make_vac_call()
-        await call.speech_buffer_ready(np.zeros(160, dtype=np.float32))  # must not raise
+        await call.speech_buffer_ready(
+            np.zeros(160, dtype=np.float32)
+        )  # must not raise
 
 
 class TestEchoCall:

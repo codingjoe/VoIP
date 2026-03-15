@@ -20,7 +20,9 @@ _WHISPER_STUBS = {
     "faster_whisper": MagicMock(),
     "ollama": MagicMock(),
     "pocket_tts": MagicMock(),
-    "voip.audio": MagicMock(EchoCall=MagicMock, VoiceActivityCall=MagicMock, AudioCall=MagicMock),
+    "voip.audio": MagicMock(
+        EchoCall=MagicMock, VoiceActivityCall=MagicMock, AudioCall=MagicMock
+    ),
     "voip.ai": MagicMock(TranscribeCall=MagicMock, AgentCall=MagicMock),
 }
 
