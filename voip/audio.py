@@ -22,6 +22,10 @@ import numpy as np
 
 import voip.codecs as codecs
 from voip.codecs import Codec
+from voip.codecs.g722 import G722  # noqa: E402
+from voip.codecs.opus import Opus  # noqa: E402
+from voip.codecs.pcma import PCMA  # noqa: E402
+from voip.codecs.pcmu import PCMU  # noqa: E402
 from voip.rtp import RTPCall, RTPPacket
 from voip.sdp.types import MediaDescription
 
@@ -51,7 +55,7 @@ class AudioCall(RTPCall):
     """
 
     #: Preferred codecs in priority order (highest priority first).
-    PREFERRED_CODECS: ClassVar[list[type[Codec]]] = []
+    PREFERRED_CODECS: ClassVar[list[type[Codec]]] = [Opus, G722, PCMA, PCMU]
 
     #: Target sample rate for decoded audio delivered to `audio_received`.
     RESAMPLING_RATE_HZ: ClassVar[int] = 16000
@@ -404,16 +408,3 @@ class EchoCall(VoiceActivityCall):
             audio, self.RESAMPLING_RATE_HZ, self.codec.sample_rate_hz
         )
         await self.send_rtp_audio(resampled)
-
-
-# Populate PREFERRED_CODECS after all codec imports settle.
-from voip.codecs.g722 import G722  # noqa: E402
-from voip.codecs.opus import Opus  # noqa: E402
-from voip.codecs.pcma import PCMA  # noqa: E402
-from voip.codecs.pcmu import PCMU  # noqa: E402
-
-AudioCall.PREFERRED_CODECS = [Opus, G722, PCMA, PCMU]
-
-# Re-export RTPPayloadType so existing importers that do
-# ``from voip.audio import ...`` continue to work.
-from voip.rtp import RTPPayloadType  # noqa: E402, F401
