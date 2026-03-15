@@ -4,9 +4,12 @@ watch:
   - docs
   - voip
 nav:
-  - Home: index.md
-  - Usage: usage.md
-  - Feature Roadmap: roadmap.md
+  - Home:
+      - Usage: usage.md
+      - Cookbook: cookbook.md
+  - Features:
+      - Feature Roadmap: feature_roadmap.md
+      - RFC Implementation Status: rfc_status.md
   - API Reference:
       - Calls: calls.md
       - RTP: rtp.md
@@ -52,6 +55,7 @@ theme:
   features:
     - content.code.select
     - content.code.copy
+    - navigation.tabs
     - search.suggest
     - search.share
 markdown_extensions:

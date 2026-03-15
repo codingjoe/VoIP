@@ -25,19 +25,19 @@ Async VoIP Python library for the AI age.
 Answer calls and transcribe them live from the terminal:
 
 ```console
-SIP_PASSWORD=******** uvx voip sip sips:alice@sip.example.com transcribe
+SIP_PASSWORD=******** uvx 'voip[cli]' sip sips:alice@sip.example.com transcribe
 ```
 
 You can also talk to a local agent (needs [Ollama]):
 
 ```console
-SIP_PASSWORD=******** uvx voip sip sips:alice@sip.example.com agent
+SIP_PASSWORD=******** uvx 'voip[cli]' sip sips:alice@sip.example.com agent
 ```
 
 ### Python API
 
 ```console
-pip install voip[audio,cli,pygments]
+uv add voip[audio,ai,pygments]
 ```
 
 Subclass `WhisperCall` and override `transcription_received` to handle results.
