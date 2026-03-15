@@ -1,8 +1,8 @@
 """PCMU (G.711 mu-law) codec implementation for RTP audio streams (RFC 3551).
 
-The [`PCMU`][voip.codecs.pcmu.PCMU] class decodes mu-law RTP payloads via
-PyAV and encodes float32 PCM using a pure-NumPy implementation of
-ITU-T G.711 mu-law companding.
+The [`PCMU`][voip.codecs.pcmu.PCMU] class decodes and encodes mu-law RTP
+payloads using a pure-NumPy implementation of ITU-T G.711 mu-law companding.
+No PyAV dependency is required.
 """
 
 from __future__ import annotations
@@ -15,12 +15,19 @@ from voip.codecs.base import RTPCodec
 
 __all__ = ["PCMU"]
 
+_MU_LAW_BIAS: int = 0x84  # 132: G.711 mu-law bias constant
+_MU_LAW_CLIP: int = 32635  # maximum biased magnitude (14-bit saturate)
+
 
 class PCMU(RTPCodec):
     """G.711 mu-law codec ([RFC 3551 §4.5.14][]).
 
     PCMU is the ITU-T G.711 mu-law logarithmic companding codec for PSTN
     telephony, standardised in RFC 3551 with static payload type 0.
+
+    Both [`encode`][voip.codecs.pcmu.PCMU.encode] and
+    [`decode`][voip.codecs.pcmu.PCMU.decode] are pure-NumPy and require no
+    PyAV dependency.
 
     [RFC 3551 §4.5.14]: https://datatracker.ietf.org/doc/html/rfc3551#section-4.5.14
     """
@@ -41,22 +48,22 @@ class PCMU(RTPCodec):
         *,
         input_rate_hz: int | None = None,
     ) -> np.ndarray:
-        return cls.decode_pcm(
-            payload,
-            "mulaw",
-            output_rate_hz,
-            input_rate_hz=input_rate_hz
-            if input_rate_hz is not None
-            else cls.sample_rate_hz,
+        raw = (~np.frombuffer(payload, dtype=np.uint8)).astype(np.uint8)
+        sign = np.where(raw & 0x80, 1.0, -1.0)
+        exp = ((raw >> 4) & 0x07).astype(np.int32)
+        mantissa = (raw & 0x0F).astype(np.int32)
+        # Reconstruct the biased linear magnitude from segment and mantissa.
+        biased = ((mantissa | 0x10) << (exp + 3)).astype(np.int32)
+        linear = ((biased - _MU_LAW_BIAS) / 32768.0).astype(np.float32)
+        return cls.resample(
+            (sign * linear).astype(np.float32), cls.sample_rate_hz, output_rate_hz
         )
 
     @classmethod
     def encode(cls, samples: np.ndarray) -> bytes:
-        BIAS = 0x84  # 132: G.711 mu-law bias constant
-        CLIP = 32635  # maximum biased magnitude (14-bit saturate)
         pcm = np.clip(np.round(samples * 32768.0), -32768, 32767).astype(np.int32)
         sign = np.where(pcm >= 0, 0x80, 0x00).astype(np.uint8)
-        biased = np.minimum(np.abs(pcm) + BIAS, CLIP)
+        biased = np.minimum(np.abs(pcm) + _MU_LAW_BIAS, _MU_LAW_CLIP)
         exp = np.clip(
             np.floor(np.log2(np.maximum(biased, 1))).astype(np.int32) - 7, 0, 7
         )

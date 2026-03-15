@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
-
 import pytest
 
 np = pytest.importorskip("numpy")
-av = pytest.importorskip("av")
 
 from voip.codecs.pcma import PCMA  # noqa: E402
 from voip.codecs.pcmu import PCMU  # noqa: E402
@@ -40,29 +37,40 @@ class TestPCMAConstants:
 
 
 class TestPCMADecode:
-    def test_decode__uses_alaw_format(self):
-        """Decode calls decode_pcm with the alaw PyAV format string."""
-        with patch.object(
-            PCMA, "decode_pcm", return_value=np.zeros(8000, dtype=np.float32)
-        ) as mock:
-            PCMA.decode(b"payload", 8000)
-        assert mock.call_args[0][1] == "alaw"
+    def test_decode__returns_float32(self):
+        """Decode produces float32 samples from A-law encoded input."""
+        payload = PCMA.encode(np.zeros(160, dtype=np.float32))
+        assert PCMA.decode(payload, 8000).dtype == np.float32
 
-    def test_decode__passes_sample_rate_as_default(self):
-        """Decode passes sample_rate_hz as input_rate_hz when not overridden."""
-        with patch.object(
-            PCMA, "decode_pcm", return_value=np.zeros(8000, dtype=np.float32)
-        ) as mock:
-            PCMA.decode(b"payload", 8000)
-        assert mock.call_args[1]["input_rate_hz"] == PCMA.sample_rate_hz
+    def test_decode__native_rate_preserves_sample_count(self):
+        """Decode at native 8 kHz returns one sample per byte."""
+        payload = PCMA.encode(np.zeros(160, dtype=np.float32))
+        assert len(PCMA.decode(payload, 8000)) == 160
 
-    def test_decode__uses_input_rate_hz_override(self):
-        """Decode passes the caller-supplied input_rate_hz when provided."""
-        with patch.object(
-            PCMA, "decode_pcm", return_value=np.zeros(16000, dtype=np.float32)
-        ) as mock:
-            PCMA.decode(b"payload", 16000, input_rate_hz=16000)
-        assert mock.call_args[1]["input_rate_hz"] == 16000
+    def test_decode__resamples_to_output_rate(self):
+        """Decode resamples to the requested output rate."""
+        payload = PCMA.encode(np.zeros(160, dtype=np.float32))
+        assert len(PCMA.decode(payload, 16000)) == 320
+
+    def test_decode__silence_roundtrip(self):
+        """Encode then decode silence returns values near zero."""
+        payload = PCMA.encode(np.zeros(160, dtype=np.float32))
+        result = PCMA.decode(payload, 8000)
+        assert np.allclose(result, 0.0, atol=0.02)
+
+    def test_decode__positive_and_negative_differ(self):
+        """Positive and negative input decode to values with opposite sign."""
+        pos = PCMA.decode(PCMA.encode(np.full(1, 0.5, dtype=np.float32)), 8000)
+        neg = PCMA.decode(PCMA.encode(np.full(1, -0.5, dtype=np.float32)), 8000)
+        assert pos[0] > 0
+        assert neg[0] < 0
+
+    def test_decode__ignores_input_rate_hz(self):
+        """Decode ignores input_rate_hz: A-law is always at 8 kHz."""
+        payload = PCMA.encode(np.zeros(160, dtype=np.float32))
+        result_default = PCMA.decode(payload, 8000, input_rate_hz=None)
+        result_override = PCMA.decode(payload, 8000, input_rate_hz=16000)
+        np.testing.assert_array_equal(result_default, result_override)
 
     def test_decode__real_decode_returns_float32(self):
         """Decode produces a float32 array from real A-law encoded input."""
@@ -115,29 +123,37 @@ class TestPCMUConstants:
 
 
 class TestPCMUDecode:
-    def test_decode__uses_mulaw_format(self):
-        """Decode calls decode_pcm with the mulaw PyAV format string."""
-        with patch.object(
-            PCMU, "decode_pcm", return_value=np.zeros(8000, dtype=np.float32)
-        ) as mock:
-            PCMU.decode(b"payload", 8000)
-        assert mock.call_args[0][1] == "mulaw"
+    def test_decode__returns_float32(self):
+        """Decode produces float32 samples from mu-law encoded input."""
+        payload = PCMU.encode(np.zeros(160, dtype=np.float32))
+        assert PCMU.decode(payload, 8000).dtype == np.float32
 
-    def test_decode__passes_sample_rate_as_default(self):
-        """Decode passes sample_rate_hz as input_rate_hz when not overridden."""
-        with patch.object(
-            PCMU, "decode_pcm", return_value=np.zeros(8000, dtype=np.float32)
-        ) as mock:
-            PCMU.decode(b"payload", 8000)
-        assert mock.call_args[1]["input_rate_hz"] == PCMU.sample_rate_hz
+    def test_decode__native_rate_preserves_sample_count(self):
+        """Decode at native 8 kHz returns one sample per byte."""
+        payload = PCMU.encode(np.zeros(160, dtype=np.float32))
+        assert len(PCMU.decode(payload, 8000)) == 160
 
-    def test_decode__uses_input_rate_hz_override(self):
-        """Decode passes the caller-supplied input_rate_hz when provided."""
-        with patch.object(
-            PCMU, "decode_pcm", return_value=np.zeros(16000, dtype=np.float32)
-        ) as mock:
-            PCMU.decode(b"payload", 16000, input_rate_hz=16000)
-        assert mock.call_args[1]["input_rate_hz"] == 16000
+    def test_decode__resamples_to_output_rate(self):
+        """Decode resamples to the requested output rate."""
+        payload = PCMU.encode(np.zeros(160, dtype=np.float32))
+        assert len(PCMU.decode(payload, 16000)) == 320
+
+    def test_decode__max_positive_roundtrip(self):
+        """Max positive amplitude (0x00) decodes to a large positive value."""
+        decoded = PCMU.decode(bytes([0x00]), 8000)
+        assert decoded[0] > 0.9
+
+    def test_decode__max_negative_roundtrip(self):
+        """Max negative amplitude (0x80) decodes to a large negative value."""
+        decoded = PCMU.decode(bytes([0x80]), 8000)
+        assert decoded[0] < -0.9
+
+    def test_decode__ignores_input_rate_hz(self):
+        """Decode ignores input_rate_hz: mu-law is always at 8 kHz."""
+        payload = PCMU.encode(np.zeros(160, dtype=np.float32))
+        result_default = PCMU.decode(payload, 8000, input_rate_hz=None)
+        result_override = PCMU.decode(payload, 8000, input_rate_hz=16000)
+        np.testing.assert_array_equal(result_default, result_override)
 
     def test_decode__real_decode_returns_float32(self):
         """Decode produces a float32 array from real mu-law encoded input."""

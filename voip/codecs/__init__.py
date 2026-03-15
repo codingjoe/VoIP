@@ -3,29 +3,39 @@
 Provides the [`RTPCodec`][voip.codecs.base.RTPCodec] base class and concrete
 implementations for all supported RTP audio codecs:
 
-- [`Opus`][voip.codecs.Opus] — Opus (RFC 7587), PT 111
-- [`G722`][voip.codecs.G722] — G.722 (RFC 3551), PT 9
-- [`PCMA`][voip.codecs.PCMA] — G.711 A-law (RFC 3551), PT 8
-- [`PCMU`][voip.codecs.PCMU] — G.711 mu-law (RFC 3551), PT 0
+- [`PCMA`][voip.codecs.PCMA] — G.711 A-law (RFC 3551), PT 8 *(pure NumPy)*
+- [`PCMU`][voip.codecs.PCMU] — G.711 mu-law (RFC 3551), PT 0 *(pure NumPy)*
+- [`G722`][voip.codecs.G722] — G.722 (RFC 3551), PT 9 *(requires* ``pyav`` *extra)*
+- [`Opus`][voip.codecs.Opus] — Opus (RFC 7587), PT 111 *(requires* ``pyav`` *extra)*
 
 Use [`get`][voip.codecs.get] to look up a codec class by its SDP encoding
 name (case-insensitive).
+
+When the ``pyav`` extra is not installed only PCMA and PCMU are registered.
 """
 
 from __future__ import annotations
 
 from voip.codecs.base import RTPCodec
-from voip.codecs.g722 import G722
-from voip.codecs.opus import Opus
 from voip.codecs.pcma import PCMA
 from voip.codecs.pcmu import PCMU
 
-__all__ = ["G722", "Opus", "PCMA", "PCMU", "RTPCodec", "get"]
+__all__ = ["G722", "Opus", "PCMA", "PCMU", "PyAVCodec", "RTPCodec", "get"]
 
 #: Registry mapping lowercase encoding names to codec classes.
 REGISTRY: dict[str, type[RTPCodec]] = {
-    codec.encoding_name: codec for codec in (Opus, G722, PCMA, PCMU)
+    PCMA.encoding_name: PCMA,
+    PCMU.encoding_name: PCMU,
 }
+
+try:
+    from voip.codecs.av import PyAVCodec
+    from voip.codecs.g722 import G722
+    from voip.codecs.opus import Opus
+
+    REGISTRY |= {G722.encoding_name: G722, Opus.encoding_name: Opus}
+except ImportError:
+    pass
 
 
 def get(encoding_name: str) -> type[RTPCodec]:

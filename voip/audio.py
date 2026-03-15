@@ -16,18 +16,16 @@ import dataclasses
 import json
 import logging
 import secrets
+import typing
 from typing import ClassVar
-
-import numpy as np
 
 import voip.codecs as codecs
 from voip.codecs import RTPCodec
-from voip.codecs.g722 import G722  # noqa: E402
-from voip.codecs.opus import Opus  # noqa: E402
-from voip.codecs.pcma import PCMA  # noqa: E402
-from voip.codecs.pcmu import PCMU  # noqa: E402
 from voip.rtp import RTPCall, RTPPacket
 from voip.sdp.types import MediaDescription
+
+if typing.TYPE_CHECKING:
+    import numpy as np
 
 __all__ = ["AudioCall", "EchoCall", "VoiceActivityCall"]
 
@@ -55,7 +53,13 @@ class AudioCall(RTPCall):
     """
 
     #: Preferred codecs in priority order (highest priority first).
-    PREFERRED_CODECS: ClassVar[list[type[RTPCodec]]] = [Opus, G722, PCMA, PCMU]
+    #: Populated from [`voip.codecs.REGISTRY`][voip.codecs.REGISTRY] at import
+    #: time; falls back to pure-NumPy codecs when the ``pyav`` extra is absent.
+    PREFERRED_CODECS: ClassVar[list[type[RTPCodec]]] = [
+        codecs.REGISTRY[name]
+        for name in ("opus", "g722", "pcma", "pcmu")
+        if name in codecs.REGISTRY
+    ]
 
     #: Target sample rate for decoded audio delivered to `audio_received`.
     RESAMPLING_RATE_HZ: ClassVar[int] = 16000
@@ -264,7 +268,7 @@ class AudioCall(RTPCall):
     ) -> np.ndarray:
         """Resample *audio* from *source_rate_hz* to *destination_rate_hz*.
 
-        Uses linear interpolation via [`numpy.interp`][].
+        Delegates to [`RTPCodec.resample`][voip.codecs.base.RTPCodec.resample].
 
         Args:
             audio: Float32 mono PCM array.
@@ -274,14 +278,7 @@ class AudioCall(RTPCall):
         Returns:
             Resampled float32 array at *destination_rate_hz* Hz.
         """
-        if source_rate_hz == destination_rate_hz:
-            return audio
-        n_out = round(len(audio) * destination_rate_hz / source_rate_hz)
-        return np.interp(
-            np.linspace(0, len(audio) - 1, n_out),
-            np.arange(len(audio)),
-            audio,
-        ).astype(np.float32)
+        return RTPCodec.resample(audio, source_rate_hz, destination_rate_hz)
 
 
 @dataclasses.dataclass(kw_only=True)

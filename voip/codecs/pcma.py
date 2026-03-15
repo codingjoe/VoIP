@@ -1,8 +1,8 @@
 """PCMA (G.711 A-law) codec implementation for RTP audio streams (RFC 3551).
 
-The [`PCMA`][voip.codecs.pcma.PCMA] class decodes A-law RTP payloads via
-PyAV and encodes float32 PCM using a pure-NumPy implementation of
-ITU-T G.711 A-law companding.
+The [`PCMA`][voip.codecs.pcma.PCMA] class decodes and encodes A-law RTP
+payloads using a pure-NumPy implementation of ITU-T G.711 A-law companding.
+No PyAV dependency is required.
 """
 
 from __future__ import annotations
@@ -15,12 +15,20 @@ from voip.codecs.base import RTPCodec
 
 __all__ = ["PCMA"]
 
+_A_LAW: float = 87.6
+_LN_A: float = float(np.log(_A_LAW))
+_COMPRESS_SCALE: float = 1.0 + _LN_A
+
 
 class PCMA(RTPCodec):
     """G.711 A-law codec ([RFC 3551 §4.5.14][]).
 
     PCMA is the ITU-T G.711 A-law logarithmic companding codec for PSTN
     telephony, standardised in RFC 3551 with static payload type 8.
+
+    Both [`encode`][voip.codecs.pcma.PCMA.encode] and
+    [`decode`][voip.codecs.pcma.PCMA.decode] are pure-NumPy and require no
+    PyAV dependency.
 
     [RFC 3551 §4.5.14]: https://datatracker.ietf.org/doc/html/rfc3551#section-4.5.14
     """
@@ -41,24 +49,27 @@ class PCMA(RTPCodec):
         *,
         input_rate_hz: int | None = None,
     ) -> np.ndarray:
-        return cls.decode_pcm(
-            payload,
-            "alaw",
-            output_rate_hz,
-            input_rate_hz=input_rate_hz
-            if input_rate_hz is not None
-            else cls.sample_rate_hz,
+        raw = np.frombuffer(payload, dtype=np.uint8) ^ 0x55
+        sign = np.where(raw & 0x80, 1.0, -1.0)
+        quantized = (raw & 0x7F).astype(np.float32) / 127.0
+        threshold = 1.0 / _COMPRESS_SCALE
+        linear = np.where(
+            quantized < threshold,
+            quantized * _COMPRESS_SCALE / _A_LAW,
+            np.exp(quantized * _COMPRESS_SCALE - 1.0) / _A_LAW,
+        ).astype(np.float32)
+        return cls.resample(
+            (sign * linear).astype(np.float32), cls.sample_rate_hz, output_rate_hz
         )
 
     @classmethod
     def encode(cls, samples: np.ndarray) -> bytes:
-        a_law = 87.6  # G.711 A-law compression parameter
         pcm = np.clip(np.abs(samples), 0, 1.0)
-        low = pcm < (1.0 / a_law)
+        low = pcm < (1.0 / _A_LAW)
         compressed = np.where(
             low,
-            a_law * pcm / (1.0 + np.log(a_law)),
-            (1.0 + np.log(np.maximum(a_law * pcm, 1e-10))) / (1.0 + np.log(a_law)),
+            _A_LAW * pcm / _COMPRESS_SCALE,
+            (1.0 + np.log(np.maximum(_A_LAW * pcm, 1e-10))) / _COMPRESS_SCALE,
             # 1e-10 prevents log(0) when pcm is exactly 0.0 in the high range
         )
         quantized = np.clip(np.round(compressed * 127), 0, 127).astype(np.uint8)

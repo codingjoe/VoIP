@@ -251,11 +251,11 @@ class TestNegotiateCodec:
         assert result.fmt[0].payload_type == 8
 
     def test_preferred_codecs__class_attribute(self):
-        """PREFERRED_CODECS is a class attribute on AudioCall with Opus first."""
+        """PREFERRED_CODECS is a class attribute on AudioCall with Opus first when PyAV is available."""
         codec_classes = AudioCall.PREFERRED_CODECS
         assert isinstance(codec_classes, list)
         pts = [c.payload_type for c in codec_classes]
-        assert pts[0] == 111  # Opus is highest priority
+        assert pts[0] == 111  # Opus is highest priority when PyAV is present
         assert 8 in pts  # PCMA present
         assert 0 in pts  # PCMU present
 
