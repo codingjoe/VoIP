@@ -114,12 +114,12 @@ class TestWhisperCall:
         """WhisperCall starts with an empty speech buffer and no timer."""
         call = make_whisper_call(MagicMock())
         assert call.speech_buffer == []
-        assert call.transcription_handle is None
+        assert call.silence_handle is None
 
     def test_audio_received__silence_audio_accumulates_in_buffer(self):
         """Silence audio (below speech_threshold) is still buffered for transcription."""
         call = make_whisper_call(MagicMock())
-        with patch("voip.ai.asyncio.get_event_loop"):
+        with patch("voip.audio.asyncio.get_running_loop"):
             call.audio_received(audio=np.zeros(320, dtype=np.float32), rms=0.0)
         assert len(call.speech_buffer) == 1
 
@@ -133,20 +133,20 @@ class TestWhisperCall:
     def test_audio_received__silence_arms_transcription_timer(self):
         """Silence arms the transcription debounce timer."""
         call = make_whisper_call(MagicMock())
-        with patch("voip.ai.asyncio.get_event_loop") as mock_loop:
+        with patch("voip.audio.asyncio.get_running_loop") as mock_loop:
             handle = MagicMock()
             mock_loop.return_value.call_later.return_value = handle
             call.audio_received(audio=np.zeros(320, dtype=np.float32), rms=0.0)
         mock_loop.return_value.call_later.assert_called_once_with(
             call.silence_gap, call.flush_speech_buffer
         )
-        assert call.transcription_handle is handle
+        assert call.silence_handle is handle
 
     def test_audio_received__silence_does_not_rearm_when_timer_running(self):
         """A second silence packet does not create a second timer."""
         call = make_whisper_call(MagicMock())
-        call.transcription_handle = MagicMock()
-        with patch("voip.ai.asyncio.get_event_loop") as mock_loop:
+        call.silence_handle = MagicMock()
+        with patch("voip.audio.asyncio.get_running_loop") as mock_loop:
             call.audio_received(audio=np.zeros(320, dtype=np.float32), rms=0.0)
         mock_loop.return_value.call_later.assert_not_called()
 
@@ -154,15 +154,15 @@ class TestWhisperCall:
         """Speech audio cancels any running transcription debounce timer."""
         call = make_whisper_call(MagicMock())
         handle = MagicMock()
-        call.transcription_handle = handle
+        call.silence_handle = handle
         call.audio_received(audio=np.ones(320, dtype=np.float32) * 0.6, rms=0.6)
         handle.cancel.assert_called_once()
-        assert call.transcription_handle is None
+        assert call.silence_handle is None
 
     def test_audio_received__empty_array_accumulates_in_buffer(self):
         """Zero-length audio arrays are accepted into the speech buffer."""
         call = make_whisper_call(MagicMock())
-        with patch("voip.ai.asyncio.get_event_loop"):
+        with patch("voip.audio.asyncio.get_running_loop"):
             call.audio_received(audio=np.zeros(0, dtype=np.float32), rms=0.0)
         assert len(call.speech_buffer) == 1
 
@@ -181,8 +181,6 @@ class TestWhisperCall:
         call = make_whisper_call(model_mock, Capture)
         chunk = np.ones(320, dtype=np.float32)
         call.speech_buffer = [chunk] * 60
-        # Set silence_gap=0 so the minimum-length check passes with one chunk.
-        call.silence_gap = 0
         call.flush_speech_buffer()
         await asyncio.sleep(0.1)
         assert transcriptions == ["hello"]
@@ -191,18 +189,34 @@ class TestWhisperCall:
     def test_flush_speech_buffer__no_op_when_buffer_empty(self):
         """_flush_speech_buffer does nothing when the speech buffer is empty."""
         call = make_whisper_call(MagicMock())
-        with patch("voip.ai.asyncio.create_task") as mock_ct:
+        with patch("voip.audio.asyncio.create_task") as mock_ct:
             call.flush_speech_buffer()
         mock_ct.assert_not_called()
 
     def test_flush_speech_buffer__resets_state(self):
-        """_flush_speech_buffer clears _transcription_handle and the speech buffer."""
+        """_flush_speech_buffer clears silence_handle and the speech buffer."""
         call = make_whisper_call(MagicMock())
-        call.transcription_handle = MagicMock()
+        call.silence_handle = MagicMock()
         call.speech_buffer = [np.zeros(1, dtype=np.float32)]
-        with patch("voip.ai.asyncio.create_task"):
+        with patch("voip.audio.asyncio.create_task", side_effect=lambda c: c.close()):
             call.flush_speech_buffer()
-        assert call.transcription_handle is None
+        assert call.silence_handle is None
+
+    async def test_speech_buffer_ready__skips_short_audio(self):
+        """speech_buffer_ready discards audio shorter than one second."""
+        transcriptions = []
+        model_mock = MagicMock()
+
+        class Capture(TranscribeCall):
+            def transcription_received(self, text: str) -> None:
+                transcriptions.append(text)
+
+        call = make_whisper_call(model_mock, Capture)
+        # Feed fewer samples than RESAMPLING_RATE_HZ (1 second)
+        short_audio = np.ones(100, dtype=np.float32)
+        await call.speech_buffer_ready(short_audio)
+        model_mock.transcribe.assert_not_called()
+        assert transcriptions == []
 
     async def test_transcribe__strips_whitespace(self):
         """Strip leading and trailing whitespace from the transcription text."""

@@ -20,7 +20,9 @@ _WHISPER_STUBS = {
     "faster_whisper": MagicMock(),
     "ollama": MagicMock(),
     "pocket_tts": MagicMock(),
-    "voip.audio": MagicMock(),
+    "voip.audio": MagicMock(
+        EchoCall=MagicMock, VoiceActivityCall=MagicMock, AudioCall=MagicMock
+    ),
     "voip.ai": MagicMock(TranscribeCall=MagicMock, AgentCall=MagicMock),
 }
 
@@ -754,3 +756,116 @@ class TestAgentCLI:
                     assert call_cls.voice == "ellie"
 
         asyncio.run(_run_voice())
+
+
+class TestEchoCLI:
+    def test_echo__sips_aor_uses_tls(self):
+        """sips: AOR without explicit port defaults to TLS on port 5061."""
+        from voip.__main__ import voip
+
+        captured = {}
+
+        async def fake_connection(factory, *, host, port, ssl):
+            captured["host"] = host
+            captured["port"] = port
+            captured["ssl"] = ssl
+            raise KeyboardInterrupt
+
+        with (
+            patch.dict(sys.modules, _WHISPER_STUBS),
+            patch("asyncio.get_event_loop"),
+            patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
+        ):
+            mock_loop.return_value.create_connection = fake_connection
+            make_runner().invoke(
+                voip,
+                [
+                    "sip",
+                    "--password=secret",
+                    "sips:alice@sip.example.com",
+                    "echo",
+                ],
+                catch_exceptions=False,
+            )
+        assert captured.get("host") == "sip.example.com"
+        assert captured.get("port") == 5061
+        assert captured.get("ssl") is not None
+
+    def test_echo__port_5060_uses_tcp(self):
+        """Port 5060 in the AOR triggers plain TCP (no TLS)."""
+        from voip.__main__ import voip
+
+        captured = {}
+
+        async def fake_connection(factory, *, host, port, ssl):
+            captured["ssl"] = ssl
+            captured["port"] = port
+            raise KeyboardInterrupt
+
+        with (
+            patch.dict(sys.modules, _WHISPER_STUBS),
+            patch("asyncio.get_event_loop"),
+            patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
+        ):
+            mock_loop.return_value.create_connection = fake_connection
+            make_runner().invoke(
+                voip,
+                [
+                    "sip",
+                    "--password=secret",
+                    "sip:alice@example.com:5060",
+                    "echo",
+                ],
+                catch_exceptions=False,
+            )
+        assert captured.get("ssl") is None
+        assert captured.get("port") == 5060
+
+    def test_echo__call_received_answers_with_echo_call(self):
+        """call_received answers with an EchoCall class."""
+        from voip.__main__ import voip
+
+        protocol_holder = {}
+
+        async def fake_connection(factory, *, host, port, ssl):
+            protocol = factory()
+            protocol_holder["protocol"] = protocol
+            raise KeyboardInterrupt
+
+        with (
+            patch.dict(sys.modules, _WHISPER_STUBS),
+            patch("asyncio.get_event_loop"),
+            patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
+        ):
+            mock_loop.return_value.create_connection = fake_connection
+            make_runner().invoke(
+                voip,
+                [
+                    "sip",
+                    "--password=p",
+                    "--stun-server=none",
+                    "sips:alice@example.com",
+                    "echo",
+                ],
+                catch_exceptions=False,
+            )
+        protocol = protocol_holder["protocol"]
+        from voip.sip.messages import Request
+
+        request = Request(
+            method="INVITE",
+            uri="sip:u@example.com",
+            headers={"From": "sip:caller@example.com", "Call-ID": "test@pc"},
+        )
+
+        async def run():
+            with patch.object(protocol, "answer") as mock_answer:
+                protocol.connection_made(MagicMock())
+                protocol._pending_invites.add(request.headers["Call-ID"])
+                protocol.call_received(request)
+                mock_answer.assert_called_once()
+                _, kwargs = mock_answer.call_args
+                assert "call_class" in kwargs
+                assert isinstance(kwargs["call_class"], type)
+
+        asyncio.run(run())

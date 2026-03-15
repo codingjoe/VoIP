@@ -6,6 +6,14 @@
 
 ::: voip.audio.AudioCall
 
+## Voice Activity Detection
+
+::: voip.audio.VoiceActivityCall
+
+## Echo Call
+
+::: voip.audio.EchoCall
+
 ## AI / Agentic Calls
 
 ::: voip.ai.TranscribeCall

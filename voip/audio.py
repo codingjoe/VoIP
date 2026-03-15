@@ -22,10 +22,14 @@ import numpy as np
 
 import voip.codecs as codecs
 from voip.codecs import Codec
+from voip.codecs.g722 import G722  # noqa: E402
+from voip.codecs.opus import Opus  # noqa: E402
+from voip.codecs.pcma import PCMA  # noqa: E402
+from voip.codecs.pcmu import PCMU  # noqa: E402
 from voip.rtp import RTPCall, RTPPacket
 from voip.sdp.types import MediaDescription
 
-__all__ = ["AudioCall"]
+__all__ = ["AudioCall", "EchoCall", "VoiceActivityCall"]
 
 
 logger = logging.getLogger(__name__)
@@ -51,7 +55,7 @@ class AudioCall(RTPCall):
     """
 
     #: Preferred codecs in priority order (highest priority first).
-    PREFERRED_CODECS: ClassVar[list[type[Codec]]] = []
+    PREFERRED_CODECS: ClassVar[list[type[Codec]]] = [Opus, G722, PCMA, PCMU]
 
     #: Target sample rate for decoded audio delivered to `audio_received`.
     RESAMPLING_RATE_HZ: ClassVar[int] = 16000
@@ -280,14 +284,127 @@ class AudioCall(RTPCall):
         ).astype(np.float32)
 
 
-# Populate PREFERRED_CODECS after all codec imports settle.
-from voip.codecs.g722 import G722  # noqa: E402
-from voip.codecs.opus import Opus  # noqa: E402
-from voip.codecs.pcma import PCMA  # noqa: E402
-from voip.codecs.pcmu import PCMU  # noqa: E402
+@dataclasses.dataclass(kw_only=True)
+class VoiceActivityCall(AudioCall):
+    """AudioCall with energy-based voice activity detection (VAD) and speech buffering.
 
-AudioCall.PREFERRED_CODECS = [Opus, G722, PCMA, PCMU]
+    Accumulates audio frames into `speech_buffer` based on the result of
+    [`collect_audio`][voip.audio.VoiceActivityCall.collect_audio].  A debounce
+    timer is armed on silence and fires
+    [`flush_speech_buffer`][voip.audio.VoiceActivityCall.flush_speech_buffer]
+    after `silence_gap` seconds of sustained quiet.  Subclasses implement
+    [`speech_buffer_ready`][voip.audio.VoiceActivityCall.speech_buffer_ready]
+    to handle the buffered utterance.
 
-# Re-export RTPPayloadType so existing importers that do
-# ``from voip.audio import ...`` continue to work.
-from voip.rtp import RTPPayloadType  # noqa: E402, F401
+    Override [`collect_audio`][voip.audio.VoiceActivityCall.collect_audio] to
+    change which frames are accumulated.  The default implementation buffers
+    only speech frames (RMS above `speech_threshold`).  To buffer all frames
+    (e.g. for transcription that needs the full utterance including silent
+    pauses), override to always return `True`.
+
+    Attributes:
+        speech_threshold: RMS level below which audio is treated as silence.
+        silence_gap: Seconds of sustained silence required to flush the buffer.
+    """
+
+    speech_threshold: float = dataclasses.field(default=0.001)
+    silence_gap: float = dataclasses.field(default=0.5)
+
+    speech_buffer: list[np.ndarray] = dataclasses.field(
+        init=False, repr=False, default_factory=list
+    )
+    silence_handle: asyncio.TimerHandle | None = dataclasses.field(
+        init=False, repr=False, default=None
+    )
+
+    def audio_received(self, *, audio: np.ndarray, rms: float) -> None:
+        if self.collect_audio(audio, rms):
+            self.speech_buffer.append(audio)
+        if rms > self.speech_threshold:
+            self.on_audio_speech()
+        else:
+            self.on_audio_silence()
+
+    def collect_audio(self, audio: np.ndarray, rms: float) -> bool:
+        """Return whether to buffer this audio frame.
+
+        The default implementation buffers speech frames only (RMS above
+        `speech_threshold`).  Override to change the buffering strategy.
+
+        Args:
+            audio: Decoded float32 PCM frame.
+            rms: Root mean square of *audio*.
+
+        Returns:
+            `True` when the frame should be appended to `speech_buffer`.
+        """
+        return rms > self.speech_threshold
+
+    def on_audio_speech(self) -> None:
+        """Cancel any pending silence timer when speech is detected."""
+        if self.silence_handle is not None:
+            self.silence_handle.cancel()
+            self.silence_handle = None
+
+    def on_audio_silence(self) -> None:
+        """Arm the silence debounce timer when speech is buffered."""
+        if self.silence_handle is None and self.speech_buffer:
+            loop = asyncio.get_running_loop()
+            self.silence_handle = loop.call_later(
+                self.silence_gap,
+                self.flush_speech_buffer,
+            )
+
+    def flush_speech_buffer(self) -> None:
+        """Concatenate buffered audio and schedule [`speech_buffer_ready`][voip.audio.VoiceActivityCall.speech_buffer_ready].
+
+        Resets speech state so the next utterance starts with a clean buffer.
+        """
+        self.silence_handle = None
+        if not self.speech_buffer:
+            return
+        audio = np.concatenate(self.speech_buffer)
+        self.speech_buffer.clear()
+        asyncio.create_task(self.speech_buffer_ready(audio))
+
+    async def speech_buffer_ready(self, audio: np.ndarray) -> None:
+        """Handle the flushed speech buffer.  Override in subclasses.
+
+        This base implementation is a no-op.  Subclasses must override this
+        method to process the buffered utterance (e.g. echo it back, transcribe
+        it, etc.).
+
+        Args:
+            audio: Float32 mono PCM array at `RESAMPLING_RATE_HZ` Hz
+                containing the full buffered utterance.
+        """
+
+
+@dataclasses.dataclass(kw_only=True)
+class EchoCall(VoiceActivityCall):
+    """RTP call handler that echoes the caller's speech back after they finish speaking.
+
+    Accumulates speech audio frames (RMS above `speech_threshold`) via the
+    [`VoiceActivityCall`][voip.audio.VoiceActivityCall] VAD machinery and
+    replays them once a sustained silence lasting `silence_gap` seconds is
+    detected.  This gives the caller a natural echo of their own voice,
+    useful for network latency testing and call-flow demonstrations.
+
+    Example:
+        ```python
+        class MySession(SessionInitiationProtocol):
+            def call_received(self, request: Request) -> None:
+                self.answer(request=request, call_class=EchoCall)
+        ```
+    """
+
+    async def speech_buffer_ready(self, audio: np.ndarray) -> None:
+        """Resample and transmit buffered speech audio back to the caller.
+
+        Args:
+            audio: Float32 mono PCM array at `RESAMPLING_RATE_HZ` Hz.
+        """
+        resampled = self.resample(
+            audio, self.RESAMPLING_RATE_HZ, self.codec.sample_rate_hz
+        )
+        await self.send_rtp_audio(resampled)
