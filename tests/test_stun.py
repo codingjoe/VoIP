@@ -201,7 +201,9 @@ class TestSTUNProtocol:
         )
         server_addr = server_t.get_extra_info("sockname")
 
-        done: asyncio.Future[tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int]] = loop.create_future()
+        done: asyncio.Future[
+            tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int]
+        ] = loop.create_future()
 
         class TrackingProto(STUNProtocol):
             def stun_connection_made(self, transport, addr):

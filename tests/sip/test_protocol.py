@@ -2,8 +2,8 @@
 
 import asyncio
 import dataclasses
-import ipaddress
 import hashlib
+import ipaddress
 import re
 from unittest.mock import MagicMock, patch
 

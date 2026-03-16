@@ -224,7 +224,9 @@ class STUNProtocol(asyncio.DatagramProtocol):
         # Clear transaction ID so duplicate responses are ignored.
         self._stun_transaction_id = b""
         offset = 20
-        xor_mapped: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int] | None = None
+        xor_mapped: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int] | None = (
+            None
+        )
         mapped: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int] | None = None
         xor_key = struct.pack(">I", MAGIC_COOKIE) + response_tid
         while offset + 4 <= len(data):
