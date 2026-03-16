@@ -414,6 +414,22 @@ class TestAgentCall:
         assert call.response_handle is None
         assert isinstance(call.response_committed, asyncio.Event)
 
+    def test_init__raises_when_response_gap_less_than_inference_gap(self):
+        """Raise ValueError when response_gap_secs is smaller than inference_gap_secs."""
+        with (
+            patch("voip.ai.WhisperModel", return_value=MagicMock()),
+            patch("voip.ai.TTSModel"),
+            pytest.raises(ValueError, match="response_gap_secs"),
+        ):
+            AgentCall(
+                rtp=MagicMock(),
+                sip=MagicMock(),
+                media=OPUS_MEDIA,
+                caller=CallerID(""),
+                inference_gap_secs=0.5,
+                response_gap_secs=0.25,
+            )
+
     def test_init__initializes_chat_history_with_system_prompt(self):
         """Chat history is seeded with a system prompt mentioning a phone call."""
         tts_mock = MagicMock()
@@ -470,7 +486,7 @@ class TestAgentCall:
         old_task.cancel.assert_called_once()
 
     async def test_respond__calls_ollama_and_sends_speech(self):
-        """respond fetches an Ollama reply, records it in history, and sends speech."""
+        """Respond fetches an Ollama reply, records it in history, and sends speech."""
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
         call = make_agent_call(MagicMock(), tts_mock)
@@ -497,7 +513,7 @@ class TestAgentCall:
         } in call.messages
 
     async def test_respond__passes_full_history_to_ollama(self):
-        """respond passes the full message history (including system prompt) to Ollama."""
+        """Respond passes the full message history (including system prompt) to Ollama."""
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
         call = make_agent_call(MagicMock(), tts_mock)
@@ -574,9 +590,7 @@ class TestAgentCall:
 
         with (
             patch("voip.ai.ollama.AsyncClient") as mock_client_cls,
-            patch.object(
-                call.response_committed, "wait", side_effect=cancel_on_wait
-            ),
+            patch.object(call.response_committed, "wait", side_effect=cancel_on_wait),
             pytest.raises(asyncio.CancelledError),
         ):
             mock_client = MagicMock()
@@ -646,7 +660,9 @@ class TestAgentCall:
         loop_mock = MagicMock()
         with patch("voip.ai.asyncio.get_running_loop", return_value=loop_mock):
             call.on_audio_silence()
-        loop_mock.call_later.assert_any_call(call.response_gap_secs, call.commit_response)
+        loop_mock.call_later.assert_any_call(
+            call.response_gap_secs, call.commit_response
+        )
         assert call.response_handle is not None
 
     def test_on_audio_silence__does_not_rearm_existing_handles(self):
@@ -694,7 +710,11 @@ class TestAgentCall:
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
         call = make_agent_call(MagicMock(), tts_mock)
         call.response_committed.set()
-        with patch("voip.ai.asyncio.create_task", side_effect=lambda c: c.close()):
+        with patch(
+            # close() prevents 'coroutine was never awaited' warnings
+            "voip.ai.asyncio.create_task",
+            side_effect=lambda c: c.close(),
+        ):
             call.transcription_received("new speech")
         assert not call.response_committed.is_set()
 

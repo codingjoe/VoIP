@@ -183,7 +183,13 @@ class AgentCall(TranscribeCall):
     response_committed: asyncio.Event = dataclasses.field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if self.response_gap_secs < self.inference_gap_secs:
+            raise ValueError(
+                f"response_gap_secs ({self.response_gap_secs}) must be >= "
+                f"inference_gap_secs ({self.inference_gap_secs})"
+            )
         super().__post_init__()
+        # Override the parent VAD silence threshold to match the inference trigger.
         self.silence_gap = self.inference_gap_secs
         self.tts_instance = self.tts_model or TTSModel.load_model()
         self.voice_state = self.tts_instance.get_state_for_audio_prompt(self.voice)  # type: ignore[arg-type]
