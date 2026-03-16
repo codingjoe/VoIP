@@ -83,3 +83,40 @@ class TestAbstractMethods:
         """RTPCodec.encode raises NotImplementedError."""
         with pytest.raises(NotImplementedError):
             RTPCodec.encode(np.zeros(160, dtype=np.float32))
+
+
+class TestCreateDecoder:
+    def test_create_decoder__returns_per_packet_decoder(self):
+        """RTPCodec.create_decoder returns a PerPacketDecoder for stateless codecs."""
+        from voip.codecs.base import PerPacketDecoder  # noqa: PLC0415
+
+        decoder = PCMA.create_decoder(16000)
+        assert isinstance(decoder, PerPacketDecoder)
+
+    def test_create_decoder__stores_codec_and_rates(self):
+        """PerPacketDecoder holds the codec class and both rate parameters."""
+        from voip.codecs.base import PerPacketDecoder  # noqa: PLC0415
+
+        decoder = PCMA.create_decoder(16000, input_rate_hz=8000)
+        assert isinstance(decoder, PerPacketDecoder)
+        assert decoder.codec is PCMA
+        assert decoder.output_rate_hz == 16000
+        assert decoder.input_rate_hz == 8000
+
+    def test_create_decoder__input_rate_hz_defaults_to_none(self):
+        """input_rate_hz defaults to None when not specified."""
+        from voip.codecs.base import PerPacketDecoder  # noqa: PLC0415
+
+        decoder = PCMA.create_decoder(16000)
+        assert isinstance(decoder, PerPacketDecoder)
+        assert decoder.input_rate_hz is None
+
+    def test_per_packet_decoder__delegates_to_codec_decode(self):
+        """PerPacketDecoder.decode calls codec.decode with stored rates."""
+        with patch.object(
+            PCMA, "decode", return_value=np.zeros(160, dtype=np.float32)
+        ) as mock_decode:
+            decoder = PCMA.create_decoder(16000, input_rate_hz=8000)
+            result = decoder.decode(b"payload")
+        mock_decode.assert_called_once_with(b"payload", 16000, input_rate_hz=8000)
+        assert result.dtype == np.float32

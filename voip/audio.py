@@ -22,6 +22,7 @@ import numpy as np
 
 import voip.codecs as codecs
 from voip.codecs import RTPCodec
+from voip.codecs.base import PayloadDecoder
 from voip.rtp import RTPCall, RTPPacket
 from voip.sdp.types import MediaDescription
 
@@ -68,6 +69,10 @@ class AudioCall(RTPCall):
     #: Resolved codec class for this call, set in `__post_init__`.
     codec: type[RTPCodec] = dataclasses.field(init=False, repr=False)
 
+    #: Per-call payload decoder, set in `__post_init__`.
+    #: Stateful for ADPCM codecs (e.g. G.722), stateless for others.
+    payload_decoder: PayloadDecoder = dataclasses.field(init=False, repr=False)
+
     #: Outbound RTP sequence counter.
     rtp_sequence_number: int = dataclasses.field(init=False, repr=False, default=0)
     #: Outbound RTP timestamp counter.
@@ -82,6 +87,9 @@ class AudioCall(RTPCall):
         if fmt.encoding_name is None:
             raise ValueError(f"No encoding name for payload type {fmt.payload_type}")
         self.codec = codecs.get(fmt.encoding_name)
+        self.payload_decoder = self.codec.create_decoder(
+            self.RESAMPLING_RATE_HZ, input_rate_hz=self.sample_rate
+        )
         logger.info(
             json.dumps(
                 {
@@ -194,10 +202,11 @@ class AudioCall(RTPCall):
     def decode_payload(self, payload: bytes) -> np.ndarray:
         """Decode an RTP payload to float32 PCM at `RESAMPLING_RATE_HZ`.
 
-        Delegates to the negotiated `codec`,
-        passing the SDP-negotiated `sample_rate` as the input rate hint so
-        that non-standard variants (e.g. wideband PCMA at 16 000 Hz) are
-        handled correctly.
+        Delegates to `payload_decoder`, which is either a
+        [`PerPacketDecoder`][voip.codecs.base.PerPacketDecoder] (for stateless
+        codecs such as PCMA, PCMU, Opus) or a
+        [`G722Decoder`][voip.codecs.g722.G722Decoder] (for G.722, which
+        preserves ADPCM predictor state across consecutive packets).
 
         Args:
             payload: Raw RTP payload bytes.
@@ -205,9 +214,7 @@ class AudioCall(RTPCall):
         Returns:
             Float32 mono PCM array at `RESAMPLING_RATE_HZ` Hz.
         """
-        return self.codec.decode(
-            payload, self.RESAMPLING_RATE_HZ, input_rate_hz=self.sample_rate
-        )
+        return self.payload_decoder.decode(payload)
 
     def audio_received(self, *, audio: np.ndarray, rms: float) -> None:
         """Handle decoded audio.  Override in subclasses.

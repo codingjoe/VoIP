@@ -16,14 +16,37 @@ inherit directly from `RTPCodec` and require no PyAV dependency.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Iterator
-from typing import ClassVar
+from typing import ClassVar, Protocol
 
 import numpy as np
 
 from voip.sdp.types import RTPPayloadFormat
 
-__all__ = ["RTPCodec"]
+__all__ = ["PayloadDecoder", "PerPacketDecoder", "RTPCodec"]
+
+
+class PayloadDecoder(Protocol):
+    """Protocol for per-call RTP payload decoders.
+
+    Implementations decode raw RTP payload bytes to float32 mono PCM.
+    Stateful implementations (e.g. [`G722Decoder`][voip.codecs.g722.G722Decoder])
+    preserve codec predictor state across successive
+    [`decode`][voip.codecs.base.PayloadDecoder.decode] calls within a single
+    call session.
+    """
+
+    def decode(self, payload: bytes) -> np.ndarray:
+        """Decode one RTP payload to float32 mono PCM.
+
+        Args:
+            payload: Raw RTP payload bytes for a single packet.
+
+        Returns:
+            Float32 mono PCM array.
+        """
+        ...
 
 
 class RTPCodec:
@@ -33,9 +56,11 @@ class RTPCodec:
     [`G722`][voip.codecs.G722], [`PCMA`][voip.codecs.pcma.PCMA],
     [`PCMU`][voip.codecs.pcmu.PCMU].
 
-    All codec implementations are stateless: every method is a classmethod or
-    staticmethod and codecs are referenced as `type[RTPCodec]`, never
-    instantiated.
+    Codec classes are stateless; every method is a classmethod or staticmethod
+    and codecs are referenced as `type[RTPCodec]`, never instantiated.
+    Per-call decoder state (required for ADPCM codecs such as G.722) is
+    managed by [`PayloadDecoder`][voip.codecs.base.PayloadDecoder] instances
+    returned by [`create_decoder`][voip.codecs.base.RTPCodec.create_decoder].
 
     Concrete subclasses define codec-specific class variables and override
     [`decode`][voip.codecs.base.RTPCodec.decode],
@@ -148,6 +173,28 @@ class RTPCodec:
         raise NotImplementedError(f"{cls.__name__} does not implement decode.")
 
     @classmethod
+    def create_decoder(
+        cls, output_rate_hz: int, *, input_rate_hz: int | None = None
+    ) -> PayloadDecoder:
+        """Create a stateless per-call payload decoder for this codec.
+
+        Override in subclasses that require stateful decoding across RTP
+        packets (e.g. G.722 ADPCM — see
+        [`G722.create_decoder`][voip.codecs.g722.G722.create_decoder]).
+
+        Args:
+            output_rate_hz: Target PCM sample rate in Hz for decoded audio.
+            input_rate_hz: Input clock rate override, or `None` to use the
+                codec default.
+
+        Returns:
+            A [`PayloadDecoder`][voip.codecs.base.PayloadDecoder] that, by
+            default, is a [`PerPacketDecoder`][voip.codecs.base.PerPacketDecoder]
+            delegating each call to [`decode`][voip.codecs.base.RTPCodec.decode].
+        """
+        return PerPacketDecoder(cls, output_rate_hz, input_rate_hz)
+
+    @classmethod
     def encode(cls, samples: np.ndarray) -> bytes:
         """Encode float32 mono PCM to an RTP payload.
 
@@ -177,3 +224,36 @@ class RTPCodec:
         """
         for i in range(0, len(audio), cls.frame_size):
             yield cls.encode(audio[i : i + cls.frame_size])
+
+
+@dataclasses.dataclass(frozen=True)
+class PerPacketDecoder:
+    """Stateless payload decoder that processes each RTP packet independently.
+
+    Delegate each call to
+    [`RTPCodec.decode`][voip.codecs.base.RTPCodec.decode], decoding each
+    payload independently without preserving cross-packet state. Suitable for
+    stateless codecs such as PCMA, PCMU, and Opus.
+
+    Attributes:
+        codec: Codec class to delegate decoding to.
+        output_rate_hz: Target PCM sample rate in Hz.
+        input_rate_hz: Input clock rate override, or `None` to use the codec default.
+    """
+
+    codec: type[RTPCodec]
+    output_rate_hz: int
+    input_rate_hz: int | None = None
+
+    def decode(self, payload: bytes) -> np.ndarray:
+        """Decode one RTP payload to float32 PCM.
+
+        Args:
+            payload: Raw RTP payload bytes.
+
+        Returns:
+            Float32 mono PCM array at `output_rate_hz` Hz.
+        """
+        return self.codec.decode(
+            payload, self.output_rate_hz, input_rate_hz=self.input_rate_hz
+        )

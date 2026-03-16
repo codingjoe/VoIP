@@ -311,7 +311,7 @@ class TestDecodePayload:
     """Tests for AudioCall.decode_payload."""
 
     def test_decode_payload__delegates_to_codec(self):
-        """decode_payload calls self.codec.decode with output and input rates."""
+        """decode_payload routes through PerPacketDecoder which calls codec.decode."""
         call = make_audio_call(media=PCMA_MEDIA)
         with patch.object(
             PCMA, "decode", return_value=np.zeros(16000, dtype=np.float32)
@@ -352,6 +352,20 @@ class TestDecodePayload:
         )
         with pytest.raises(NotImplementedError, match="Unsupported codec"):
             make_audio_call(media=media)
+
+    def test_decode_payload__g722_uses_stateful_decoder(self):
+        """G.722 AudioCall uses a G722Decoder that preserves ADPCM state."""
+        from voip.codecs.g722 import G722Decoder  # noqa: PLC0415
+
+        call = make_audio_call(media=G722_MEDIA)
+        assert isinstance(call.payload_decoder, G722Decoder)
+
+    def test_decode_payload__pcma_uses_per_packet_decoder(self):
+        """PCMA AudioCall uses a PerPacketDecoder (stateless)."""
+        from voip.codecs.base import PerPacketDecoder  # noqa: PLC0415
+
+        call = make_audio_call(media=PCMA_MEDIA)
+        assert isinstance(call.payload_decoder, PerPacketDecoder)
 
 
 class TestAudioCallInit:
