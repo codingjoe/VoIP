@@ -120,3 +120,29 @@ class TestCreateDecoder:
             result = decoder.decode(b"payload")
         mock_decode.assert_called_once_with(b"payload", 16000, input_rate_hz=8000)
         assert result.dtype == np.float32
+
+
+class TestCreateEncoder:
+    def test_create_encoder__returns_per_packet_encoder(self):
+        """RTPCodec.create_encoder returns a PerPacketEncoder for stateless codecs."""
+        from voip.codecs.base import PerPacketEncoder  # noqa: PLC0415
+
+        encoder = PCMA.create_encoder()
+        assert isinstance(encoder, PerPacketEncoder)
+
+    def test_create_encoder__stores_codec(self):
+        """PerPacketEncoder holds the codec class."""
+        from voip.codecs.base import PerPacketEncoder  # noqa: PLC0415
+
+        encoder = PCMA.create_encoder()
+        assert isinstance(encoder, PerPacketEncoder)
+        assert encoder.codec is PCMA
+
+    def test_per_packet_encoder__delegates_to_codec_packetize(self):
+        """PerPacketEncoder.packetize calls codec.packetize with the audio array."""
+        fake_packets = [b"\xd5" * 160]
+        with patch.object(PCMA, "packetize", return_value=iter(fake_packets)) as mock_pac:
+            encoder = PCMA.create_encoder()
+            result = list(encoder.packetize(np.zeros(160, dtype=np.float32)))
+        mock_pac.assert_called_once()
+        assert result == fake_packets

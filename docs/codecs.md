@@ -37,6 +37,8 @@ These codecs require the `hd-audio` extra (`pip install voip[hd-audio]`).
 
 ::: voip.codecs.g722.G722Decoder
 
+::: voip.codecs.g722.G722Encoder
+
 ::: voip.codecs.opus.Opus
 
 ## Registry
@@ -49,7 +51,11 @@ These codecs require the `hd-audio` extra (`pip install voip[hd-audio]`).
 
 ::: voip.codecs.base.PayloadDecoder
 
+::: voip.codecs.base.PayloadEncoder
+
 ::: voip.codecs.base.PerPacketDecoder
+
+::: voip.codecs.base.PerPacketEncoder
 
 ::: voip.codecs.av.PyAVCodec
 

@@ -368,6 +368,49 @@ class TestDecodePayload:
         assert isinstance(call.payload_decoder, PerPacketDecoder)
 
 
+class TestPayloadEncoder:
+    """Tests that AudioCall initialises the payload_encoder correctly."""
+
+    def test_g722_media__uses_stateful_encoder(self):
+        """G.722 AudioCall uses a G722Encoder that preserves ADPCM state."""
+        from voip.codecs.g722 import G722Encoder  # noqa: PLC0415
+
+        call = make_audio_call(media=G722_MEDIA)
+        assert isinstance(call.payload_encoder, G722Encoder)
+
+    def test_pcma_media__uses_per_packet_encoder(self):
+        """PCMA AudioCall uses a PerPacketEncoder (stateless)."""
+        from voip.codecs.base import PerPacketEncoder  # noqa: PLC0415
+
+        call = make_audio_call(media=PCMA_MEDIA)
+        assert isinstance(call.payload_encoder, PerPacketEncoder)
+
+    def test_pcmu_media__uses_per_packet_encoder(self):
+        """PCMU AudioCall uses a PerPacketEncoder (stateless)."""
+        from voip.codecs.base import PerPacketEncoder  # noqa: PLC0415
+
+        call = make_audio_call(media=PCMU_MEDIA)
+        assert isinstance(call.payload_encoder, PerPacketEncoder)
+
+    async def test_send_rtp_audio__uses_payload_encoder(self):
+        """send_rtp_audio routes encoding through payload_encoder.packetize."""
+        from unittest.mock import MagicMock  # noqa: PLC0415
+
+        call = make_audio_call(media=PCMA_MEDIA)
+        remote_addr = ("10.0.0.1", 5004)
+        call.rtp.calls = {remote_addr: call}
+
+        fake_payload = b"\xd5" * 160
+        mock_encoder = MagicMock()
+        mock_encoder.packetize.return_value = iter([fake_payload])
+        call.payload_encoder = mock_encoder
+
+        with patch.object(call, "send_packet"):
+            await call.send_rtp_audio(np.zeros(160, dtype=np.float32))
+
+        mock_encoder.packetize.assert_called_once()
+
+
 class TestAudioCallInit:
     def test_init__raises_value_error_for_none_encoding_name(self):
         """Raise ValueError when the negotiated format has no encoding name."""

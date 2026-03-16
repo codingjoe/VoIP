@@ -8,6 +8,11 @@ Use [`G722Decoder`][voip.codecs.g722.G722Decoder] (via
 stateful decoding that preserves the ADPCM predictor state across consecutive
 RTP packets.
 
+Use [`G722Encoder`][voip.codecs.g722.G722Encoder] (via
+[`G722.create_encoder`][voip.codecs.g722.G722.create_encoder]) for per-call
+stateful encoding that preserves the ADPCM predictor state across consecutive
+TTS chunks so that the encoded stream sounds natural and unbroken.
+
 Requires the ``hd-audio`` extra: ``pip install voip[hd-audio]``.
 """
 
@@ -24,7 +29,7 @@ import numpy as np
 
 from voip.codecs.av import PyAVCodec
 
-__all__ = ["G722", "G722Decoder"]
+__all__ = ["G722", "G722Decoder", "G722Encoder"]
 
 
 class G722(PyAVCodec):
@@ -78,6 +83,24 @@ class G722(PyAVCodec):
         payload_size = cls.frame_size // 2
         for i in range(0, len(encoded), payload_size):
             yield encoded[i : i + payload_size]
+
+    @classmethod
+    def create_encoder(cls) -> G722Encoder:
+        """Create a stateful per-call G.722 encoder.
+
+        Returns a [`G722Encoder`][voip.codecs.g722.G722Encoder] that preserves
+        the ADPCM predictor state across consecutive
+        [`packetize`][voip.codecs.g722.G722Encoder.packetize] calls.  Pass the
+        returned encoder to
+        [`AudioCall`][voip.audio.AudioCall] so that TTS audio chunks that span
+        multiple [`send_rtp_audio`][voip.audio.AudioCall.send_rtp_audio] calls
+        are encoded with a continuous ADPCM predictor rather than resetting at
+        each chunk boundary.
+
+        Returns:
+            A new [`G722Encoder`][voip.codecs.g722.G722Encoder] instance.
+        """
+        return G722Encoder()
 
     @classmethod
     def create_decoder(
@@ -159,3 +182,59 @@ class G722Decoder:
             for resampled in self.resampler.resample(frame)
         ]
         return np.concatenate(frames) if frames else np.array([], dtype=np.float32)
+
+
+@dataclasses.dataclass(slots=True)
+class G722Encoder:
+    """Stateful G.722 encoder that preserves ADPCM predictor state across encode calls.
+
+    Creates a single persistent
+    [`av.CodecContext`](https://pyav.basswood-io.com/docs/stable/api/codec.html#av.codec.context.CodecContext)
+    for the life of the encoder and feeds each TTS audio chunk to the same
+    context.  This eliminates the per-chunk predictor reset that causes robotic
+    artefacts when encoding a G.722 stream from multiple consecutive TTS chunks.
+
+    Use [`G722.create_encoder`][voip.codecs.g722.G722.create_encoder] rather
+    than instantiating this class directly.
+
+    Attributes:
+        codec_context: Persistent G.722 encoder context shared across all
+            [`packetize`][voip.codecs.g722.G722Encoder.packetize] calls on
+            this instance.
+        sample_count: Running count of PCM samples encoded so far, used as the
+            presentation timestamp for each new audio frame.
+    """
+
+    codec_context: av.AudioCodecContext = dataclasses.field(init=False, repr=False)
+    sample_count: int = dataclasses.field(init=False, repr=False, default=0)
+
+    def __post_init__(self) -> None:
+        self.codec_context = typing.cast(
+            av.AudioCodecContext, av.CodecContext.create("g722", "w")
+        )
+        self.codec_context.sample_rate = G722.sample_rate_hz
+        self.codec_context.format = av.AudioFormat("s16")
+        self.codec_context.layout = av.AudioLayout("mono")
+        self.codec_context.open()
+
+    def packetize(self, audio: np.ndarray) -> Iterator[bytes]:
+        """Encode *audio*, preserving ADPCM state from prior chunks.
+
+        Feeds *audio* into the persistent codec context without flushing, so
+        the ADPCM predictor state carries over to the next call.  Yields one
+        160-byte RTP payload per 20 ms G.722 frame.
+
+        Args:
+            audio: Float32 mono PCM at `G722.sample_rate_hz` Hz.
+
+        Yields:
+            Encoded G.722 payload bytes, 160 bytes per 20 ms RTP packet.
+        """
+        pcm = np.clip(np.round(audio * 32768.0), -32768, 32767).astype(np.int16)
+        frame = av.AudioFrame.from_ndarray(pcm[np.newaxis, :], format="s16", layout="mono")
+        frame.sample_rate = G722.sample_rate_hz
+        frame.pts = self.sample_count
+        self.sample_count += len(audio)
+        encoded = b"".join(bytes(packet) for packet in self.codec_context.encode(frame))
+        payload_size = G722.frame_size // 2
+        return (encoded[i : i + payload_size] for i in range(0, len(encoded), payload_size))

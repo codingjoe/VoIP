@@ -22,7 +22,7 @@ import numpy as np
 
 import voip.codecs as codecs
 from voip.codecs import RTPCodec
-from voip.codecs.base import PayloadDecoder
+from voip.codecs.base import PayloadDecoder, PayloadEncoder
 from voip.rtp import RTPCall, RTPPacket
 from voip.sdp.types import MediaDescription
 
@@ -73,6 +73,10 @@ class AudioCall(RTPCall):
     #: Stateful for ADPCM codecs (e.g. G.722), stateless for others.
     payload_decoder: PayloadDecoder = dataclasses.field(init=False, repr=False)
 
+    #: Per-call payload encoder, set in `__post_init__`.
+    #: Stateful for ADPCM codecs (e.g. G.722), stateless for others.
+    payload_encoder: PayloadEncoder = dataclasses.field(init=False, repr=False)
+
     #: Outbound RTP sequence counter.
     rtp_sequence_number: int = dataclasses.field(init=False, repr=False, default=0)
     #: Outbound RTP timestamp counter.
@@ -90,6 +94,7 @@ class AudioCall(RTPCall):
         self.payload_decoder = self.codec.create_decoder(
             self.RESAMPLING_RATE_HZ, input_rate_hz=self.sample_rate
         )
+        self.payload_encoder = self.codec.create_encoder()
         logger.info(
             json.dumps(
                 {
@@ -243,7 +248,7 @@ class AudioCall(RTPCall):
         if remote_addr is None:
             logger.warning("No remote RTP address for this call; dropping audio")
             return
-        for payload in self.codec.packetize(audio):
+        for payload in self.payload_encoder.packetize(audio):
             self.send_packet(self.next_rtp_packet(payload), remote_addr)
             await asyncio.sleep(self.RTP_PACKET_DURATION_SECS)
 

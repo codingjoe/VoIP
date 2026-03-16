@@ -24,7 +24,7 @@ import numpy as np
 
 from voip.sdp.types import RTPPayloadFormat
 
-__all__ = ["PayloadDecoder", "PerPacketDecoder", "RTPCodec"]
+__all__ = ["PayloadDecoder", "PayloadEncoder", "PerPacketDecoder", "PerPacketEncoder", "RTPCodec"]
 
 
 class PayloadDecoder(Protocol):
@@ -49,6 +49,30 @@ class PayloadDecoder(Protocol):
         ...
 
 
+class PayloadEncoder(Protocol):
+    """Protocol for per-call RTP payload encoders.
+
+    Implementations encode float32 mono PCM audio and yield one raw RTP
+    payload per 20 ms frame.  Stateful implementations (e.g.
+    [`G722Encoder`][voip.codecs.g722.G722Encoder]) preserve the codec
+    predictor state across successive
+    [`packetize`][voip.codecs.base.PayloadEncoder.packetize] calls within a
+    single call session so that ADPCM continuity is maintained across TTS
+    chunks.
+    """
+
+    def packetize(self, audio: np.ndarray) -> Iterator[bytes]:
+        """Encode *audio* and yield one RTP payload per 20 ms frame.
+
+        Args:
+            audio: Float32 mono PCM at the codec's `sample_rate_hz` Hz.
+
+        Yields:
+            Encoded payload bytes, one per RTP packet.
+        """
+        ...
+
+
 class RTPCodec:
     """Base class for RTP audio codecs.
 
@@ -61,6 +85,9 @@ class RTPCodec:
     Per-call decoder state (required for ADPCM codecs such as G.722) is
     managed by [`PayloadDecoder`][voip.codecs.base.PayloadDecoder] instances
     returned by [`create_decoder`][voip.codecs.base.RTPCodec.create_decoder].
+    Per-call encoder state (required for ADPCM codecs such as G.722) is
+    managed by [`PayloadEncoder`][voip.codecs.base.PayloadEncoder] instances
+    returned by [`create_encoder`][voip.codecs.base.RTPCodec.create_encoder].
 
     Concrete subclasses define codec-specific class variables and override
     [`decode`][voip.codecs.base.RTPCodec.decode],
@@ -195,6 +222,23 @@ class RTPCodec:
         return PerPacketDecoder(cls, output_rate_hz, input_rate_hz)
 
     @classmethod
+    def create_encoder(cls) -> PayloadEncoder:
+        """Create a stateless per-call payload encoder for this codec.
+
+        Override in subclasses that require stateful encoding across RTP
+        packets (e.g. G.722 ADPCM — see
+        [`G722.create_encoder`][voip.codecs.g722.G722.create_encoder]).
+
+        Returns:
+            A [`PayloadEncoder`][voip.codecs.base.PayloadEncoder] that, by
+            default, is a
+            [`PerPacketEncoder`][voip.codecs.base.PerPacketEncoder]
+            delegating each call to
+            [`packetize`][voip.codecs.base.RTPCodec.packetize].
+        """
+        return PerPacketEncoder(cls)
+
+    @classmethod
     def encode(cls, samples: np.ndarray) -> bytes:
         """Encode float32 mono PCM to an RTP payload.
 
@@ -257,3 +301,30 @@ class PerPacketDecoder:
         return self.codec.decode(
             payload, self.output_rate_hz, input_rate_hz=self.input_rate_hz
         )
+
+
+@dataclasses.dataclass(frozen=True)
+class PerPacketEncoder:
+    """Stateless payload encoder that delegates to the codec's `packetize` classmethod.
+
+    Each [`packetize`][voip.codecs.base.PerPacketEncoder.packetize] call
+    forwards directly to
+    [`RTPCodec.packetize`][voip.codecs.base.RTPCodec.packetize].  Suitable for
+    stateless codecs such as PCMA, PCMU, and Opus.
+
+    Attributes:
+        codec: Codec class to delegate encoding to.
+    """
+
+    codec: type[RTPCodec]
+
+    def packetize(self, audio: np.ndarray) -> Iterator[bytes]:
+        """Encode *audio* and yield one RTP payload per 20 ms frame.
+
+        Args:
+            audio: Float32 mono PCM at the codec's `sample_rate_hz` Hz.
+
+        Yields:
+            Encoded payload bytes, one per RTP packet.
+        """
+        return self.codec.packetize(audio)

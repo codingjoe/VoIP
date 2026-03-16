@@ -276,3 +276,195 @@ class TestG722Decoder:
                 f"Packet {i}: expected stateless decoder to diverge from reference "
                 f"(ADPCM state reset), but MSE={mse:.6f} is too low"
             )
+
+
+class TestG722CreateEncoder:
+    def test_create_encoder__returns_g722_encoder(self):
+        """create_encoder returns a G722Encoder instance."""
+        from voip.codecs.g722 import G722Encoder  # noqa: PLC0415
+
+        encoder = G722.create_encoder()
+        assert isinstance(encoder, G722Encoder)
+
+    def test_create_encoder__codec_context_is_open(self):
+        """create_encoder initialises a writable G.722 codec context."""
+        import av  # noqa: PLC0415
+
+        encoder = G722.create_encoder()
+        assert isinstance(encoder.codec_context, av.CodecContext)
+
+    def test_create_encoder__sample_count_starts_at_zero(self):
+        """create_encoder initialises sample_count to zero."""
+        encoder = G722.create_encoder()
+        assert encoder.sample_count == 0
+
+
+class TestG722Encoder:
+    def test_encoder__packetize_returns_bytes(self):
+        """G722Encoder.packetize yields bytes for silent PCM input."""
+        encoder = G722.create_encoder()
+        packets = list(encoder.packetize(np.zeros(320, dtype=np.float32)))
+        assert len(packets) == 1
+        assert isinstance(packets[0], bytes)
+        assert len(packets[0]) == G722.frame_size // 2  # 160 bytes
+
+    def test_encoder__packetize_increments_sample_count(self):
+        """packetize advances sample_count by the number of input samples."""
+        encoder = G722.create_encoder()
+        list(encoder.packetize(np.zeros(320, dtype=np.float32)))
+        list(encoder.packetize(np.zeros(320, dtype=np.float32)))
+        assert encoder.sample_count == 640
+
+    def test_encoder__packetize_yields_160_byte_chunks(self):
+        """packetize yields 160-byte payloads (G.722 2:1 sample-to-byte ratio)."""
+        encoder = G722.create_encoder()
+        packets = list(encoder.packetize(np.zeros(640, dtype=np.float32)))
+        assert len(packets) == 2
+        assert all(len(p) == 160 for p in packets)
+
+    def test_encoder__preserves_adpcm_state_across_chunks(self):
+        """G722Encoder preserves ADPCM predictor state across consecutive packetize calls.
+
+        Encoding a continuous sine wave in two separate chunks with the stateful
+        G722Encoder must produce the same output as encoding the whole signal at
+        once.  If ADPCM state resets between chunks the decoded output diverges.
+        """
+        import io  # noqa: PLC0415
+
+        import av  # noqa: PLC0415
+
+        chunk_frames = 3  # 3 × 20 ms
+        total_samples = chunk_frames * G722.frame_size * 2  # split into 2 equal halves
+        t = np.linspace(0, total_samples / G722.sample_rate_hz, total_samples, endpoint=False)
+        signal = (np.sin(2 * np.pi * 440 * t) * 0.5).astype(np.float32)
+
+        # Reference: encode the entire signal with a fresh context (ground truth).
+        reference_encoded = b"".join(
+            bytes(p) for p in G722.create_encoder().packetize(signal)
+        )
+
+        # Stateful encoder: encode in two halves.
+        stateful_encoder = G722.create_encoder()
+        half = total_samples // 2
+        encoded_chunks = b"".join(
+            bytes(p)
+            for chunk in (signal[:half], signal[half:])
+            for p in stateful_encoder.packetize(chunk)
+        )
+
+        # Both streams must decode to the same audio.
+        def decode_stream(raw: bytes) -> np.ndarray:
+            resampler = av.audio.resampler.AudioResampler(
+                format="fltp", layout="mono", rate=G722.sample_rate_hz
+            )
+            frames: list[np.ndarray] = []
+            with av.open(
+                io.BytesIO(raw), mode="r", format="g722",
+                options={"sample_rate": str(G722.rtp_clock_rate_hz)},
+            ) as container:
+                for f in container.decode(audio=0):
+                    for rs in resampler.resample(f):
+                        frames.append(rs.to_ndarray().flatten())
+            return np.concatenate(frames) if frames else np.array([], dtype=np.float32)
+
+        reference_audio = decode_stream(reference_encoded)
+        stateful_audio = decode_stream(encoded_chunks)
+
+        min_len = min(len(reference_audio), len(stateful_audio))
+        assert min_len > 0
+        assert np.allclose(reference_audio[:min_len], stateful_audio[:min_len], atol=1e-5), (
+            "G722Encoder stateful output differs from reference: "
+            "ADPCM state may not be preserved across chunk boundaries"
+        )
+
+    def test_stateless_encode__diverges_after_first_chunk(self):
+        """Stateless encoding resets ADPCM state between chunks, producing divergence.
+
+        This test documents the bug: creating a fresh codec context for each TTS
+        chunk causes the receiver to hear robotic, broken audio after the first chunk.
+        """
+        import io  # noqa: PLC0415
+
+        import av  # noqa: PLC0415
+
+        chunk_frames = 3
+        total_samples = chunk_frames * G722.frame_size * 2
+        t = np.linspace(0, total_samples / G722.sample_rate_hz, total_samples, endpoint=False)
+        signal = (np.sin(2 * np.pi * 440 * t) * 0.5).astype(np.float32)
+
+        # Reference: encode all at once (correct, state-preserving).
+        reference_encoded = b"".join(
+            bytes(p) for p in G722.create_encoder().packetize(signal)
+        )
+
+        # Stateless: separate encode_pcm call per chunk (original bug).
+        half = total_samples // 2
+        stateless_encoded = G722.encode(signal[:half]) + G722.encode(signal[half:])
+
+        def decode_stream(raw: bytes) -> np.ndarray:
+            resampler = av.audio.resampler.AudioResampler(
+                format="fltp", layout="mono", rate=G722.sample_rate_hz
+            )
+            frames: list[np.ndarray] = []
+            with av.open(
+                io.BytesIO(raw), mode="r", format="g722",
+                options={"sample_rate": str(G722.rtp_clock_rate_hz)},
+            ) as container:
+                for f in container.decode(audio=0):
+                    for rs in resampler.resample(f):
+                        frames.append(rs.to_ndarray().flatten())
+            return np.concatenate(frames) if frames else np.array([], dtype=np.float32)
+
+        reference_audio = decode_stream(reference_encoded)
+        stateless_audio = decode_stream(stateless_encoded)
+
+        min_len = min(len(reference_audio), len(stateless_audio))
+        second_half_start = min_len // 2
+        ref_second = reference_audio[second_half_start:]
+        stat_second = stateless_audio[second_half_start:]
+        mse = float(np.mean((ref_second - stat_second[:len(ref_second)]) ** 2))
+        assert mse > 0.01, (
+            f"Expected stateless encoder to diverge from reference in second half "
+            f"(ADPCM state reset at chunk boundary), but MSE={mse:.6f} is too low"
+        )
+        """Per-packet stateless decoding diverges from reference for packets 1+.
+
+        This test documents the original bug: resetting ADPCM state each
+        packet causes the decoded signal to be near-silent for all but the
+        first packet, making the echo 'too short' and 'robotic'.
+        """
+        import io  # noqa: PLC0415
+
+        import av  # noqa: PLC0415
+
+        packets = self._make_encoded_packets(3)
+
+        # Reference: decode all bytes together.
+        resampler = av.audio.resampler.AudioResampler(
+            format="fltp", layout="mono", rate=16000
+        )
+        ref_frames: list[np.ndarray] = []
+        with av.open(
+            io.BytesIO(b"".join(packets)),
+            mode="r",
+            format="g722",
+            options={"sample_rate": "8000"},
+        ) as container:
+            for f in container.decode(audio=0):
+                for rs in resampler.resample(f):
+                    ref_frames.append(rs.to_ndarray().flatten())
+        reference = np.concatenate(ref_frames)
+
+        # Stateless (original buggy behaviour): fresh context per packet.
+        stateless_parts = [G722.decode(p, 16000) for p in packets]
+
+        # Packet 0 is identical (both start from zero state).
+        assert np.allclose(stateless_parts[0], reference[: G722.frame_size], atol=1e-5)
+        # Packets 1+ diverge: stateless is near-silent, reference has full signal.
+        for i, part in enumerate(stateless_parts[1:], start=1):
+            ref_segment = reference[i * G722.frame_size : (i + 1) * G722.frame_size]
+            mse = float(np.mean((part - ref_segment) ** 2))
+            assert mse > 0.01, (  # near-silence vs full-amplitude signal
+                f"Packet {i}: expected stateless decoder to diverge from reference "
+                f"(ADPCM state reset), but MSE={mse:.6f} is too low"
+            )
