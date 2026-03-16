@@ -163,6 +163,7 @@ class AgentCall(TranscribeCall):
         removed from the chat history so the history stays consistent.
         """
         self.messages.append({"role": "user", "content": self.pending_text.getvalue()})
+        self.pending_text.seek(0)
         self.pending_text.truncate(0)
         response = await ollama.AsyncClient().chat(
             model=self.ollama_model,
@@ -170,6 +171,7 @@ class AgentCall(TranscribeCall):
         )
         reply = (response.message.content or "").encode("ascii", "ignore").decode()
         self.messages.append({"role": "assistant", "content": reply})
+
         logger.debug("Agent reply: %r", reply)
         await self.send_speech(reply)
 
@@ -183,24 +185,12 @@ class AgentCall(TranscribeCall):
         Args:
             text: Text to synthesise and transmit.
         """
-        loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[np.ndarray | None] = asyncio.Queue()
-
-        def generate() -> None:
-            for chunk in self.tts_instance.generate_audio_stream(
-                self.voice_state,
-                text,  # type: ignore[too-many-positional-arguments]
-            ):
-                asyncio.run_coroutine_threadsafe(
-                    queue.put(chunk.numpy()), loop
-                ).result()
-            asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
-
-        future = loop.run_in_executor(None, generate)
-        while (tts_chunk := await queue.get()) is not None:
-            resampled = self.resample(
-                tts_chunk, self.tts_instance.sample_rate, self.codec.sample_rate_hz
+        audio = self.tts_instance.generate_audio(
+            self.voice_state,
+            text,  # type: ignore[too-many-positional-arguments]
+        )
+        await self.send_rtp_audio(
+            self.resample(
+                audio.numpy(), self.tts_instance.sample_rate, self.codec.sample_rate_hz
             )
-            print(len(resampled))
-            await self.send_rtp_audio(resampled)
-        await future
+        )
