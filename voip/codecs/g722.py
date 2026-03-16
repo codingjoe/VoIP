@@ -121,8 +121,11 @@ class G722Decoder:
 
     Attributes:
         output_rate_hz: Target PCM sample rate in Hz for decoded audio.
-        codec_context: Persistent PyAV G.722 decoder context.
-        resampler: PyAV audio resampler targeting `output_rate_hz`.
+        codec_context: Persistent [`av.CodecContext`][] G.722 decoder context
+            shared across all [`decode`][voip.codecs.g722.G722Decoder.decode]
+            calls on this instance.
+        resampler: [`av.audio.resampler.AudioResampler`][] targeting
+            `output_rate_hz` Hz.
     """
 
     output_rate_hz: int

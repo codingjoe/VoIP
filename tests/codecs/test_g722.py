@@ -136,8 +136,8 @@ class TestG722CreateDecoder:
 
 
 class TestG722Decoder:
-    def _make_encoded_packets(self, n: int = 3) -> list[bytes]:
-        """Encode *n* 20 ms G.722 packets from a continuous sine wave."""
+    def _make_encoded_packets(self, packet_count: int = 3) -> list[bytes]:
+        """Encode *packet_count* 20 ms G.722 packets from a continuous sine wave."""
         import av  # noqa: PLC0415
 
         encoder = av.CodecContext.create("g722", "w")
@@ -145,7 +145,7 @@ class TestG722Decoder:
         encoder.format = av.AudioFormat("s16")
         encoder.layout = av.AudioLayout("mono")
         encoder.open()
-        t = np.linspace(0, n * 0.02, n * G722.frame_size, endpoint=False)
+        t = np.linspace(0, packet_count * 0.02, packet_count * G722.frame_size, endpoint=False)
         signal = (np.sin(2 * np.pi * 440 * t) * 0.5).astype(np.float32)
         pcm = np.clip(np.round(signal * 32768.0), -32768, 32767).astype(np.int16)
         frame = av.AudioFrame.from_ndarray(pcm[np.newaxis, :], format="s16", layout="mono")
@@ -225,7 +225,7 @@ class TestG722Decoder:
             "ADPCM state may not be preserved across packets"
         )
 
-    def test_decoder__stateless_decode_diverges_after_first_packet(self):
+    def test_stateless_decode__diverges_after_first_packet(self):
         """Per-packet stateless decoding diverges from reference for packets 1+.
 
         This test documents the original bug: resetting ADPCM state each
