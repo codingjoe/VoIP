@@ -192,28 +192,13 @@ class AudioCall(RTPCall):
         Args:
             packet: Parsed RTP packet whose payload will be decoded.
         """
-        loop = asyncio.get_running_loop()
-        audio = await loop.run_in_executor(None, self.decode_payload, packet.payload)
+        audio = self.decode_payload(packet.payload)
         if audio.size > 0:
             self.audio_received(
                 audio=audio, rms=float(np.sqrt(np.mean(np.square(audio))))
             )
 
     def decode_payload(self, payload: bytes) -> np.ndarray:
-        """Decode an RTP payload to float32 PCM at `RESAMPLING_RATE_HZ`.
-
-        Delegates to `payload_decoder`, which is either a
-        [`PerPacketDecoder`][voip.codecs.base.PerPacketDecoder] (for stateless
-        codecs such as PCMA, PCMU, Opus) or a
-        [`G722Decoder`][voip.codecs.g722.G722Decoder] (for G.722, which
-        preserves ADPCM predictor state across consecutive packets).
-
-        Args:
-            payload: Raw RTP payload bytes.
-
-        Returns:
-            Float32 mono PCM array at `RESAMPLING_RATE_HZ` Hz.
-        """
         return self.payload_decoder.decode(payload)
 
     def audio_received(self, *, audio: np.ndarray, rms: float) -> None:
@@ -221,8 +206,7 @@ class AudioCall(RTPCall):
 
         Args:
             audio: Float32 mono PCM array at `RESAMPLING_RATE_HZ` Hz.
-            rms: Root mean square of the decoded PCM, as a proxy for signal
-                strength.
+            rms: Root Mean Square of the decoded PCM, as a proxy for signal strength.
         """
 
     async def send_rtp_audio(self, audio: np.ndarray) -> None:
@@ -310,7 +294,7 @@ class VoiceActivityCall(AudioCall):
     """
 
     speech_threshold: float = dataclasses.field(default=0.001)
-    silence_gap: float = dataclasses.field(default=0.5)
+    silence_gap: float = dataclasses.field(default=0.2)
 
     speech_buffer: list[np.ndarray] = dataclasses.field(
         init=False, repr=False, default_factory=list
@@ -318,55 +302,43 @@ class VoiceActivityCall(AudioCall):
     silence_handle: asyncio.TimerHandle | None = dataclasses.field(
         init=False, repr=False, default=None
     )
+    transcription_handle: asyncio.TimerHandle | None = dataclasses.field(
+        init=False, repr=False, default=None
+    )
 
     def audio_received(self, *, audio: np.ndarray, rms: float) -> None:
-        if self.collect_audio(audio, rms):
-            self.speech_buffer.append(audio)
+        self.speech_buffer.append(audio)
         if rms > self.speech_threshold:
             self.on_audio_speech()
         else:
             self.on_audio_silence()
 
-    def collect_audio(self, audio: np.ndarray, rms: float) -> bool:
-        """Return whether to buffer this audio frame.
-
-        The default implementation buffers speech frames only (RMS above
-        `speech_threshold`).  Override to change the buffering strategy.
-
-        Args:
-            audio: Decoded float32 PCM frame.
-            rms: Root mean square of *audio*.
-
-        Returns:
-            `True` when the frame should be appended to `speech_buffer`.
-        """
-        return rms > self.speech_threshold
-
     def on_audio_speech(self) -> None:
-        """Cancel any pending silence timer when speech is detected."""
-        if self.silence_handle is not None:
-            self.silence_handle.cancel()
-            self.silence_handle = None
+        if self.transcription_handle is not None:
+            self.transcription_handle.cancel()
+            self.transcription_handle = None
 
     def on_audio_silence(self) -> None:
-        """Arm the silence debounce timer when speech is buffered."""
-        if self.silence_handle is None and self.speech_buffer:
-            loop = asyncio.get_running_loop()
-            self.silence_handle = loop.call_later(
+        if self.transcription_handle is None:
+            loop = asyncio.get_event_loop()
+            self.transcription_handle = loop.call_later(
                 self.silence_gap,
                 self.flush_speech_buffer,
             )
 
     def flush_speech_buffer(self) -> None:
-        """Concatenate buffered audio and schedule [`speech_buffer_ready`][voip.audio.VoiceActivityCall.speech_buffer_ready].
-
-        Resets speech state so the next utterance starts with a clean buffer.
-        """
-        self.silence_handle = None
-        if not self.speech_buffer:
-            return
+        self.transcription_handle = None
+        # Ensure at least one second of audio to avoid cutting words in half.
         audio = np.concatenate(self.speech_buffer)
+        if (
+            sum(len(c) for c in self.speech_buffer)
+            < self.RESAMPLING_RATE_HZ * self.silence_gap
+            or float(np.sqrt(np.mean(np.square(audio)))) < 0.01
+        ):
+            self.speech_buffer.clear()
+            return
         self.speech_buffer.clear()
+
         asyncio.create_task(self.speech_buffer_ready(audio))
 
     async def speech_buffer_ready(self, audio: np.ndarray) -> None:

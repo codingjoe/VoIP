@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import io
 import logging
 from typing import Any
 
@@ -71,54 +72,19 @@ class TranscribeCall(VoiceActivityCall):
         else:
             self.whisper_model = self.model
 
-    def collect_audio(self, audio: np.ndarray, rms: float) -> bool:
-        """Buffer all audio frames (speech and silence) for transcription.
-
-        Args:
-            audio: Decoded float32 PCM frame.
-            rms: Root mean square of *audio*.
-
-        Returns:
-            Always `True` so that intra-utterance silences are preserved.
-        """
-        return True
-
     async def speech_buffer_ready(self, audio: np.ndarray) -> None:
-        """Transcribe the buffered utterance when it meets the minimum length.
-
-        Skips utterances shorter than one second to avoid passing fragments
-        to Whisper that would produce low-quality transcriptions.
-
-        Args:
-            audio: Float32 mono PCM array at `RESAMPLING_RATE_HZ` Hz.
-        """
-        if len(audio) < self.RESAMPLING_RATE_HZ:
-            return
         await self.transcribe(audio)
 
     async def transcribe(self, audio: np.ndarray) -> None:
-        """Transcribe decoded audio and deliver non-empty text to the handler.
-
-        Args:
-            audio: Float32 mono PCM array at `RESAMPLING_RATE_HZ` Hz.
-        """
         loop = asyncio.get_running_loop()
         raw = await loop.run_in_executor(None, self.run_transcription, audio)
         if text := raw.strip():
             self.transcription_received(text)
 
     def run_transcription(self, audio: np.ndarray) -> str:
-        """Transcribe a float32 PCM array using the Whisper model.
-
-        Args:
-            audio: Float32 mono PCM array at `RESAMPLING_RATE_HZ` Hz.
-
-        Returns:
-            Concatenated transcription text from all segments.
-        """
         segments, _ = self.whisper_model.transcribe(audio)
         result = "".join(segment.text for segment in segments)
-        logger.debug("Transcription result: %r", segments)
+        logger.debug("Transcription result: %r", result)
         return result
 
     def transcription_received(self, text: str) -> None:
@@ -166,7 +132,9 @@ class AgentCall(TranscribeCall):
     tts_instance: TTSModel = dataclasses.field(init=False, repr=False)
     voice_state: Any = dataclasses.field(init=False, repr=False)
     messages: list[dict] = dataclasses.field(init=False, repr=False)
-    pending_text: list[str] = dataclasses.field(init=False, repr=False)
+    pending_text: io.StringIO = dataclasses.field(
+        init=False, repr=False, default_factory=io.StringIO
+    )
     response_task: asyncio.Task | None = dataclasses.field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -180,18 +148,13 @@ class AgentCall(TranscribeCall):
                 + "\n\nYOU MUST NEVER USE NON-VERBAL CHARACTERS IN YOUR RESPONSES!",
             }
         ]
-        self.pending_text = []
         self.response_task = None
 
     def transcription_received(self, text: str) -> None:
-        match text:
-            case "":
-                return
-            case _:
-                self.pending_text.append(text)
-                if self.response_task is not None and not self.response_task.done():
-                    self.response_task.cancel()
-                self.response_task = asyncio.create_task(self.respond())
+        self.pending_text.writelines((text, "\n"))
+        if self.response_task is not None and not self.response_task.done():
+            self.response_task.cancel()
+        self.response_task = asyncio.create_task(self.respond())
 
     async def respond(self) -> None:
         """Fetch an Ollama reply for pending text and stream it as speech via RTP.
@@ -199,24 +162,16 @@ class AgentCall(TranscribeCall):
         On cancellation (human started speaking) the partial user turn is
         removed from the chat history so the history stays consistent.
         """
-        self.messages.append({"role": "user", "content": "\n".join(self.pending_text)})
-        self.pending_text.clear()
-        try:
-            response = await ollama.AsyncClient().chat(
-                model=self.ollama_model,
-                messages=self.messages,
-            )
-            reply = (response.message.content or "").encode("ascii", "ignore").decode()
-            self.messages.append({"role": "assistant", "content": reply})
-            logger.info("Agent reply: %r", reply)
-            await self.send_speech(reply)
-        except asyncio.CancelledError:
-            # Remove the partial user turn so history stays consistent.
-            if self.messages and self.messages[-1]["role"] == "user":
-                self.messages.pop()
-            raise
-        except Exception:
-            logger.exception("Error while generating agent response")
+        self.messages.append({"role": "user", "content": self.pending_text.getvalue()})
+        self.pending_text.truncate(0)
+        response = await ollama.AsyncClient().chat(
+            model=self.ollama_model,
+            messages=self.messages,
+        )
+        reply = (response.message.content or "").encode("ascii", "ignore").decode()
+        self.messages.append({"role": "assistant", "content": reply})
+        logger.debug("Agent reply: %r", reply)
+        await self.send_speech(reply)
 
     async def send_speech(self, text: str) -> None:
         """Stream synthesised speech from Pocket TTS and send via RTP.
@@ -246,5 +201,6 @@ class AgentCall(TranscribeCall):
             resampled = self.resample(
                 tts_chunk, self.tts_instance.sample_rate, self.codec.sample_rate_hz
             )
+            print(len(resampled))
             await self.send_rtp_audio(resampled)
         await future
