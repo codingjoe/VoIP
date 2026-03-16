@@ -145,10 +145,14 @@ class TestG722Decoder:
         encoder.format = av.AudioFormat("s16")
         encoder.layout = av.AudioLayout("mono")
         encoder.open()
-        t = np.linspace(0, packet_count * 0.02, packet_count * G722.frame_size, endpoint=False)
+        t = np.linspace(
+            0, packet_count * 0.02, packet_count * G722.frame_size, endpoint=False
+        )
         signal = (np.sin(2 * np.pi * 440 * t) * 0.5).astype(np.float32)
         pcm = np.clip(np.round(signal * 32768.0), -32768, 32767).astype(np.int16)
-        frame = av.AudioFrame.from_ndarray(pcm[np.newaxis, :], format="s16", layout="mono")
+        frame = av.AudioFrame.from_ndarray(
+            pcm[np.newaxis, :], format="s16", layout="mono"
+        )
         frame.sample_rate = 16000
         frame.pts = 0
         return [bytes(p) for p in encoder.encode(frame)]
@@ -170,7 +174,7 @@ class TestG722Decoder:
         assert isinstance(decoder.resampler, av.audio.resampler.AudioResampler)
 
     def test_decoder__decode_returns_float32(self):
-        """decode produces a float32 array for a real G.722 encoded packet."""
+        """Decode produces a float32 array for a real G.722 encoded packet."""
         from voip.codecs.g722 import G722Decoder  # noqa: PLC0415
 
         packet = self._make_encoded_packets(1)[0]
@@ -179,7 +183,7 @@ class TestG722Decoder:
         assert result.dtype == np.float32
 
     def test_decoder__decode_yields_correct_sample_count(self):
-        """decode returns 320 float32 samples for a 160-byte G.722 packet at 16 kHz."""
+        """Decode returns 320 float32 samples for a 160-byte G.722 packet at 16 kHz."""
         from voip.codecs.g722 import G722Decoder  # noqa: PLC0415
 
         packet = self._make_encoded_packets(1)[0]
@@ -196,17 +200,22 @@ class TestG722Decoder:
         packet into the same persistent context and matches the reference (all
         packets decoded together in one container).
         """
-        import av  # noqa: PLC0415
         import io  # noqa: PLC0415
+
+        import av  # noqa: PLC0415
         from voip.codecs.g722 import G722Decoder  # noqa: PLC0415
 
         packets = self._make_encoded_packets(3)
 
         # Reference: decode all bytes in one container (correct, stateful).
-        resampler = av.audio.resampler.AudioResampler(format="fltp", layout="mono", rate=16000)
+        resampler = av.audio.resampler.AudioResampler(
+            format="fltp", layout="mono", rate=16000
+        )
         ref_frames: list[np.ndarray] = []
         with av.open(
-            io.BytesIO(b"".join(packets)), mode="r", format="g722",
+            io.BytesIO(b"".join(packets)),
+            mode="r",
+            format="g722",
             options={"sample_rate": "8000"},
         ) as container:
             for f in container.decode(audio=0):
@@ -232,17 +241,21 @@ class TestG722Decoder:
         packet causes the decoded signal to be near-silent for all but the
         first packet, making the echo 'too short' and 'robotic'.
         """
-        import av  # noqa: PLC0415
         import io  # noqa: PLC0415
-        from voip.codecs.g722 import G722Decoder  # noqa: PLC0415
+
+        import av  # noqa: PLC0415
 
         packets = self._make_encoded_packets(3)
 
         # Reference: decode all bytes together.
-        resampler = av.audio.resampler.AudioResampler(format="fltp", layout="mono", rate=16000)
+        resampler = av.audio.resampler.AudioResampler(
+            format="fltp", layout="mono", rate=16000
+        )
         ref_frames: list[np.ndarray] = []
         with av.open(
-            io.BytesIO(b"".join(packets)), mode="r", format="g722",
+            io.BytesIO(b"".join(packets)),
+            mode="r",
+            format="g722",
             options={"sample_rate": "8000"},
         ) as container:
             for f in container.decode(audio=0):
