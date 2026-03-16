@@ -7,7 +7,7 @@ import time
 
 from voip.sip import messages
 from voip.sip.protocol import SessionInitiationProtocol
-from voip.sip.types import SipURI
+from voip.sip.types import SipUri
 
 try:
     import click
@@ -203,7 +203,7 @@ def sip(ctx, aor, password, username, proxy, stun_server, no_tls, no_verify_tls)
     """
     ctx.ensure_object(dict)
     try:
-        parsed_aor = SipURI.parse(aor)
+        parsed_aor = SipUri.parse(aor)
     except ValueError as exc:
         raise click.BadParameter(str(exc), param_hint="AOR") from exc
 
