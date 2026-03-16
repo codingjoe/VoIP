@@ -8,7 +8,7 @@ Codecs that require [PyAV][] for decode/encode additionally inherit from
 [`decode_pcm`][voip.codecs.av.PyAVCodec.decode_pcm] and
 [`encode_pcm`][voip.codecs.av.PyAVCodec.encode_pcm].
 
-Pure-NumPy codecs ([`PCMA`][voip.codecs.PCMA], [`PCMU`][voip.codecs.PCMU])
+Pure-NumPy codecs ([`PCMA`][voip.codecs.pcma.PCMA], [`PCMU`][voip.codecs.pcmu.PCMU])
 inherit directly from `RTPCodec` and require no PyAV dependency.
 
 [PyAV]: https://pyav.basswood-io.com/
@@ -30,8 +30,8 @@ class RTPCodec:
     """Base class for RTP audio codecs.
 
     Concrete implementations: [`Opus`][voip.codecs.Opus],
-    [`G722`][voip.codecs.G722], [`PCMA`][voip.codecs.PCMA],
-    [`PCMU`][voip.codecs.PCMU].
+    [`G722`][voip.codecs.G722], [`PCMA`][voip.codecs.pcma.PCMA],
+    [`PCMU`][voip.codecs.pcmu.PCMU].
 
     All codec implementations are stateless: every method is a classmethod or
     staticmethod and codecs are referenced as `type[RTPCodec]`, never
