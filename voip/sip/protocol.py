@@ -77,29 +77,11 @@ def _mask_caller(header: str) -> str:
 @dataclasses.dataclass(kw_only=True, slots=True)
 class SessionInitiationProtocol(asyncio.Protocol):
     """
-    SIP User Agent Client (UAC) over TLS/TCP [RFC 3261].
+    SIP User Agent Client (UAC) over TLS/TCP [RFC 3261][RFC 3261].
 
     Handles incoming calls and, optionally, carrier registration with digest
-    authentication [RFC 3261 §22].  All signalling is sent over a single
+    authentication [RFC 3261 §22].  All signaling is sent over a single
     persistent TLS/TCP connection.
-
-    RFC 3261 topology overview
-    --------------------------
-    *Outbound proxy* (§8.1.2): the SIP server this UA sends all requests to.
-    It may be a carrier edge proxy whose address differs from the registrar.
-
-    *Registrar* (§10): the server that maintains location bindings for a
-    domain.  Its URI is derived automatically from the `aor` by
-    stripping the user part (e.g. ``sips:alice@example.com`` →
-    ``sips:example.com``).  When no `outbound_proxy` is configured,
-    the UA is expected to connect directly to the registrar server.
-
-    When an `outbound_proxy` is configured it acts as the first SIP
-    hop and may differ from the registrar domain — for example when a carrier
-    provides a dedicated proxy at ``proxy.carrier.com`` while the AOR domain
-    (and thus the registrar Request-URI) is ``carrier.com``.
-
-    Subclass and override `call_received` to handle incoming calls:
 
     ```python
     class MySession(SessionInitiationProtocol):
@@ -121,6 +103,13 @@ class SessionInitiationProtocol(asyncio.Protocol):
 
     [RFC 3261]: https://datatracker.ietf.org/doc/html/rfc3261
     [RFC 3261 §22]: https://datatracker.ietf.org/doc/html/rfc3261#section-22
+
+    Attributes:
+        VIA_BRANCH_PREFIX:
+            RFC 3261 §8.1.1.7 Via branch magic cookie (indicates RFC 3261 compliance).
+        ALLOW:
+            RFC 3261 §11 – methods supported by this UA (used in Allow header).
+
     """
 
     #: RFC 3261 §8.1.1.7 Via branch magic cookie (indicates RFC 3261 compliance).
