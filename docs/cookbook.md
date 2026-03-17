@@ -76,14 +76,13 @@ from pocket_tts import TTSModel
 from voip.ai import AgentCall
 from voip.sip.protocol import SIP
 
-
 shared_tts = TTSModel.load_model()
 
 
 class MyCall(AgentCall):
     tts_model = shared_tts
     system_prompt = "You are a friendly hotel receptionist. Keep answers brief."
-    ollama_model = "llama3"
+    llm_model = "llama3"
     voice = "azelma"
 
 
