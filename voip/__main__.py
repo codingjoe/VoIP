@@ -10,6 +10,7 @@ from voip.sip.protocol import SessionInitiationProtocol
 
 try:
     import click
+    import numpy as np
     from pygments import highlight
     from pygments.formatters import TerminalFormatter  # type: ignore[unresolved-import]
 
@@ -109,8 +110,10 @@ def _parse_stun_server(ctx, param, value: str | None) -> tuple[str, int] | None:
 _parse_server = _parse_hostport
 
 
-class ConsoleMessageProcessor(SessionInitiationProtocol):
-    """Mixin that prints messages to stdout."""
+class ConsoleMessageProtocol(SessionInitiationProtocol):
+    """Pretty print SIP messages to stdout using pygments."""
+
+    __slots__ = ("verbose",)
 
     def request_received(self, request: messages.Request, addr: tuple[str, int]):
         self.pprint(request)
@@ -133,17 +136,18 @@ class ConsoleMessageProcessor(SessionInitiationProtocol):
         Args:
             msg: Message to print.
         """
-        transport = getattr(self, "transport", None)
-        addr = transport.get_extra_info("peername") if transport else None
-        if addr:
-            host = f"[{addr[0]}]" if ":" in addr[0] else addr[0]
-            host = click.style(host, fg="green", bold=True)
-            port = click.style(str(addr[1]), fg="yellow", bold=True)
-            prefix = f"{host}:{port} - - [{time.asctime()}]"
-        else:
-            prefix = f"[unknown] - - [{time.asctime()}]"
-        pretty_msg = highlight(str(msg), SIPLexer(), TerminalFormatter())
-        click.echo(f"{prefix} {pretty_msg}")
+        if self.verbose >= 3:
+            transport = getattr(self, "transport", None)
+            addr = transport.get_extra_info("peername") if transport else None
+            if addr:
+                host = f"[{addr[0]}]" if ":" in addr[0] else addr[0]
+                host = click.style(host, fg="green", bold=True)
+                port = click.style(str(addr[1]), fg="yellow", bold=True)
+                prefix = f"{host}:{port} - - [{time.asctime()}]"
+            else:
+                prefix = f"[unknown] - - [{time.asctime()}]"
+            pretty_msg = highlight(str(msg), SIPLexer(), TerminalFormatter())
+            click.echo(f"{prefix} {pretty_msg}")
 
 
 @click.group()
@@ -213,11 +217,7 @@ def voip(ctx, verbose: int = 0):
 )
 @click.pass_context
 def sip(ctx, aor, password, username, proxy, stun_server, no_tls, no_verify_tls):
-    """Session Initiation Protocol (SIP).
-
-    AOR is a SIP Address of Record URI identifying the account to register,
-    e.g. ``sips:alice@carrier.example.com`` or ``sip:alice@carrier.example.com:5060``.
-    """
+    """Session Initiation Protocol (SIP)."""
     ctx.ensure_object(dict)
     try:
         scheme, aor_user, aor_host, aor_port = _parse_aor(aor)
@@ -273,33 +273,15 @@ async def _connect_sip(
 @sip.command()
 @click.pass_context
 def echo(ctx):
-    r"""Register with a SIP carrier and echo caller speech back.
-
-    Buffers incoming speech and replays it to the caller after sustained
-    silence is detected.  Useful for testing end-to-end audio latency and
-    call-flow debugging.
-
-    \b
-    Transport selection (overridable with --no-tls):
-      sips: URI or port 5061  →  TLS (default)
-      sip:  URI or port 5060  →  plain TCP
-
-    \b
-    Examples:
-      voip sip sips:alice@sip.example.com --password secret echo
-      voip sip sip:alice@sip.example.com:5060 --password secret echo
-    """
-    from voip.sip.protocol import SIP
-
+    """Echo the caller's speech back after they finish speaking."""
     from .audio import EchoCall  # noqa: PLC0415
 
     obj = ctx.obj
     proxy_addr = obj["proxy_addr"]
-    verbose = obj.get("verbose", 0)
 
-    bases = (ConsoleMessageProcessor, SIP) if verbose >= 3 else (SIP,)
+    class EchoSession(ConsoleMessageProtocol):
+        verbose = obj.get("verbose", 0)
 
-    class EchoSession(*bases):
         def call_received(self, request) -> None:
             self.ringing(request=request)
             asyncio.create_task(self.answer(request=request, call_class=EchoCall))
@@ -326,52 +308,40 @@ def echo(ctx):
 
 @sip.command()
 @click.option(
-    "--model",
+    "--stt-model",
     default="tiny",
-    envvar="WHISPER_MODEL",
+    envvar="STT_MODEL",
     show_default=True,
     help="Whisper model size.",
 )
 @click.pass_context
-def transcribe(ctx, model):
-    r"""Register with a SIP carrier and transcribe incoming calls via Whisper.
-
-    \b
-    Transport selection (overridable with --no-tls):
-      sips: URI or port 5061  →  TLS (default)
-      sip:  URI or port 5060  →  plain TCP
-
-    \b
-    Examples:
-      voip sip sips:alice@sip.example.com --password secret transcribe
-      voip sip sip:alice@sip.example.com:5060 --password secret transcribe
-    """
-    from voip.sip.protocol import SIP
+def transcribe(ctx, stt_model):
+    """Transcribe incoming call audio."""
+    from faster_whisper import WhisperModel
 
     from .ai import TranscribeCall  # noqa: PLC0415
 
     obj = ctx.obj
     proxy_addr = obj["proxy_addr"]
-    verbose = obj.get("verbose", 0)
 
-    _model = model
-
-    @dataclasses.dataclass
+    @dataclasses.dataclass(kw_only=True, slots=True)
     class TranscribingCall(TranscribeCall):
-        """WhisperCall with the CLI-selected model and console output."""
-
-        model: str = _model
+        """TranscribeCall with the CLI-selected model and console output."""
 
         def transcription_received(self, text: str) -> None:
             click.echo(click.style(text, fg="green", bold=True))
 
-    bases = (ConsoleMessageProcessor, SIP) if verbose >= 3 else (SIP,)
+    class TranscribeSession(ConsoleMessageProtocol):
+        verbose = obj.get("verbose", 0)
 
-    class TranscribeSession(*bases):
         def call_received(self, request) -> None:
             self.ringing(request=request)
             asyncio.create_task(
-                self.answer(request=request, call_class=TranscribingCall)
+                self.answer(
+                    request=request,
+                    call_class=TranscribingCall,
+                    stt_model=WhisperModel(stt_model),
+                )
             )
 
     async def run():
@@ -396,16 +366,16 @@ def transcribe(ctx, model):
 
 @sip.command()
 @click.option(
-    "--model",
-    default="large-v3-turbo",
-    envvar="WHISPER_MODEL",
+    "--stt-model",
+    default="tiny",
+    envvar="STT_MODEL",
     show_default=True,
     help="Whisper model size.",
 )
 @click.option(
-    "--ollama-model",
+    "--llm-model",
     default="ministral-3",
-    envvar="OLLAMA_MODEL",
+    envvar="LLM_MODEL",
     show_default=True,
     help="Ollama language model name.",
 )
@@ -418,72 +388,63 @@ def transcribe(ctx, model):
 )
 @click.option(
     "--system-prompt",
-    default=None,
+    default=(
+        "You are a person on a phone call."
+        " Keep your answers very brief and conversational."
+        " YOU MUST NEVER USE NON-VERBAL CHARACTERS IN YOUR RESPONSES!"
+    ),
     envvar="LLM_SYSTEM_PROMPT",
     help=("System prompt for the language model."),
 )
 @click.pass_context
-def agent(ctx, model, ollama_model, voice, system_prompt):
-    r"""Register with a SIP carrier and handle calls with an AI voice agent.
-
-    Incoming speech is transcribed with Whisper, processed by an Ollama
-    language model, and the reply is synthesised with Pocket TTS and sent
-    back to the caller via RTP.  The conversation is echoed to the console.
-
-    \b
-    Transport selection (overridable with --no-tls):
-      sips: URI or port 5061  →  TLS (default)
-      sip:  URI or port 5060  →  plain TCP
-
-    \b
-    Examples:
-      voip sip sips:alice@sip.example.com --password secret agent
-      voip sip sips:alice@sip.example.com --password secret agent --ollama-model mistral
-    """
-    from voip.sip.protocol import SIP
+def agent(ctx, stt_model, llm_model, voice, system_prompt):
+    """Register with a SIP carrier and handle calls with an AI voice agent."""
+    from faster_whisper import WhisperModel
 
     from .ai import AgentCall  # noqa: PLC0415
 
     obj = ctx.obj
     proxy_addr = obj["proxy_addr"]
-    verbose = obj.get("verbose", 0)
 
-    _model, _ollama_model, _voice, _system_prompt = (
-        model,
-        ollama_model,
-        voice,
-        system_prompt,
-    )
-
-    @dataclasses.dataclass(kw_only=True)
+    @dataclasses.dataclass(kw_only=True, slots=True)
     class AgentCallWithOutput(AgentCall):
         """AgentCall that echoes the conversation to the console."""
 
-        model: str = dataclasses.field(default=_model)
-        ollama_model: str = dataclasses.field(default=_ollama_model)
-        voice: str = dataclasses.field(default=_voice)
-        if _system_prompt is not None:
-            system_prompt: str = dataclasses.field(default=_system_prompt)
+        msg_count: int = dataclasses.field(init=False, default=0)
 
-        async def respond(self) -> None:
-            msg_count = len(self.messages)
-            await super().respond()
-            for msg in self.messages[msg_count:]:
+        def transcription_received(self, text: str) -> None:
+            click.echo(click.style(f"User: {text}", fg="blue", bold=True))
+            super().transcription_received(text)
+
+        async def send_audio(self, audio: np.ndarray) -> None:
+            for msg in self._messages[self.msg_count :]:
                 click.echo(
                     click.style(
-                        f"{msg['role']}: {msg['content']}",
-                        fg="green" if msg["role"] == "assistant" else "blue",
+                        f"Agent: {msg['content']}",
+                        fg="magenta",
                         bold=True,
                     )
                 )
+            await super().send_audio(audio)
 
-    bases = (ConsoleMessageProcessor, SIP) if verbose >= 3 else (SIP,)
+        async def respond(self) -> None:
+            self.msg_count = len(self._messages)
+            await super().respond()
 
-    class AgentSession(*bases):
+    class AgentSession(ConsoleMessageProtocol):
+        verbose = obj.get("verbose", 0)
+
         def call_received(self, request) -> None:
             self.ringing(request=request)
             asyncio.create_task(
-                self.answer(request=request, call_class=AgentCallWithOutput)
+                self.answer(
+                    request=request,
+                    call_class=AgentCallWithOutput,
+                    stt_model=WhisperModel(stt_model),
+                    llm_model=llm_model,
+                    voice=voice,
+                    system_prompt=system_prompt,
+                )
             )
 
     async def run():

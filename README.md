@@ -47,7 +47,7 @@ SIP_PASSWORD=******** uvx 'voip[cli]' sip sips:alice@sip.example.com agent
 uv add voip[audio,ai,pygments]
 ```
 
-Subclass `WhisperCall` and override `transcription_received` to handle results.
+Subclass `TranscribeCall` and override `transcription_received` to handle results.
 Pass it as `call_class` when answering an incoming call:
 
 ```python

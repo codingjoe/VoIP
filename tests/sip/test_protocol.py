@@ -495,7 +495,7 @@ class TestAnswer:
         protocol._rtp_transport = fake_rtp_transport
         # Resolve the SIP protocol's own local address (for Contact header).
         protocol.local_address = ("127.0.0.1", 5061)
-        await protocol._answer(invite, _CodecAwareCall)
+        await protocol.answer(invite, call_class=_CodecAwareCall)
 
     @pytest.mark.asyncio
     async def test_answer__selects_pcma_from_offer(self, fake_rtp_transport):
@@ -662,7 +662,7 @@ class TestAnswer:
         invite = self._make_invite("no-addr-answer-1")
 
         with caplog.at_level("ERROR"):
-            await protocol._answer(invite, RTPCall)
+            await protocol.answer(invite, call_class=RTPCall)
         assert "No pending INVITE found" in caplog.text
         assert not protocol._sent_responses
 
@@ -1116,7 +1116,7 @@ class TestSIPProtocol:
         protocol._rtp_transport = mock_rtp_transport
         request = make_invite()
         protocol._pending_invites.add(request.headers["Call-ID"])
-        await protocol._answer(request, RTPCall)
+        await protocol.answer(request, call_class=RTPCall)
         assert len(protocol._sent) == 1
         response, _ = protocol._sent[0]
         assert response.status_code == 200
@@ -1137,7 +1137,7 @@ class TestSIPProtocol:
         protocol._rtp_transport = mock_rtp_transport
         request = make_invite()
         protocol._pending_invites.add(request.headers["Call-ID"])
-        await protocol._answer(request, RTPCall)
+        await protocol.answer(request, call_class=RTPCall)
         response, _ = protocol._sent[0]
         assert b"m=audio" in bytes(response.body)
         assert b"RTP/SAVP 0" in bytes(response.body)
@@ -1183,9 +1183,9 @@ class TestSIPProtocol:
 
         request = Request.parse(invite_bytes)
         protocol._pending_invites.add(request.headers["Call-ID"])
-        AudioCall = pytest.importorskip("voip.audio.AudioCall")
+        AudioCall = pytest.importorskip("voip.audio").AudioCall
 
-        await protocol._answer(request, AudioCall)
+        await protocol.answer(request, call_class=AudioCall)
         response, _ = protocol._sent[0]
         body = bytes(response.body)
         assert b"RTP/AVP" in body
@@ -1221,9 +1221,9 @@ class TestSIPProtocol:
 
         request = Request.parse(invite_bytes)
         protocol._pending_invites.add(request.headers["Call-ID"])
-        AudioCall = pytest.importorskip("voip.audio.AudioCall")
+        AudioCall = pytest.importorskip("voip.audio").AudioCall
 
-        await protocol._answer(request, AudioCall)
+        await protocol.answer(request, call_class=AudioCall)
         response, _ = protocol._sent[0]
         body = bytes(response.body)
         assert b"RTP/SAVP" in body
@@ -1247,7 +1247,7 @@ class TestSIPProtocol:
         protocol._rtp_transport = mock_rtp_transport
         request = make_invite()
         protocol._pending_invites.add(request.headers["Call-ID"])
-        await protocol._answer(request, RTPCall)
+        await protocol.answer(request, call_class=RTPCall)
         response, _ = protocol._sent[0]
         assert response.headers["Via"] == "SIP/2.0/UDP pc33.atlanta.com"
         assert response.headers["To"] == "sip:alice@atlanta.com"
@@ -1277,7 +1277,7 @@ class TestSIPProtocol:
         protocol._rtp_transport = mock_rtp_transport
         request = make_invite()
         protocol._pending_invites.add(request.headers["Call-ID"])
-        await protocol._answer(request, MyCall)
+        await protocol.answer(request, call_class=MyCall)
         assert created == ["sip:bob@biloxi.com"]
 
     async def test_answer__rtp_receives_audio(self):
@@ -1304,7 +1304,7 @@ class TestSIPProtocol:
         request = make_invite()
         protocol._pending_invites.add(request.headers["Call-ID"])
         try:
-            await protocol._answer(request, PacketCapture)
+            await protocol.answer(request, call_class=PacketCapture)
             response, _ = protocol._sent[0]
             sdp_line = next(
                 line
@@ -1352,7 +1352,7 @@ class TestSIPProtocol:
         request = make_invite()
         protocol._pending_invites.add(request.headers["Call-ID"])
         try:
-            await protocol._answer(request, PacketCapture)
+            await protocol.answer(request, call_class=PacketCapture)
             response, _ = protocol._sent[0]
             sdp_line = next(
                 line
@@ -1391,7 +1391,7 @@ class TestSIPProtocol:
         protocol._rtp_transport = mock_rtp_transport
         request = make_invite()
         protocol._pending_invites.add(request.headers["Call-ID"])
-        await protocol._answer(request, RTPCall)
+        await protocol.answer(request, call_class=RTPCall)
         response, _ = protocol._sent[0]
         serialized = bytes(response)
         parsed = Message.parse(serialized)
@@ -1429,7 +1429,7 @@ class TestSIPProtocol:
             body=sdp_body1,
         )
         protocol._pending_invites.add("call-1@test")
-        await protocol._answer(invite1, _MinimalCall)
+        await protocol.answer(invite1, call_class=_MinimalCall)
         rtp_proto_1 = protocol._rtp_protocol
         rtp_transport_1 = protocol._rtp_transport
 
@@ -1449,7 +1449,7 @@ class TestSIPProtocol:
             body=sdp_body2,
         )
         protocol._pending_invites.add("call-2@test")
-        await protocol._answer(invite2, _MinimalCall)
+        await protocol.answer(invite2, call_class=_MinimalCall)
 
         assert protocol._rtp_protocol is rtp_proto_1
         assert protocol._rtp_transport is rtp_transport_1
@@ -1473,7 +1473,7 @@ class TestSIPProtocol:
         request = make_invite()
         protocol._pending_invites.add(request.headers["Call-ID"])
         try:
-            await protocol._answer(request, RTPCall)
+            await protocol.answer(request, call_class=RTPCall)
             assert None in mux.calls
 
             bye = Request(
@@ -1510,7 +1510,7 @@ class TestSIPProtocol:
         request = make_invite()
         protocol._pending_invites.add(request.headers["Call-ID"])
         with caplog.at_level(logging.INFO, logger="voip.sip"):
-            await protocol._answer(request, RTPCall)
+            await protocol.answer(request, call_class=RTPCall)
         assert any("call_answered" in r.message for r in caplog.records)
 
     def test_reject__sends_busy_here_by_default(self):
@@ -1592,26 +1592,30 @@ class TestSIPProtocol:
 
     async def test_answer__via_call_received__schedules_answer(self):
         """answer() is async; wrapping it in create_task from call_received works."""
-        answered = []
 
-        class MySIP(SIP):
+        class MySIP(self._CapturingSIP):
             def call_received(self, request):
                 asyncio.create_task(
                     self.answer(request=request, call_class=_MinimalCall)
                 )
 
-            async def _answer(self, request, call_class):
-                answered.append((request, call_class))
-
-        protocol = MySIP(outbound_proxy=("127.0.0.1", 5060), aor="sip:test@example.com")
-        protocol.connection_made(MagicMock())
+        loop = asyncio.get_running_loop()
+        protocol = MySIP()
+        protocol.transport = make_mock_transport()
+        protocol.local_address = ("127.0.0.1", 5061)
+        mux = RealtimeTransportProtocol()
+        mux.public_address = loop.create_future()
+        mux.public_address.set_result(("127.0.0.1", 12000))
+        mock_rtp_transport = MagicMock()
+        mock_rtp_transport.get_extra_info.return_value = ("127.0.0.1", 12000)
+        protocol._rtp_protocol = mux
+        protocol._rtp_transport = mock_rtp_transport
         request = make_invite()
         protocol._pending_invites.add(request.headers["Call-ID"])
         protocol.call_received(request)
 
-        await asyncio.sleep(0.01)
-        assert len(answered) == 1
-        assert answered[0][1] is _MinimalCall
+        await asyncio.sleep(0.05)
+        assert len(protocol._sent) == 1
 
 
 # ---------------------------------------------------------------------------
