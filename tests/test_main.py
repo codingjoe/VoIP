@@ -10,7 +10,7 @@ import pytest
 
 pytest.importorskip("numpy")
 _click_testing = pytest.importorskip("click.testing")
-from voip.__main__ import voip
+from voip.__main__ import voip  # noqa: E402
 
 CliRunner = _click_testing.CliRunner
 
