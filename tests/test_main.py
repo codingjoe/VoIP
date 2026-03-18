@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -62,6 +63,34 @@ class TestParseStunServer:
             "stun.example.com",
             3478,
         )
+
+
+class TestParseHostport:
+    def test_parse_hostport__bracketed_ipv6_without_port_uses_default(self):
+        """Return default port and IPv6Address when bracketed IPv6 address has no port."""
+        from voip.__main__ import _parse_hostport
+
+        assert _parse_hostport(None, None, "[::1]", default_port=5061) == (
+            ipaddress.IPv6Address("::1"),
+            5061,
+        )
+
+    def test_parse_hostport__bracketed_ipv6_with_port(self):
+        """Return explicit port and IPv6Address when bracketed IPv6 address includes a port."""
+        from voip.__main__ import _parse_hostport
+
+        assert _parse_hostport(None, None, "[::1]:5061") == (
+            ipaddress.IPv6Address("::1"),
+            5061,
+        )
+
+    def test_parse_hostport__unbracketed_ipv6_raises_bad_parameter(self):
+        """Raise BadParameter when an unbracketed IPv6 literal is given."""
+        import click
+        from voip.__main__ import _parse_hostport
+
+        with pytest.raises(click.BadParameter, match="enclosed in brackets"):
+            _parse_hostport(None, None, "::1")
 
 
 class TestVoIPCommand:

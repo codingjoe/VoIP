@@ -163,7 +163,9 @@ class SessionInitiationProtocol(asyncio.Protocol):
     #: When ``None`` the caller connects directly to the registrar server.
     #: The address may differ from the registrar domain derived from
     #: `aor` (e.g. ``proxy.carrier.com`` vs ``carrier.com``).
-    outbound_proxy: tuple[str, int] | None = None
+    outbound_proxy: (
+        tuple[ipaddress.IPv4Address | ipaddress.IPv6Address | str, int] | None
+    ) = None
     aor: str
     username: str | None = None
     password: str | None = None
