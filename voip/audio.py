@@ -222,13 +222,12 @@ class AudioCall(RTPCall):
             loop = asyncio.get_running_loop()
             t0 = time.perf_counter()
             for i, payload in enumerate(self.codec.packetize(audio)):
-                self.send_audio_scheduler.enterabs(
+                loop.call_at(
                     t0 + i * self.rpt_packet_duration.total_seconds(),
-                    1,
                     self.send_packet,
-                    (self.next_rtp_packet(payload), remote_addr),
+                    self.next_rtp_packet(payload),
+                    remote_addr,
                 )
-            await loop.run_in_executor(None, self.send_audio_scheduler.run)
 
     def audio_received(self, *, audio: np.ndarray, rms: float) -> None:
         """
