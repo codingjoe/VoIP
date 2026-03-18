@@ -69,6 +69,11 @@ def _parse_hostport(
             raise click.BadParameter(
                 f"Invalid port in {value!r}.", param=param
             ) from None
+    if value.count(":") > 1:
+        # Multiple colons without a leading bracket indicate an unbracketed IPv6 literal.
+        raise click.BadParameter(
+            f"IPv6 address must be enclosed in brackets, e.g. [{value}].", param=param
+        )
     host, _, port_str = value.rpartition(":")
     if not host:
         return value, default_port
