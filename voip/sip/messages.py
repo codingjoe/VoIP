@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import abc
 import dataclasses
+import typing
 
 from voip.sdp.messages import SessionDescription
 
 from ..types import ByteSerializableObject
-from .types import CallerID
+from .types import CallerID, SIPMethod, SIPStatus
+
+if typing.TYPE_CHECKING:
+    from . import SipUri
 
 __all__ = ["Request", "Response", "Message"]
 
@@ -46,7 +50,7 @@ class Message(ByteSerializableObject, abc.ABC):
             version, status_code_str, reason = parts
             return Response(
                 status_code=int(status_code_str),
-                reason=reason,
+                phrase=reason,
                 headers=headers,
                 body=cls._parse_body(headers, body),
                 version=version,
@@ -92,8 +96,8 @@ class Request(Message):
     [RFC 3261 §7.1]: https://datatracker.ietf.org/doc/html/rfc3261#section-7.1
     """
 
-    method: str
-    uri: str
+    method: SIPMethod | str
+    uri: SipUri | str
 
     def _first_line(self) -> str:
         return f"{self.method} {self.uri} {self.version}"
@@ -107,8 +111,8 @@ class Response(Message):
     [RFC 3261 §7.2]: https://datatracker.ietf.org/doc/html/rfc3261#section-7.2
     """
 
-    status_code: int
-    reason: str
+    status_code: SIPStatus | int
+    phrase: str
 
     def _first_line(self) -> str:
-        return f"{self.version} {self.status_code} {self.reason}"
+        return f"{self.version} {self.status_code} {self.phrase}"

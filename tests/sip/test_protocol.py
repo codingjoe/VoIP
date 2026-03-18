@@ -19,7 +19,7 @@ from voip.sip.protocol import (
     _format_host,
     _mask_caller,
 )
-from voip.sip.types import CallerID, DigestAlgorithm
+from voip.sip.types import CallerID, DigestAlgorithm, SIPStatus
 
 INVITE_WITH_PCMA = (
     b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
@@ -829,7 +829,7 @@ class TestCANCELHandler:
             (r for r, _ in protocol._sent_responses if r.status_code == 487), None
         )
         assert terminated is not None
-        assert terminated.reason == "Request Terminated"
+        assert terminated.phrase == "Request Terminated"
 
     def test_cancel__487_includes_to_tag(self):
         """Include the stored To tag in the 487 Request Terminated response."""
@@ -1108,7 +1108,7 @@ class TestSIPProtocol:
         transport = make_mock_transport()
         protocol.connection_made(transport)
         transport.write.reset_mock()  # clear any calls made during connection_made
-        response = Response(status_code=200, reason="OK")
+        response = Response(status_code=200, phrase="OK")
         protocol.send(response)
         protocol.transport.write.assert_called_once_with(bytes(response))
 
@@ -1154,7 +1154,7 @@ class TestSIPProtocol:
         assert len(protocol._sent) == 1
         response, _ = protocol._sent[0]
         assert response.status_code == 200
-        assert response.reason == "OK"
+        assert response.phrase == "OK"
 
     async def test_answer__sdp_contains_opus_audio_line(self):
         """Include an audio media line in the SDP body of the 200 OK."""
@@ -1557,17 +1557,17 @@ class TestSIPProtocol:
         response, _ = protocol._sent[0]
         assert isinstance(response, Response)
         assert response.status_code == 486
-        assert response.reason == "Busy Here"
+        assert response.phrase == "Busy Here"
 
     def test_reject__custom_status(self):
         """Send the specified status code and reason."""
         protocol = self._CapturingSIP()
         request = make_invite()
         protocol._pending_invites.add(request.headers["Call-ID"])
-        protocol.reject(request, status_code=603, reason="Decline")
+        protocol.reject(request, status_code=SIPStatus.DECLINE)
         response, _ = protocol._sent[0]
         assert response.status_code == 603
-        assert response.reason == "Decline"
+        assert response.phrase == "Decline"
 
     def test_reject__copies_dialog_headers(self):
         """Copy Via, To, From, Call-ID, and CSeq headers into the response."""
@@ -1810,7 +1810,7 @@ class TestRegistration:
         )
         p.connection_made(make_mock_transport())
         p.response_received(
-            Response(status_code=200, reason="OK", headers={"CSeq": "1 REGISTER"}),
+            Response(status_code=200, phrase="OK", headers={"CSeq": "1 REGISTER"}),
             ("192.0.2.2", 5060),
         )
         assert calls == [True]
@@ -1821,7 +1821,7 @@ class TestRegistration:
         p.connection_made(make_mock_transport())
         with pytest.raises(RegistrationError):
             p.response_received(
-                Response(status_code=200, reason="OK", headers={"CSeq": "1 INVITE"}),
+                Response(status_code=200, phrase="OK", headers={"CSeq": "1 INVITE"}),
                 ("192.0.2.2", 5060),
             )
 
@@ -1835,7 +1835,7 @@ class TestRegistration:
         p.response_received(
             Response(
                 status_code=401,
-                reason="Unauthorized",
+                phrase="Unauthorized",
                 headers={"WWW-Authenticate": challenge, "CSeq": "1 REGISTER"},
             ),
             ("192.0.2.2", 5061),
@@ -1858,7 +1858,7 @@ class TestRegistration:
         p.response_received(
             Response(
                 status_code=407,
-                reason="Proxy Auth Required",
+                phrase="Proxy Auth Required",
                 headers={"Proxy-Authenticate": challenge, "CSeq": "1 REGISTER"},
             ),
             ("192.0.2.2", 5061),
@@ -1878,7 +1878,7 @@ class TestRegistration:
         p.response_received(
             Response(
                 status_code=401,
-                reason="Unauthorized",
+                phrase="Unauthorized",
                 headers={"WWW-Authenticate": challenge, "CSeq": "1 REGISTER"},
             ),
             ("192.0.2.2", 5061),
@@ -1899,7 +1899,7 @@ class TestRegistration:
         p.response_received(
             Response(
                 status_code=401,
-                reason="Unauthorized",
+                phrase="Unauthorized",
                 headers={"WWW-Authenticate": challenge, "CSeq": "1 REGISTER"},
             ),
             ("192.0.2.2", 5061),
@@ -1988,7 +1988,7 @@ class TestRegistration:
             p.response_received(
                 Response(
                     status_code=403,
-                    reason="Forbidden",
+                    phrase="Forbidden",
                     headers={"CSeq": "1 REGISTER"},
                 ),
                 ("192.0.2.2", 5061),
@@ -2003,7 +2003,7 @@ class TestRegistration:
             p.response_received(
                 Response(
                     status_code=500,
-                    reason="Server Error",
+                    phrase="Server Error",
                     headers={"CSeq": "1 REGISTER"},
                 ),
                 ("192.0.2.2", 5061),
@@ -2061,7 +2061,7 @@ class TestRegistration:
         p.connection_made(make_mock_transport())
         with caplog.at_level(logging.INFO, logger="voip.sip"):
             p.response_received(
-                Response(status_code=200, reason="OK", headers={"CSeq": "1 REGISTER"}),
+                Response(status_code=200, phrase="OK", headers={"CSeq": "1 REGISTER"}),
                 ("192.0.2.2", 5060),
             )
         assert any("Registration successful" in r.message for r in caplog.records)
@@ -2079,7 +2079,7 @@ class TestRegistration:
                 p.response_received(
                     Response(
                         status_code=500,
-                        reason="Server Error",
+                        phrase="Server Error",
                         headers={"CSeq": "1 REGISTER"},
                     ),
                     ("192.0.2.2", 5060),
@@ -2190,7 +2190,7 @@ class TestDigestResponse:
         p.response_received(
             Response(
                 status_code=401,
-                reason="Unauthorized",
+                phrase="Unauthorized",
                 headers={"WWW-Authenticate": challenge, "CSeq": "1 REGISTER"},
             ),
             ("192.0.2.2", 5061),

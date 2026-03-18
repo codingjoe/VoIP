@@ -326,7 +326,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 self.send(
                     Response(
                         status_code=SIPStatus.OK,
-                        reason=SIPStatus.OK.phrase,
+                        phrase=SIPStatus.OK.phrase,
                         headers=self._with_to_tag(
                             {
                                 key: value
@@ -356,7 +356,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 self.send(
                     Response(
                         status_code=SIPStatus.OK,
-                        reason=SIPStatus.OK.phrase,
+                        phrase=SIPStatus.OK.phrase,
                         headers={
                             key: value
                             for key, value in request.headers.items()
@@ -369,7 +369,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
                     self.send(
                         Response(
                             status_code=SIPStatus.REQUEST_TERMINATED,
-                            reason=SIPStatus.REQUEST_TERMINATED.phrase,
+                            phrase=SIPStatus.REQUEST_TERMINATED.phrase,
                             headers=self._with_to_tag(
                                 {
                                     key: value
@@ -456,7 +456,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
             else:
                 asyncio.create_task(self.register(authorization=auth_value))
             return
-        raise RegistrationError(f"{response.status_code} {response.reason}")
+        raise RegistrationError(f"{response.status_code} {response.phrase}")
 
     def call_received(self, request: Request) -> None:
         """Handle an incoming call.
@@ -634,7 +634,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
         self.send(
             Response(
                 status_code=SIPStatus.OK,
-                reason=SIPStatus.OK.phrase,
+                phrase=SIPStatus.OK.phrase,
                 headers={
                     **self._with_to_tag(
                         {
@@ -736,7 +736,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
         self.send(
             Response(
                 status_code=SIPStatus.RINGING,
-                reason=SIPStatus.RINGING.phrase,
+                phrase=SIPStatus.RINGING.phrase,
                 headers=self._with_to_tag(
                     {
                         key: value
@@ -751,8 +751,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
     def reject(
         self,
         request: Request,
-        status_code: int = SIPStatus.BUSY_HERE,
-        reason: str = SIPStatus.BUSY_HERE.phrase,
+        status_code: SIPStatus = SIPStatus.BUSY_HERE,
     ) -> None:
         """Reject an incoming call.
 
@@ -776,7 +775,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
                     "ip": peer[0] if peer else None,
                     "call_id": call_id,
                     "status": status_code,
-                    "reason": reason,
+                    "reason": status_code.phrase,
                 }
             ),
             extra={
@@ -789,7 +788,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
         self.send(
             Response(
                 status_code=status_code,
-                reason=reason,
+                phrase=status_code.phrase,
                 headers=self._with_to_tag(
                     {
                         key: value
