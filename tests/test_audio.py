@@ -442,27 +442,23 @@ class TestSendRTPAudio:
         assert any("dropping audio" in r.message for r in caplog.records)
 
     async def test_send_rtp_audio__paces_packets_at_20ms_intervals(self):
-        """send_rtp_audio sleeps RTP_PACKET_DURATION_SECS between each packet."""
+        """Packets are scheduled via sched.scheduler at fixed rpt_packet_duration intervals."""
         call = make_audio_call(media=PCMU_MEDIA)
         remote_addr = ("10.0.0.2", 5006)
         call.rtp.calls = {remote_addr: call}
-
         audio = np.zeros(320, dtype=np.float32)
-        sleep_calls: list[float] = []
-        original_sleep = asyncio.sleep
-
-        async def capture_sleep(delay: float) -> None:
-            sleep_calls.append(delay)
-            await original_sleep(0)
 
         with (
-            patch("voip.audio.asyncio.sleep", side_effect=capture_sleep),
+            patch.object(call, "send_audio_scheduler") as mock_scheduler,
             patch.object(call, "send_packet"),
         ):
             await call.send_audio(audio)
 
-        assert len(sleep_calls) == 2
-        assert all(s <= call.rpt_packet_duration.total_seconds() for s in sleep_calls)
+        assert mock_scheduler.enterabs.call_count == 2
+        scheduled_times = [c.args[0] for c in mock_scheduler.enterabs.call_args_list]
+        assert scheduled_times[1] - scheduled_times[0] == pytest.approx(
+            call.rpt_packet_duration.total_seconds()
+        )
 
 
 def make_echo_call(**kwargs) -> EchoCall:

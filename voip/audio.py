@@ -16,6 +16,7 @@ import dataclasses
 import datetime
 import json
 import logging
+import sched
 import secrets
 import time
 from typing import ClassVar
@@ -74,12 +75,14 @@ class AudioCall(RTPCall):
     rtp_ssrc: int = dataclasses.field(
         init=False, repr=False, default_factory=generate_ssrc
     )
-    last_packet_time: float = dataclasses.field(
-        init=False, repr=False, default_factory=time.perf_counter
-    )
     send_audio_lock: asyncio.Lock = dataclasses.field(
         default_factory=asyncio.Lock,
         init=False,
+    )
+    send_audio_scheduler: sched.scheduler = dataclasses.field(
+        default_factory=lambda: sched.scheduler(time.perf_counter, time.sleep),
+        init=False,
+        repr=False,
     )
 
     def __post_init__(self) -> None:
@@ -216,16 +219,16 @@ class AudioCall(RTPCall):
             logger.warning("No remote RTP address for this call; dropping audio")
             return
         async with self.send_audio_lock:
-            for payload in self.codec.packetize(audio):
-                await asyncio.sleep(
-                    max(
-                        0.0,
-                        self.rpt_packet_duration.total_seconds()
-                        - (time.perf_counter() - self.last_packet_time),
-                    )
+            loop = asyncio.get_running_loop()
+            t0 = time.perf_counter()
+            for i, payload in enumerate(self.codec.packetize(audio)):
+                self.send_audio_scheduler.enterabs(
+                    t0 + i * self.rpt_packet_duration.total_seconds(),
+                    1,
+                    self.send_packet,
+                    (self.next_rtp_packet(payload), remote_addr),
                 )
-                self.send_packet(self.next_rtp_packet(payload), remote_addr)
-                self.last_packet_time = time.perf_counter()
+            await loop.run_in_executor(None, self.send_audio_scheduler.run)
 
     def audio_received(self, *, audio: np.ndarray, rms: float) -> None:
         """
