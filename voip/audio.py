@@ -276,7 +276,9 @@ class AudioCall(RTPCall):
 
 
 @pytest.mark.asyncio
-async def test_send_audio_with_empty_packet_iterator_does_not_schedule_packets() -> None:
+async def test_send_audio_with_empty_packet_iterator_does_not_schedule_packets() -> (
+    None
+):
     empty_audio = np.array([], dtype=np.float32)
 
     class EmptyPacketCodec:
