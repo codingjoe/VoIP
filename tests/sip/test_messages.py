@@ -112,7 +112,7 @@ class TestSIPMessage:
         """str(CallerID) equals the original header string, so serialization is unchanged."""
         data = (
             b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
-            b'From: "015114455910" <sip:015114455910@telefonica.de>;tag=abc\r\n'
+            b'From: "08001234567" <sip:08001234567@telefonica.de>;tag=abc\r\n'
             b"\r\n"
         )
         result = Message.parse(data)

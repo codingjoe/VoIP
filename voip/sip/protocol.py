@@ -78,7 +78,7 @@ def _mask_caller(header: str) -> str:
 
     Examples:
     ```
-    >>> _mask_caller('"015114455910" <sip:015114455910@example.com>;tag=abc')
+    >>> _mask_caller('"08001234567" <sip:08001234567@example.com>;tag=abc')
     '********5910'
     >>> _mask_caller('sip:alice@example.com')
     '*lice'

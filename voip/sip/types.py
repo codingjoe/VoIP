@@ -5,7 +5,15 @@ import enum
 import ipaddress
 import re
 
-__all__ = ["CallerID", "DigestAlgorithm", "DigestQoP", "SipUri", "Status"]
+__all__ = [
+    "CallerID",
+    "DigestAlgorithm",
+    "DigestQoP",
+    "SipUri",
+    "Status",
+    "SIPStatus",
+    "SIPMethod",
+]
 
 import typing
 import urllib.parse
@@ -34,27 +42,24 @@ class SipUri:
         SipUri(scheme='sips', user='+15551234567', host='carrier.com', port=5061, ...)
         >>> SipUri.parse("sip:alice@[::1]:5060")
         SipUri(scheme='sip', user='alice', host=IPv6Address('::1'), port=5060, ...)
+
+    Args:
+        scheme: URI scheme — `sip` or `sips"`.
+        host: Host as a bare string — no brackets for IPv6 addresses.
+        user: SIP user part (phone number or username).
+        port: Port number. 5061 for `sips:` and 5060 for `sip:`.
+        parameters: URI parameters as a mapping of name → value (`None` for flag parameters).
+        headers: SIP headers as a mapping of name → value.
+
     """
 
     scheme: str
-    """URI scheme — ``"sip"`` or ``"sips"``."""
     host: str | ipaddress.IPv6Address | ipaddress.IPv4Address
-    """Host as a bare string — no brackets for IPv6 addresses."""
     user: str | None = None
-    """SIP user part (phone number or username)."""
     password: str | None = None
-    """Optional password from the user-info component (``user:password@host``)."""
     port: int | None = None
-    """Port number.
-
-    When not present in the URI, defaults to ``5061`` for ``sips:`` and
-    ``5060`` for ``sip:``.  After construction this field is always an
-    ``int`` — it is never ``None``.
-    """
-    uri_parameters: dict[str, str | None] = dataclasses.field(default_factory=dict)
-    """URI parameters as a mapping of name → value (``None`` for flag parameters)."""
+    parameters: dict[str, str | None] = dataclasses.field(default_factory=dict)
     headers: dict[str, str] = dataclasses.field(default_factory=dict)
-    """SIP URI headers (``?Header=value``) as a mapping of name → value."""
 
     def __post_init__(self):
         self.port = (
@@ -74,25 +79,15 @@ class SipUri:
         r"((?P<user>[^@;:]+)(?P<password>:[^@;]*)?@)?"
         r"(?P<host>(\[[0-9a-fA-F:]+\]|[^;?:@\[\]]+))"
         r"(?P<port>:[0-9]+)?"
-        r"(?P<uri_parameters>;[^?]+)?"
+        r"(?P<parameters>;[^?]+)?"
         r"(?P<headers>\?[^?]+)?$",
         re.IGNORECASE,
     )
 
     @classmethod
     def parse(cls, value: str) -> SipUri:
-        """Parse a SIP or SIPS URI string into a `SipUri` instance.
-
-        Implements the full ``sip:user:password@host:port;uri-parameters?headers``
-        grammar from [RFC 3261 §19.1].  IPv6 host literals must be bracketed
-        per [RFC 2732], e.g. ``sip:alice@[::1]:5060``.  Unbracketed IPv6
-        addresses (e.g. ``sip:alice@::1``) are rejected.
-
-        [RFC 3261 §19.1]: https://datatracker.ietf.org/doc/html/rfc3261#section-19.1
-        [RFC 2732]: https://datatracker.ietf.org/doc/html/rfc2732
-
-        Args:
-            value: Raw SIP URI string.
+        """
+        Parse a SIP or SIPS URI string into a `SipUri` instance.
 
         Returns:
             Parsed `SipUri` instance.
@@ -121,10 +116,8 @@ class SipUri:
                 if match.group("password")
                 else None,
                 port=int(match.group("port")[1:]) if match.group("port") else None,
-                uri_parameters=dict(
-                    cls._parse_uri_parameters(match.group("uri_parameters"))
-                )
-                if match.group("uri_parameters")
+                parameters=dict(cls._parse_parameters(match.group("parameters")))
+                if match.group("parameters")
                 else {},
                 headers=dict(cls._parse_headers(match.group("headers")[1:]))
                 if match.group("headers")
@@ -133,10 +126,7 @@ class SipUri:
         raise ValueError(f"Invalid SIP URI: {value!r}")
 
     @classmethod
-    def _parse_uri_parameters(
-        cls, params: str
-    ) -> Generator[tuple[str, str | None], Any]:
-        """Parse SIP URI parameters from a query string format."""
+    def _parse_parameters(cls, params: str) -> Generator[tuple[str, str | None], Any]:
         for part in params[1:].split(";"):
             if "=" in part:
                 name, val = part.split("=", 1)
@@ -146,7 +136,6 @@ class SipUri:
 
     @classmethod
     def _parse_headers(cls, headers: str) -> Generator[tuple[str, str], Any]:
-        """Parse SIP URI headers from a query string format."""
         for part in headers.split("&"):
             if "=" in part:
                 name, val = part.split("=", 1)
@@ -155,7 +144,6 @@ class SipUri:
                 yield urllib.parse.unquote(part), ""
 
     def __str__(self) -> str:
-        """Return the SIP URI as a string."""
         parts = [f"{self.scheme}:"]
         if self.user:
             parts.append(urllib.parse.quote(self.user))
@@ -168,7 +156,7 @@ class SipUri:
             else str(self.host)
         )
         parts.append(f":{self.port}")
-        for name, val in self.uri_parameters.items():
+        for name, val in self.parameters.items():
             if val is not None:
                 parts.append(f";{urllib.parse.quote(name)}={urllib.parse.quote(val)}")
             else:
@@ -193,9 +181,9 @@ class CallerID(str):
     carrier domain — useful for log messages.
 
     Examples:
-        >>> str(CallerID('"015114455910" <sip:015114455910@telefonica.de>;tag=abc'))
-        '"015114455910" <sip:015114455910@telefonica.de>;tag=abc'
-        >>> repr(CallerID('"015114455910" <sip:015114455910@telefonica.de>;tag=abc'))
+        >>> str(CallerID('"08001234567" <sip:08001234567@telefonica.de>;tag=abc'))
+        '"08001234567" <sip:08001234567@telefonica.de>;tag=abc'
+        >>> repr(CallerID('"08001234567" <sip:08001234567@telefonica.de>;tag=abc'))
         '****5910@telefonica.de'
         >>> repr(CallerID('sip:alice@example.com'))
         '*lice@example.com'
@@ -228,7 +216,6 @@ class CallerID(str):
         return m.group(1) if m else None
 
     def __repr__(self) -> str:
-        """Anonymized label: last 4 chars of user + carrier domain."""
         user = self.display_name or self.user or ""
         host = self.host or ""
         masked = ("*" * max(0, len(user) - 4)) + user[-4:] if user else "****"
@@ -297,6 +284,296 @@ Status = enum.IntEnum(
 )
 
 
+class SIPStatus(enum.IntEnum):
+    """
+    SIP Status Codes based on [RFC 3261].
+
+    [RFC 3261]: https://datatracker.ietf.org/doc/html/rfc3261#section-21
+    """
+
+    def __new__(cls, value, phrase, description=""):
+        obj = int.__new__(cls, value)
+        obj._value_ = value
+        obj.phrase = phrase
+        obj.description = description
+        return obj
+
+    TRYING = (
+        100,
+        "Trying",
+        "The request is being processed. No final response is available yet.",
+    )
+    RINGING = 180, "Ringing", "The called party is being alerted of the call."
+    CALL_IS_BEING_FORWARDED = (
+        181,
+        "Call Is Being Forwarded",
+        "The called party is being alerted of the call, but the call is not yet established.",
+    )
+    QUEUED = (
+        182,
+        "Queued",
+        "The called party is being alerted of the call, but the call is not yet established.",
+    )
+    SESSION_PROGRESS = (
+        183,
+        "Session Progress",
+        "The called party is being alerted of the call, but the call is not yet established.",
+    )
+
+    OK = 200, "OK", "The request has succeeded."
+
+    MULTIPLE_CHOICES = (
+        300,
+        "Multiple Choices",
+        "The requested resource has multiple representations, each with its own specific location.",
+    )
+    MOVED_PERMANENTLY = (
+        301,
+        "Moved Permanently",
+        "The requested resource has been assigned a new permanent URI and any future references to this resource ought to use one of the returned URIs.",
+    )
+    MOVED_TEMPORARILY = (
+        302,
+        "Moved Temporarily",
+        "The requested resource is temporarily unavailable and the server is asking the client to try again later.",
+    )
+    USE_PROXY = (
+        305,
+        "Use Proxy",
+        "The requested resource is available only through a proxy, the address for which is provided in the response.",
+    )
+    ALTERNATIVE_SERVICE = (
+        380,
+        "Alternative Service",
+        "The server has fulfilled a request for the service indicated by the URI.",
+    )
+
+    BAD_REQUEST = (
+        400,
+        "Bad Request",
+        "The request has bad syntax or cannot be fulfilled due to bad syntax.",
+    )
+    UNAUTHORIZED = 401, "Unauthorized", "The request requires user authentication."
+    PAYMENT_REQUIRED = 402, "Payment Required", "Further action is required."
+    FORBIDDEN = (
+        403,
+        "Forbidden",
+        "The server understood the request but refuses to fulfill it.",
+    )
+    NOT_FOUND = 404, "Not Found", "The requested resource could not be found."
+    NOT_ACCEPTABLE = (
+        406,
+        "Not Acceptable",
+        "The server cannot produce a response matching the Accept headers.",
+    )
+    PROXY_AUTHENTICATION_REQUIRED = (
+        407,
+        "Proxy Authentication Required",
+        "The client must authenticate itself with the proxy.",
+    )
+    REQUEST_TIMEOUT = (
+        408,
+        "Request Timeout",
+        "The server timed out waiting for the request.",
+    )
+    GONE = (
+        410,
+        "Gone",
+        "The requested resource is no longer available at the server and no longer exists.",
+    )
+    REQUEST_ENTITY_TOO_LARGE = (
+        413,
+        "Request Entity Too Large",
+        "The server will not accept the request, because the entity of the request is too large.",
+    )
+    REQUEST_URI_TOO_LONG = (
+        414,
+        "Request-URI Too Long",
+        "The server will not accept the request, because the Request-URI is too long.",
+    )
+    UNSUPPORTED_MEDIA_TYPE = (
+        415,
+        "Unsupported Media Type",
+        "The server will not accept the request, because the media type of the request is unsupported.",
+    )
+    UNSUPPORTED_URI_SCHEME = (
+        416,
+        "Unsupported URI Scheme",
+        "The server will not accept the request, because the URI scheme of the request is unsupported.",
+    )
+    BAD_EXTENSION = (
+        420,
+        "Bad Extension",
+        "This status code indicates that the server does not recognize the value of any of the parameters that it needs to understand in the request.",
+    )
+    EXTENSION_REQUIRED = (
+        421,
+        "Extension Required",
+        "This status code indicates that the server requires the client to identify itself (usually, using the Contact header field) before it will proceed with the request.",
+    )
+    INTERVAL_TOO_BRIEF = (
+        423,
+        "Interval Too Brief",
+        "This status code indicates that the server is unwilling to process the request because either an individual header field, or all the header fields collectively, are too large.",
+    )
+    TEMPORARILY_UNAVAILABLE = (
+        480,
+        "Temporarily Unavailable",
+        "This status code indicates that the server is currently unable to handle the request due to a temporary overloading or maintenance of the server.",
+    )
+    CALL_TRANSACTION_DOES_NOT_EXIST = (
+        481,
+        "Call/Transaction Does Not Exist",
+        "This status code indicates that the server has received a final response for the transaction which it is still attempting to complete.",
+    )
+    LOOP_DETECTED = (
+        482,
+        "Loop Detected",
+        "This status code indicates that the server has detected an infinite loop while processing the request.",
+    )
+    TOO_MANY_HOPS = (
+        483,
+        "Too Many Hops",
+        "This status code indicates that the server has exceeded the maximum number of hops allowed in the request URI.",
+    )
+    ADDRESS_INCOMPLETE = (
+        484,
+        "Address Incomplete",
+        "This status code indicates that the server has received a final response for the transaction which it is still attempting to complete, but has an invalid value for one or more of the header fields included in the request message.",
+    )
+    AMBIGUOUS = (
+        485,
+        "Ambiguous",
+        "This status code indicates that the server cannot decide on a response to the request because multiple responses are possible.",
+    )
+    BUSY_HERE = (
+        486,
+        "Busy Here",
+        "This status code indicates that the server is busy here.",
+    )
+    REQUEST_TERMINATED = (
+        487,
+        "Request Terminated",
+        "This status code indicates that the server has received a final response for the transaction which it is still attempting to complete, but has received a termination request for that transaction from the client.",
+    )
+    NOT_ACCEPTABLE_HERE = (
+        488,
+        "Not Acceptable Here",
+        "This status code indicates that the server is not able to produce a response which is acceptable to the client, according to the proactive negotiation header fields received in the request, and the server is unwilling to supply a default reason phrase.",
+    )
+    REQUEST_PENDING = (
+        491,
+        "Request Pending",
+        "This status code indicates that the server has received a final response for the transaction which it is still attempting to complete, but has not yet delivered that response to the client.",
+    )
+    UNDECIPHERABLE = (
+        493,
+        "Undecipherable",
+        "This status code indicates that the server was unable to decrypt a message after performing the necessary decryption(s).",
+    )
+
+    SERVER_INTERNAL_ERROR = (
+        500,
+        "Server Internal Error",
+        "The server encountered an unexpected condition which prevented it from fulfilling the request.",
+    )
+    NOT_IMPLEMENTED = (
+        501,
+        "Not Implemented",
+        "The server does not support the functionality required to fulfill the request.",
+    )
+    BAD_GATEWAY = (
+        502,
+        "Bad Gateway",
+        "The server, while acting as a gateway or proxy, received an invalid response from the upstream server it accessed in attempting to fulfill the request.",
+    )
+    SERVICE_UNAVAILABLE = (
+        503,
+        "Service Unavailable",
+        "The server is currently unable to handle the request due to a temporary overloading or maintenance of the server.",
+    )
+    SERVER_TIME_OUT = (
+        504,
+        "Server Time-out",
+        "The server, while acting as a gateway or proxy, did not receive a timely response from the upstream server specified by the URI (e.g., HTTP, FTP, LDAP) or some other auxiliary server (e.g., DNS) it needed to access in attempting to complete the request.",
+    )
+    VERSION_NOT_SUPPORTED = (
+        505,
+        "Version Not Supported",
+        "The server does not support, or refuses to support, the protocol version that was used in the request message.",
+    )
+    MESSAGE_TOO_LARGE = (
+        513,
+        "Message Too Large",
+        "The server is unwilling to process the request because its header fields are too large.",
+    )
+
+    BUSY_EVERYWHERE = (
+        600,
+        "Busy Everywhere",
+        "The server is not able to process the request because it is busy.  For example, this error might be given if a server is overloaded with requests and is unable to process one of the requests.",
+    )
+    DECLINE = 603, "Decline", "The call has been declined."
+    DOES_NOT_EXIST_ANYWHERE = (
+        604,
+        "Does Not Exist Anywhere",
+        "The server has received a final response for the transaction which it is still attempting to complete, but has received a termination request for that transaction from a server which it does not control.",
+    )
+    NOT_ACCEPTABLE_ANYWHERE = (
+        606,
+        "Not Acceptable",
+        "The server is not able to produce a response which is acceptable to the client, according to the proactive negotiation header fields received in the request, and the server is unwilling to supply a default reason phrase.",
+    )
+
+
+class SIPMethod:
+    """
+    SIP methods and descriptions as defined in [RFC 3261].
+
+    Extended in [RFC 3262], [RFC 3265], [RFC 3515], [RFC 3428], and [RFC 3311].
+
+    [RFC 3261]: https://tools.ietf.org/html/rfc3261
+    [RFC 3262]: https://tools.ietf.org/html/rfc3262
+    [RFC 3265]: https://tools.ietf.org/html/rfc3265
+    [RFC 3515]: https://tools.ietf.org/html/rfc3515
+    [RFC 3428]: https://tools.ietf.org/html/rfc3428
+    [RFC 3311]: https://tools.ietf.org/html/rfc3311
+    """
+
+    def __new__(cls, value, description):
+        obj = str.__new__(cls, value)
+        obj._value_ = value
+        obj.description = description
+        return obj
+
+    INVITE = "INVITE", "The client is requesting to initiate a call."
+    ACK = "ACK", "The client is acknowledging the receipt of a previous request."
+    BYE = "BYE", "The client is requesting to end the call."
+    CANCEL = "CANCEL", "The client is requesting to cancel a previous request."
+    REGISTER = (
+        "REGISTER",
+        "The client requests that the server register itself with the server's registration agent.",
+    )
+    OPTIONS = (
+        "OPTIONS",
+        "The client requests information about the server's capabilities or configuration.",
+    )
+    NOTIFY = "NOTIFY", "The client is requesting to send a notification to the server."
+    SUBSCRIBE = "SUBSCRIBE", "The client is requesting to subscribe to a resource."
+    PUBLISH = "PUBLISH", "The client is requesting to publish a resource."
+    REFER = (
+        "REFER",
+        "The client is requesting that the server refer the client to another resource.",
+    )
+    PRACK = (
+        "PRACK",
+        "The client is requesting to confirm the receipt of a previous request.",
+    )
+    INFO = "INFO", "The client is requesting information about a session."
+    MESSAGE = "MESSAGE", "The client is requesting to send a message."
+    UPDATE = "UPDATE", "The client is requesting to update a resource."
+
+
 class DigestAlgorithm(enum.StrEnum):
     """Hash algorithms for SIP Digest Authentication (RFC 3261, RFC 8760).
 
@@ -316,3 +593,8 @@ class DigestQoP(enum.StrEnum):
 
     AUTH = "auth"
     AUTH_INT = "auth-int"
+
+
+import http
+
+http.HTTPStatus

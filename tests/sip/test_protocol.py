@@ -144,7 +144,7 @@ class ConcreteProtocol(SessionInitiationProtocol):
 class TestMaskCaller:
     def test_full_from_header_with_display_name(self):
         """Mask all but the last 4 chars of a 12-digit display name (8 asterisks)."""
-        header = '"015114455910" <sip:015114455910@telefonica.de>;tag=abc123'
+        header = '"08001234567" <sip:08001234567@telefonica.de>;tag=abc123'
         assert _mask_caller(header) == "********5910"
 
     def test_bare_sip_uri(self):
@@ -157,7 +157,7 @@ class TestMaskCaller:
 
     def test_strips_tag_parameter(self):
         """The tag= and any subsequent parameters are stripped before masking."""
-        header = '"015114455910" <sip:015114455910@example.com>;tag=xyz;other=1'
+        header = '"08001234567" <sip:08001234567@example.com>;tag=xyz;other=1'
         result = _mask_caller(header)
         assert "tag" not in result
         assert result.endswith("5910")
@@ -170,12 +170,12 @@ class TestMaskCaller:
 class TestCallerID:
     def test_str__returns_raw_header(self):
         """str() returns the original SIP header value unchanged."""
-        raw = '"015114455910" <sip:015114455910@telefonica.de>;tag=abc'
+        raw = '"08001234567" <sip:08001234567@telefonica.de>;tag=abc'
         assert str(CallerID(raw)) == raw
 
     def test_repr__masks_display_name_and_includes_domain(self):
         """repr() shows last 4 chars of display name and the carrier domain."""
-        caller = CallerID('"015114455910" <sip:015114455910@telefonica.de>;tag=abc')
+        caller = CallerID('"08001234567" <sip:08001234567@telefonica.de>;tag=abc')
         assert repr(caller) == "********5910@telefonica.de"
 
     def test_repr__bare_sip_uri(self):
@@ -188,8 +188,8 @@ class TestCallerID:
 
     def test_user__phone_number(self):
         """User property extracts the SIP user part from a phone number URI."""
-        caller = CallerID('"015114455910" <sip:015114455910@telefonica.de>')
-        assert caller.user == "015114455910"
+        caller = CallerID('"08001234567" <sip:08001234567@telefonica.de>')
+        assert caller.user == "08001234567"
 
     def test_user__bare_uri(self):
         """User property extracts the username from a bare SIP URI."""
