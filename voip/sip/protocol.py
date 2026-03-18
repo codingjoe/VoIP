@@ -32,7 +32,7 @@ from voip.sdp.types import (
 from voip.srtp import SRTPSession
 
 from .messages import Message, Request, Response
-from .types import CallerID, DigestAlgorithm, DigestQoP, Status
+from .types import CallerID, DigestAlgorithm, DigestQoP, SIPStatus
 
 logger = logging.getLogger("voip.sip")
 
@@ -79,7 +79,7 @@ def _mask_caller(header: str) -> str:
     Examples:
     ```
     >>> _mask_caller('"08001234567" <sip:08001234567@example.com>;tag=abc')
-    '********5910'
+    '*******4567'
     >>> _mask_caller('sip:alice@example.com')
     '*lice'
     ```
@@ -325,8 +325,8 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 )
                 self.send(
                     Response(
-                        status_code=Status["OK"],
-                        reason=Status["OK"].name,
+                        status_code=SIPStatus.OK,
+                        reason=SIPStatus.OK.phrase,
                         headers=self._with_to_tag(
                             {
                                 key: value
@@ -355,8 +355,8 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 )
                 self.send(
                     Response(
-                        status_code=Status["OK"],
-                        reason=Status["OK"].name,
+                        status_code=SIPStatus.OK,
+                        reason=SIPStatus.OK.phrase,
                         headers={
                             key: value
                             for key, value in request.headers.items()
@@ -368,8 +368,8 @@ class SessionInitiationProtocol(asyncio.Protocol):
                     self._pending_invites.discard(call_id)
                     self.send(
                         Response(
-                            status_code=Status["Request Terminated"],
-                            reason=Status["Request Terminated"].name,
+                            status_code=SIPStatus.REQUEST_TERMINATED,
+                            reason=SIPStatus.REQUEST_TERMINATED.phrase,
                             headers=self._with_to_tag(
                                 {
                                     key: value
@@ -396,15 +396,15 @@ class SessionInitiationProtocol(asyncio.Protocol):
 
         Only processes responses when registration parameters are configured.
         """
-        if response.status_code == Status["OK"] and response.headers.get(
+        if response.status_code == SIPStatus.OK and response.headers.get(
             "CSeq", ""
         ).split()[-1:] == ["REGISTER"]:
             logger.info("Registration successful")
             self.registered()
             return
         if response.status_code in (
-            Status["Unauthorized"],
-            Status["Proxy Authentication Required"],
+            SIPStatus.UNAUTHORIZED,
+            SIPStatus.PROXY_AUTHENTICATION_REQUIRED,
         ):
             if not self.username or not self.password:
                 logger.error(
@@ -415,7 +415,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 "Auth challenge received (%s), retrying with credentials",
                 response.status_code,
             )
-            is_proxy = response.status_code == Status["Proxy Authentication Required"]
+            is_proxy = response.status_code == SIPStatus.PROXY_AUTHENTICATION_REQUIRED
             challenge_key = "Proxy-Authenticate" if is_proxy else "WWW-Authenticate"
             params = self.parse_auth_challenge(response.headers.get(challenge_key, ""))
             realm = params.get("realm", "")
@@ -633,8 +633,8 @@ class SessionInitiationProtocol(asyncio.Protocol):
             )
         self.send(
             Response(
-                status_code=Status["OK"],
-                reason=Status["OK"].name,
+                status_code=SIPStatus.OK,
+                reason=SIPStatus.OK.phrase,
                 headers={
                     **self._with_to_tag(
                         {
@@ -735,8 +735,8 @@ class SessionInitiationProtocol(asyncio.Protocol):
         )
         self.send(
             Response(
-                status_code=Status["Ringing"],
-                reason=Status["Ringing"].name,
+                status_code=SIPStatus.RINGING,
+                reason=SIPStatus.RINGING.phrase,
                 headers=self._with_to_tag(
                     {
                         key: value
@@ -751,8 +751,8 @@ class SessionInitiationProtocol(asyncio.Protocol):
     def reject(
         self,
         request: Request,
-        status_code: int = Status["Busy Here"],
-        reason: str = Status["Busy Here"].name,
+        status_code: int = SIPStatus.BUSY_HERE,
+        reason: str = SIPStatus.BUSY_HERE.phrase,
     ) -> None:
         """Reject an incoming call.
 

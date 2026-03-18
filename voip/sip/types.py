@@ -10,7 +10,6 @@ __all__ = [
     "DigestAlgorithm",
     "DigestQoP",
     "SipUri",
-    "Status",
     "SIPStatus",
     "SIPMethod",
 ]
@@ -184,7 +183,7 @@ class CallerID(str):
         >>> str(CallerID('"08001234567" <sip:08001234567@telefonica.de>;tag=abc'))
         '"08001234567" <sip:08001234567@telefonica.de>;tag=abc'
         >>> repr(CallerID('"08001234567" <sip:08001234567@telefonica.de>;tag=abc'))
-        '****5910@telefonica.de'
+        '***4567@telefonica.de'
         >>> repr(CallerID('sip:alice@example.com'))
         '*lice@example.com'
     """
@@ -220,68 +219,6 @@ class CallerID(str):
         host = self.host or ""
         masked = ("*" * max(0, len(user) - 4)) + user[-4:] if user else "****"
         return f"{masked}@{host}" if host else masked
-
-
-Status = enum.IntEnum(
-    value="Status",
-    names={
-        # 1xx Provisional
-        "Trying": 100,
-        "Ringing": 180,
-        "Call Is Being Forwarded": 181,
-        "Queued": 182,
-        "Session Progress": 183,
-        # 2xx Success
-        "OK": 200,
-        # 3xx Redirection
-        "Multiple Choices": 300,
-        "Moved Permanently": 301,
-        "Moved Temporarily": 302,
-        "Use Proxy": 305,
-        "Alternative Service": 380,
-        # 4xx Client Failure
-        "Bad Request": 400,
-        "Unauthorized": 401,
-        "Payment Required": 402,
-        "Forbidden": 403,
-        "Not Found": 404,
-        "Method Not Allowed": 405,
-        "Not Acceptable": 406,
-        "Proxy Authentication Required": 407,
-        "Request Timeout": 408,
-        "Gone": 410,
-        "Request Entity Too Large": 413,
-        "Request-URI Too Long": 414,
-        "Unsupported Media Type": 415,
-        "Unsupported URI Scheme": 416,
-        "Bad Extension": 420,
-        "Extension Required": 421,
-        "Interval Too Brief": 423,
-        "Temporarily Unavailable": 480,
-        "Call/Transaction Does Not Exist": 481,
-        "Loop Detected": 482,
-        "Too Many Hops": 483,
-        "Address Incomplete": 484,
-        "Ambiguous": 485,
-        "Busy Here": 486,
-        "Request Terminated": 487,
-        "Not Acceptable Here": 488,
-        "Request Pending": 491,
-        "Undecipherable": 493,
-        # 5xx Server Failure
-        "Server Internal Error": 500,
-        "Not Implemented": 501,
-        "Bad Gateway": 502,
-        "Service Unavailable": 503,
-        "Server Time-out": 504,
-        "Version Not Supported": 505,
-        "Message Too Large": 513,
-        # 6xx Global Failure
-        "Busy Everywhere": 600,
-        "Decline": 603,
-        "Does Not Exist Anywhere": 604,
-    },
-)
 
 
 class SIPStatus(enum.IntEnum):
@@ -361,6 +298,11 @@ class SIPStatus(enum.IntEnum):
         "The server understood the request but refuses to fulfill it.",
     )
     NOT_FOUND = 404, "Not Found", "The requested resource could not be found."
+    METHOD_NOT_ALLOWED = (
+        405,
+        "Method Not Allowed",
+        "The method specified in the Request-URI is not allowed for the resource identified by the request URI.",
+    )
     NOT_ACCEPTABLE = (
         406,
         "Not Acceptable",
@@ -526,9 +468,8 @@ class SIPStatus(enum.IntEnum):
     )
 
 
-class SIPMethod:
-    """
-    SIP methods and descriptions as defined in [RFC 3261].
+class SIPMethod(enum.StrEnum):
+    """SIP methods and descriptions as defined in [RFC 3261].
 
     Extended in [RFC 3262], [RFC 3265], [RFC 3515], [RFC 3428], and [RFC 3311].
 
@@ -540,7 +481,7 @@ class SIPMethod:
     [RFC 3311]: https://tools.ietf.org/html/rfc3311
     """
 
-    def __new__(cls, value, description):
+    def __new__(cls, value: str, description: str = "") -> SIPMethod:
         obj = str.__new__(cls, value)
         obj._value_ = value
         obj.description = description
@@ -593,8 +534,3 @@ class DigestQoP(enum.StrEnum):
 
     AUTH = "auth"
     AUTH_INT = "auth-int"
-
-
-import http
-
-http.HTTPStatus

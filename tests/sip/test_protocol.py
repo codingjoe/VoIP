@@ -145,7 +145,7 @@ class TestMaskCaller:
     def test_full_from_header_with_display_name(self):
         """Mask all but the last 4 chars of a 12-digit display name (8 asterisks)."""
         header = '"08001234567" <sip:08001234567@telefonica.de>;tag=abc123'
-        assert _mask_caller(header) == "********5910"
+        assert _mask_caller(header) == "*******4567"
 
     def test_bare_sip_uri(self):
         """Extract user part from a bare SIP URI and mask all but the last 4 chars."""
@@ -160,7 +160,7 @@ class TestMaskCaller:
         header = '"08001234567" <sip:08001234567@example.com>;tag=xyz;other=1'
         result = _mask_caller(header)
         assert "tag" not in result
-        assert result.endswith("5910")
+        assert result.endswith("4567")
 
     def test_angle_bracket_uri_without_display_name(self):
         """Parse <sip:user@host> style without a display name."""
@@ -176,7 +176,7 @@ class TestCallerID:
     def test_repr__masks_display_name_and_includes_domain(self):
         """repr() shows last 4 chars of display name and the carrier domain."""
         caller = CallerID('"08001234567" <sip:08001234567@telefonica.de>;tag=abc')
-        assert repr(caller) == "********5910@telefonica.de"
+        assert repr(caller) == "*******4567@telefonica.de"
 
     def test_repr__bare_sip_uri(self):
         """repr() masks the user part of a bare SIP URI and includes the domain."""
