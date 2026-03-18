@@ -172,10 +172,10 @@ class AgentCall(TranscribeCall):
             messages=self._messages,
         )
         # clean non-ascii characters from the response for TTS processing
-        reply = self.emoji_pattern.sub("", response.message.content or "")
-        self._messages.append({"role": "assistant", "content": reply})
-        logger.debug("Agent reply: %r", reply)
-        await self.send_speech(reply)
+        if reply := self.emoji_pattern.sub("", response.message.content or ""):
+            self._messages.append({"role": "assistant", "content": reply})
+            logger.debug("Agent reply: %r", reply)
+            await self.send_speech(reply)
 
     async def send_speech(self, text: str) -> None:
         audio = self.tts_model.generate_audio(
