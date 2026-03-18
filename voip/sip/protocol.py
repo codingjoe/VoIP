@@ -10,6 +10,7 @@ import asyncio
 import collections
 import dataclasses
 import hashlib
+import ipaddress
 import json
 import logging
 import re
@@ -31,11 +32,34 @@ from voip.sdp.types import (
 from voip.srtp import SRTPSession
 
 from .messages import Message, Request, Response
-from .types import CallerID, DigestAlgorithm, DigestQoP, Status
+from .types import CallerID, DigestAlgorithm, DigestQoP, SIPStatus
 
 logger = logging.getLogger("voip.sip")
 
 __all__ = ["RegistrationError", "SIP", "SessionInitiationProtocol"]
+
+
+def _format_host(host: str | ipaddress.IPv4Address | ipaddress.IPv6Address) -> str:
+    """Return *host* wrapped in brackets when it is an IPv6 address.
+
+    RFC 3261 §19.1.1 and RFC 2732 require IPv6 addresses in SIP URIs and
+    Via/Contact headers to be enclosed in square brackets.
+
+    Args:
+        host: Host as a typed IP address object or bare host string.
+
+    Returns:
+        ``[host]`` for IPv6 addresses, *host* unchanged otherwise.
+    """
+    if isinstance(host, ipaddress.IPv6Address):
+        return f"[{host}]"
+    if isinstance(host, ipaddress.IPv4Address):
+        return str(host)
+    try:
+        addr = ipaddress.ip_address(host)
+        return f"[{addr}]" if isinstance(addr, ipaddress.IPv6Address) else host
+    except ValueError:
+        return host
 
 
 class RegistrationError(Exception):
@@ -54,8 +78,8 @@ def _mask_caller(header: str) -> str:
 
     Examples:
     ```
-    >>> _mask_caller('"015114455910" <sip:015114455910@example.com>;tag=abc')
-    '********5910'
+    >>> _mask_caller('"08001234567" <sip:08001234567@example.com>;tag=abc')
+    '*******4567'
     >>> _mask_caller('sip:alice@example.com')
     '*lice'
     ```
@@ -148,7 +172,9 @@ class SessionInitiationProtocol(asyncio.Protocol):
     call_id: str = dataclasses.field(init=False)
     cseq: int = dataclasses.field(init=False, default=0)
     #: Local TCP socket address (host, port) — set when connection is established.
-    local_address: tuple[str, int] = dataclasses.field(init=False)
+    local_address: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int] = (
+        dataclasses.field(init=False)
+    )
     transport: asyncio.Transport | None = dataclasses.field(init=False, default=None)
     #: True when the underlying transport is TLS-wrapped; False for plain TCP.
     _is_tls: bool = dataclasses.field(init=False, default=False)
@@ -159,7 +185,11 @@ class SessionInitiationProtocol(asyncio.Protocol):
     def connection_made(self, transport: asyncio.Transport) -> None:  # type: ignore[override]
         """Store the TLS/TCP transport and start RTP mux + carrier registration."""
         self.transport = transport
-        self.local_address = transport.get_extra_info("sockname")
+        # IPv6 sockets return a 4-tuple (host, port, flowinfo, scope_id);
+        # we only need the first two elements.
+        sockname = transport.get_extra_info("sockname")
+        host, port = sockname[0], sockname[1]
+        self.local_address = (ipaddress.ip_address(host), port)
         self._is_tls = transport.get_extra_info("ssl_object") is not None
         try:
             self._initialize_task = asyncio.get_running_loop().create_task(
@@ -170,11 +200,16 @@ class SessionInitiationProtocol(asyncio.Protocol):
 
     async def _initialize(self) -> None:
         loop = asyncio.get_running_loop()
+        rtp_bind = (
+            "::"
+            if isinstance(self.local_address[0], ipaddress.IPv6Address)
+            else "0.0.0.0"  # noqa: S104
+        )
         self._rtp_transport, self._rtp_protocol = await loop.create_datagram_endpoint(
             lambda: RealtimeTransportProtocol(
                 stun_server_address=self.rtp_stun_server_address
             ),
-            local_addr=("0.0.0.0", 0),  # noqa: S104
+            local_addr=(rtp_bind, 0),
         )
         await self.register()
 
@@ -290,8 +325,8 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 )
                 self.send(
                     Response(
-                        status_code=Status["OK"],
-                        reason=Status["OK"].name,
+                        status_code=SIPStatus.OK,
+                        phrase=SIPStatus.OK.phrase,
                         headers=self._with_to_tag(
                             {
                                 key: value
@@ -320,8 +355,8 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 )
                 self.send(
                     Response(
-                        status_code=Status["OK"],
-                        reason=Status["OK"].name,
+                        status_code=SIPStatus.OK,
+                        phrase=SIPStatus.OK.phrase,
                         headers={
                             key: value
                             for key, value in request.headers.items()
@@ -333,8 +368,8 @@ class SessionInitiationProtocol(asyncio.Protocol):
                     self._pending_invites.discard(call_id)
                     self.send(
                         Response(
-                            status_code=Status["Request Terminated"],
-                            reason=Status["Request Terminated"].name,
+                            status_code=SIPStatus.REQUEST_TERMINATED,
+                            phrase=SIPStatus.REQUEST_TERMINATED.phrase,
                             headers=self._with_to_tag(
                                 {
                                     key: value
@@ -361,15 +396,15 @@ class SessionInitiationProtocol(asyncio.Protocol):
 
         Only processes responses when registration parameters are configured.
         """
-        if response.status_code == Status["OK"] and response.headers.get(
+        if response.status_code == SIPStatus.OK and response.headers.get(
             "CSeq", ""
         ).split()[-1:] == ["REGISTER"]:
             logger.info("Registration successful")
             self.registered()
             return
         if response.status_code in (
-            Status["Unauthorized"],
-            Status["Proxy Authentication Required"],
+            SIPStatus.UNAUTHORIZED,
+            SIPStatus.PROXY_AUTHENTICATION_REQUIRED,
         ):
             if not self.username or not self.password:
                 logger.error(
@@ -380,7 +415,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 "Auth challenge received (%s), retrying with credentials",
                 response.status_code,
             )
-            is_proxy = response.status_code == Status["Proxy Authentication Required"]
+            is_proxy = response.status_code == SIPStatus.PROXY_AUTHENTICATION_REQUIRED
             challenge_key = "Proxy-Authenticate" if is_proxy else "WWW-Authenticate"
             params = self.parse_auth_challenge(response.headers.get(challenge_key, ""))
             realm = params.get("realm", "")
@@ -421,7 +456,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
             else:
                 asyncio.create_task(self.register(authorization=auth_value))
             return
-        raise RegistrationError(f"{response.status_code} {response.reason}")
+        raise RegistrationError(f"{response.status_code} {response.phrase}")
 
     def call_received(self, request: Request) -> None:
         """Handle an incoming call.
@@ -598,8 +633,8 @@ class SessionInitiationProtocol(asyncio.Protocol):
             )
         self.send(
             Response(
-                status_code=Status["OK"],
-                reason=Status["OK"].name,
+                status_code=SIPStatus.OK,
+                phrase=SIPStatus.OK.phrase,
                 headers={
                     **self._with_to_tag(
                         {
@@ -621,14 +656,18 @@ class SessionInitiationProtocol(asyncio.Protocol):
                         sess_id=sess_id,
                         sess_version=sess_id,
                         nettype="IN",
-                        addrtype="IP4",
-                        unicast_address=rtp_public[0],
+                        addrtype="IP6"
+                        if isinstance(rtp_public[0], ipaddress.IPv6Address)
+                        else "IP4",
+                        unicast_address=str(rtp_public[0]),
                     ),
                     timings=[Timing(start_time=0, stop_time=0)],
                     connection=ConnectionData(
                         nettype="IN",
-                        addrtype="IP4",
-                        connection_address=rtp_public[0],
+                        addrtype="IP6"
+                        if isinstance(rtp_public[0], ipaddress.IPv6Address)
+                        else "IP4",
+                        connection_address=str(rtp_public[0]),
                     ),
                     media=[
                         MediaDescription(
@@ -667,7 +706,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 ``<scheme:host:port>``.
         """
         aor_scheme = self.aor.partition(":")[0]  # "sip" or "sips"
-        host_port = f"{self.local_address[0]}:{self.local_address[1]}"
+        host_port = f"{_format_host(self.local_address[0])}:{self.local_address[1]}"
         addr = f"{user}@{host_port}" if user else host_port
         if aor_scheme == "sips":
             return f"<sips:{addr}>"
@@ -696,8 +735,8 @@ class SessionInitiationProtocol(asyncio.Protocol):
         )
         self.send(
             Response(
-                status_code=Status["Ringing"],
-                reason=Status["Ringing"].name,
+                status_code=SIPStatus.RINGING,
+                phrase=SIPStatus.RINGING.phrase,
                 headers=self._with_to_tag(
                     {
                         key: value
@@ -712,15 +751,13 @@ class SessionInitiationProtocol(asyncio.Protocol):
     def reject(
         self,
         request: Request,
-        status_code: int = Status["Busy Here"],
-        reason: str = Status["Busy Here"].name,
+        status_code: SIPStatus = SIPStatus.BUSY_HERE,
     ) -> None:
         """Reject an incoming call.
 
         Args:
             request: The SIP INVITE request (from `call_received`).
             status_code: SIP response status code (default: 486 Busy Here).
-            reason: SIP response reason phrase.
         """
         call_id = request.headers.get("Call-ID", "")
         if call_id not in self._pending_invites:
@@ -737,7 +774,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
                     "ip": peer[0] if peer else None,
                     "call_id": call_id,
                     "status": status_code,
-                    "reason": reason,
+                    "reason": status_code.phrase,
                 }
             ),
             extra={
@@ -750,7 +787,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
         self.send(
             Response(
                 status_code=status_code,
-                reason=reason,
+                phrase=status_code.phrase,
                 headers=self._with_to_tag(
                     {
                         key: value
@@ -817,7 +854,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
         aor_rest = self.aor.partition(":")[2] if self.aor else ""
         user = aor_rest.partition("@")[0] if "@" in aor_rest else aor_rest
         headers = {
-            "Via": f"SIP/2.0/{'TLS' if self._is_tls else 'TCP'} {self.local_address[0]}:{self.local_address[1]};rport;branch={branch}",
+            "Via": f"SIP/2.0/{'TLS' if self._is_tls else 'TCP'} {_format_host(self.local_address[0])}:{self.local_address[1]};rport;branch={branch}",
             "From": self.aor,
             "To": self.aor,
             "Call-ID": self.call_id,

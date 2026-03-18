@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import enum
+import ipaddress
 import logging
-import socket
 import struct
 import uuid
 
@@ -29,6 +29,52 @@ class STUNAttributeType(enum.IntEnum):
 
     MAPPED_ADDRESS = 0x0001
     XOR_MAPPED_ADDRESS = 0x0020
+
+
+def _parse_address(
+    value: bytes, xor_key: bytes
+) -> tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int] | None:
+    """Decode a STUN MAPPED-ADDRESS or XOR-MAPPED-ADDRESS attribute value.
+
+    When *xor_key* is non-empty the port and address bytes are XORed with
+    the key per RFC 5389 §15.2; pass an empty byte string for plain
+    MAPPED-ADDRESS attributes.
+
+    Args:
+        value: Raw attribute value bytes (everything after the type/length TLV header).
+        xor_key: XOR key bytes — must be exactly 16 bytes
+            (``MAGIC_COOKIE (4 bytes) || transaction_id (12 bytes)``)
+            for XOR-MAPPED-ADDRESS, or empty bytes for plain MAPPED-ADDRESS.
+
+    Returns:
+        ``(ip_address, port)`` on success, ``None`` when *value* is
+        too short or the address family is unrecognised.
+    """
+    assert not xor_key or len(xor_key) == 16, "xor_key must be 16 bytes or empty"  # noqa: S101
+    if len(value) < 4:
+        return None
+    family = value[1]
+    raw_port = struct.unpack(">H", value[2:4])[0]
+    port = raw_port ^ (MAGIC_COOKIE >> 16) if xor_key else raw_port
+    match family:
+        case 0x01 if len(value) >= 8:  # IPv4
+            raw_ip = value[4:8]
+            ip_bytes = (
+                bytes(a ^ b for a, b in zip(raw_ip, xor_key[:4], strict=False))
+                if xor_key
+                else raw_ip
+            )
+            return ipaddress.IPv4Address(ip_bytes), port
+        case 0x02 if len(value) >= 20:  # IPv6
+            raw_ip = value[4:20]
+            ip_bytes = (
+                bytes(a ^ b for a, b in zip(raw_ip, xor_key, strict=False))
+                if xor_key
+                else raw_ip
+            )
+            return ipaddress.IPv6Address(ip_bytes), port
+        case _:
+            return None
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -74,7 +120,11 @@ class STUNProtocol(asyncio.DatagramProtocol):
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
         self.transport = transport
         if self.stun_server_address is None:
-            self.stun_connection_made(transport, transport.get_extra_info("sockname"))
+            # IPv6 sockets return a 4-tuple (host, port, flowinfo, scope_id);
+            # we only need the first two elements.
+            sockname = transport.get_extra_info("sockname")
+            host, port = sockname[0], sockname[1]
+            self.stun_connection_made(transport, (ipaddress.ip_address(host), port))
         else:
             self._stun_transaction_id = uuid.uuid4().bytes[:12]
             self._send_stun_request()
@@ -82,7 +132,7 @@ class STUNProtocol(asyncio.DatagramProtocol):
     def stun_connection_made(
         self,
         transport: asyncio.DatagramTransport,
-        addr: tuple[str, int],
+        addr: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int],
     ) -> None:
         """Called when the socket is ready and the reachable address is known.
 
@@ -177,30 +227,21 @@ class STUNProtocol(asyncio.DatagramProtocol):
         # Clear transaction ID so duplicate responses are ignored.
         self._stun_transaction_id = b""
         offset = 20
-        xor_mapped: tuple[str, int] | None = None
-        mapped: tuple[str, int] | None = None
+        xor_mapped: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int] | None = (
+            None
+        )
+        mapped: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int] | None = None
+        xor_key = struct.pack(">I", MAGIC_COOKIE) + response_tid
         while offset + 4 <= len(data):
             attribute_type, attribute_len = struct.unpack(
                 ">HH", data[offset : offset + 4]
             )
             attribute_value = data[offset + 4 : offset + 4 + attribute_len]
-            if (
-                attribute_type == STUNAttributeType.XOR_MAPPED_ADDRESS
-                and len(attribute_value) >= 8
-                and attribute_value[1] == 0x01  # IPv4
-            ):
-                port = struct.unpack(">H", attribute_value[2:4])[0] ^ (
-                    MAGIC_COOKIE >> 16
-                )
-                ip_int = struct.unpack(">I", attribute_value[4:8])[0] ^ MAGIC_COOKIE
-                xor_mapped = (socket.inet_ntoa(struct.pack(">I", ip_int)), port)
-            elif (
-                attribute_type == STUNAttributeType.MAPPED_ADDRESS
-                and len(attribute_value) >= 8
-                and attribute_value[1] == 0x01  # IPv4
-            ):
-                port = struct.unpack(">H", attribute_value[2:4])[0]
-                mapped = (socket.inet_ntoa(attribute_value[4:8]), port)
+            match attribute_type:
+                case STUNAttributeType.XOR_MAPPED_ADDRESS:
+                    xor_mapped = _parse_address(attribute_value, xor_key)
+                case STUNAttributeType.MAPPED_ADDRESS:
+                    mapped = _parse_address(attribute_value, b"")
             offset += 4 + ((attribute_len + 3) & ~3)  # 4-byte aligned
         result = xor_mapped or mapped
         if result:

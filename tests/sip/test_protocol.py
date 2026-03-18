@@ -3,7 +3,9 @@
 import asyncio
 import dataclasses
 import hashlib
-from unittest.mock import MagicMock
+import ipaddress
+import re
+from unittest.mock import MagicMock, patch
 
 import pytest
 from voip.rtp import RealtimeTransportProtocol, RTPCall
@@ -14,9 +16,10 @@ from voip.sip.protocol import (
     SIP,
     RegistrationError,
     SessionInitiationProtocol,
+    _format_host,
     _mask_caller,
 )
-from voip.sip.types import CallerID, DigestAlgorithm
+from voip.sip.types import CallerID, DigestAlgorithm, SIPStatus
 
 INVITE_WITH_PCMA = (
     b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
@@ -141,8 +144,8 @@ class ConcreteProtocol(SessionInitiationProtocol):
 class TestMaskCaller:
     def test_full_from_header_with_display_name(self):
         """Mask all but the last 4 chars of a 12-digit display name (8 asterisks)."""
-        header = '"015114455910" <sip:015114455910@telefonica.de>;tag=abc123'
-        assert _mask_caller(header) == "********5910"
+        header = '"08001234567" <sip:08001234567@telefonica.de>;tag=abc123'
+        assert _mask_caller(header) == "*******4567"
 
     def test_bare_sip_uri(self):
         """Extract user part from a bare SIP URI and mask all but the last 4 chars."""
@@ -154,10 +157,10 @@ class TestMaskCaller:
 
     def test_strips_tag_parameter(self):
         """The tag= and any subsequent parameters are stripped before masking."""
-        header = '"015114455910" <sip:015114455910@example.com>;tag=xyz;other=1'
+        header = '"08001234567" <sip:08001234567@example.com>;tag=xyz;other=1'
         result = _mask_caller(header)
         assert "tag" not in result
-        assert result.endswith("5910")
+        assert result.endswith("4567")
 
     def test_angle_bracket_uri_without_display_name(self):
         """Parse <sip:user@host> style without a display name."""
@@ -167,13 +170,13 @@ class TestMaskCaller:
 class TestCallerID:
     def test_str__returns_raw_header(self):
         """str() returns the original SIP header value unchanged."""
-        raw = '"015114455910" <sip:015114455910@telefonica.de>;tag=abc'
+        raw = '"08001234567" <sip:08001234567@telefonica.de>;tag=abc'
         assert str(CallerID(raw)) == raw
 
     def test_repr__masks_display_name_and_includes_domain(self):
         """repr() shows last 4 chars of display name and the carrier domain."""
-        caller = CallerID('"015114455910" <sip:015114455910@telefonica.de>;tag=abc')
-        assert repr(caller) == "********5910@telefonica.de"
+        caller = CallerID('"08001234567" <sip:08001234567@telefonica.de>;tag=abc')
+        assert repr(caller) == "*******4567@telefonica.de"
 
     def test_repr__bare_sip_uri(self):
         """repr() masks the user part of a bare SIP URI and includes the domain."""
@@ -185,8 +188,8 @@ class TestCallerID:
 
     def test_user__phone_number(self):
         """User property extracts the SIP user part from a phone number URI."""
-        caller = CallerID('"015114455910" <sip:015114455910@telefonica.de>')
-        assert caller.user == "015114455910"
+        caller = CallerID('"08001234567" <sip:08001234567@telefonica.de>')
+        assert caller.user == "08001234567"
 
     def test_user__bare_uri(self):
         """User property extracts the username from a bare SIP URI."""
@@ -490,11 +493,11 @@ class TestAnswer:
         # Pre-populate the shared RTP mux so _answer() skips socket creation.
         mux = RealtimeTransportProtocol()
         mux.public_address = loop.create_future()
-        mux.public_address.set_result(("127.0.0.1", 12000))
+        mux.public_address.set_result((ipaddress.IPv4Address("127.0.0.1"), 12000))
         protocol._rtp_protocol = mux
         protocol._rtp_transport = fake_rtp_transport
         # Resolve the SIP protocol's own local address (for Contact header).
-        protocol.local_address = ("127.0.0.1", 5061)
+        protocol.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
         await protocol.answer(invite, call_class=_CodecAwareCall)
 
     @pytest.mark.asyncio
@@ -728,6 +731,37 @@ class TestAnswer:
         response, _ = protocol._sent_responses[-1]
         assert "Record-Route" not in response.headers
 
+    @pytest.mark.asyncio
+    async def test_answer__ipv6_public_address_uses_ip6_addrtype(self):
+        """When the RTP public address is IPv6, the SDP uses addrtype IP6."""
+        protocol = FakeProtocol()
+        addr = ("2001:db8::1", 5060)
+        sdp_body = SessionDescription.parse(
+            "v=0\r\n"
+            "o=- 0 0 IN IP6 2001:db8::1\r\n"
+            "s=-\r\n"
+            "c=IN IP6 2001:db8::1\r\n"
+            "t=0 0\r\n"
+            "m=audio 49170 RTP/AVP 0\r\n"
+        )
+        invite = self._make_invite("answer-ipv6-1", sdp_body)
+        protocol.request_received(invite, addr)
+
+        loop = asyncio.get_running_loop()
+        mux = RealtimeTransportProtocol()
+        mux.public_address = loop.create_future()
+        mux.public_address.set_result((ipaddress.IPv6Address("2001:db8::2"), 12000))
+        protocol._rtp_protocol = mux
+        protocol._rtp_transport = FakeTransport(("2001:db8::2", 12000))
+        protocol.local_address = (ipaddress.IPv6Address("2001:db8::2"), 5061)
+
+        await protocol.answer(invite, call_class=_CodecAwareCall)
+        response, _ = protocol._sent_responses[-1]
+        assert response.body.origin.addrtype == "IP6"
+        assert response.body.connection.addrtype == "IP6"
+        assert response.body.origin.unicast_address == "2001:db8::2"
+        assert response.body.connection.connection_address == "2001:db8::2"
+
 
 class TestCANCELHandler:
     def test_cancel__sends_200_ok_for_cancel(self):
@@ -795,7 +829,7 @@ class TestCANCELHandler:
             (r for r, _ in protocol._sent_responses if r.status_code == 487), None
         )
         assert terminated is not None
-        assert terminated.reason == "Request Terminated"
+        assert terminated.phrase == "Request Terminated"
 
     def test_cancel__487_includes_to_tag(self):
         """Include the stored To tag in the 487 Request Terminated response."""
@@ -1074,7 +1108,7 @@ class TestSIPProtocol:
         transport = make_mock_transport()
         protocol.connection_made(transport)
         transport.write.reset_mock()  # clear any calls made during connection_made
-        response = Response(status_code=200, reason="OK")
+        response = Response(status_code=200, phrase="OK")
         protocol.send(response)
         protocol.transport.write.assert_called_once_with(bytes(response))
 
@@ -1087,7 +1121,7 @@ class TestSIPProtocol:
                 received.append(request)
 
         protocol = MySIP(outbound_proxy=("127.0.0.1", 5060), aor="sip:test@example.com")
-        protocol.connection_made(MagicMock())
+        protocol.connection_made(make_mock_transport())
         request = make_invite()
         addr = ("192.0.2.1", 5060)
         protocol.request_received(request, addr)
@@ -1098,7 +1132,7 @@ class TestSIPProtocol:
     async def test_call_received__noop_by_default(self):
         """call_received is a no-op in the base class."""
         protocol = SIP(outbound_proxy=("127.0.0.1", 5060), aor="sip:test@example.com")
-        protocol.connection_made(MagicMock())
+        protocol.connection_made(make_mock_transport())
         protocol.call_received(make_invite())  # must not raise
 
     async def test_answer__sends_200_ok(self):
@@ -1106,10 +1140,10 @@ class TestSIPProtocol:
         loop = asyncio.get_running_loop()
         protocol = self._CapturingSIP()
         protocol.transport = make_mock_transport()
-        protocol.local_address = ("127.0.0.1", 5061)
+        protocol.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
         mux = RealtimeTransportProtocol()
         mux.public_address = loop.create_future()
-        mux.public_address.set_result(("127.0.0.1", 12000))
+        mux.public_address.set_result((ipaddress.IPv4Address("127.0.0.1"), 12000))
         mock_rtp_transport = MagicMock()
         mock_rtp_transport.get_extra_info.return_value = ("127.0.0.1", 12000)
         protocol._rtp_protocol = mux
@@ -1120,17 +1154,17 @@ class TestSIPProtocol:
         assert len(protocol._sent) == 1
         response, _ = protocol._sent[0]
         assert response.status_code == 200
-        assert response.reason == "OK"
+        assert response.phrase == "OK"
 
     async def test_answer__sdp_contains_opus_audio_line(self):
         """Include an audio media line in the SDP body of the 200 OK."""
         loop = asyncio.get_running_loop()
         protocol = self._CapturingSIP()
         protocol.transport = make_mock_transport()
-        protocol.local_address = ("127.0.0.1", 5061)
+        protocol.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
         mux = RealtimeTransportProtocol()
         mux.public_address = loop.create_future()
-        mux.public_address.set_result(("127.0.0.1", 12000))
+        mux.public_address.set_result((ipaddress.IPv4Address("127.0.0.1"), 12000))
         mock_rtp_transport = MagicMock()
         mock_rtp_transport.get_extra_info.return_value = ("127.0.0.1", 12000)
         protocol._rtp_protocol = mux
@@ -1147,10 +1181,10 @@ class TestSIPProtocol:
         loop = asyncio.get_running_loop()
         protocol = self._CapturingSIP()
         protocol.transport = make_mock_transport()
-        protocol.local_address = ("127.0.0.1", 5061)
+        protocol.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
         mux = RealtimeTransportProtocol()
         mux.public_address = loop.create_future()
-        mux.public_address.set_result(("127.0.0.1", 12000))
+        mux.public_address.set_result((ipaddress.IPv4Address("127.0.0.1"), 12000))
         mock_rtp_transport = MagicMock()
         mock_rtp_transport.get_extra_info.return_value = ("127.0.0.1", 12000)
         protocol._rtp_protocol = mux
@@ -1237,10 +1271,10 @@ class TestSIPProtocol:
         loop = asyncio.get_running_loop()
         protocol = self._CapturingSIP()
         protocol.transport = make_mock_transport()
-        protocol.local_address = ("127.0.0.1", 5061)
+        protocol.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
         mux = RealtimeTransportProtocol()
         mux.public_address = loop.create_future()
-        mux.public_address.set_result(("127.0.0.1", 12000))
+        mux.public_address.set_result((ipaddress.IPv4Address("127.0.0.1"), 12000))
         mock_rtp_transport = MagicMock()
         mock_rtp_transport.get_extra_info.return_value = ("127.0.0.1", 12000)
         protocol._rtp_protocol = mux
@@ -1267,10 +1301,10 @@ class TestSIPProtocol:
         loop = asyncio.get_running_loop()
         protocol = self._CapturingSIP()
         protocol.transport = make_mock_transport()
-        protocol.local_address = ("127.0.0.1", 5061)
+        protocol.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
         mux = RealtimeTransportProtocol()
         mux.public_address = loop.create_future()
-        mux.public_address.set_result(("127.0.0.1", 12000))
+        mux.public_address.set_result((ipaddress.IPv4Address("127.0.0.1"), 12000))
         mock_rtp_transport = MagicMock()
         mock_rtp_transport.get_extra_info.return_value = ("127.0.0.1", 12000)
         protocol._rtp_protocol = mux
@@ -1294,7 +1328,7 @@ class TestSIPProtocol:
         loop = asyncio.get_running_loop()
         protocol = self._CapturingSIP()
         protocol.transport = make_mock_transport()
-        protocol.local_address = ("127.0.0.1", 5061)
+        protocol.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
         mux = RealtimeTransportProtocol(stun_server_address=None)
         rtp_transport, _ = await loop.create_datagram_endpoint(
             lambda: mux, local_addr=("127.0.0.1", 0)
@@ -1342,7 +1376,7 @@ class TestSIPProtocol:
         loop = asyncio.get_running_loop()
         protocol = self._CapturingSIP()
         protocol.transport = make_mock_transport()
-        protocol.local_address = ("127.0.0.1", 5061)
+        protocol.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
         mux = RealtimeTransportProtocol(stun_server_address=None)
         rtp_transport, _ = await loop.create_datagram_endpoint(
             lambda: mux, local_addr=("127.0.0.1", 0)
@@ -1381,10 +1415,10 @@ class TestSIPProtocol:
         loop = asyncio.get_running_loop()
         protocol = self._CapturingSIP()
         protocol.transport = make_mock_transport()
-        protocol.local_address = ("127.0.0.1", 5061)
+        protocol.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
         mux = RealtimeTransportProtocol()
         mux.public_address = loop.create_future()
-        mux.public_address.set_result(("127.0.0.1", 12000))
+        mux.public_address.set_result((ipaddress.IPv4Address("127.0.0.1"), 12000))
         mock_rtp_transport = MagicMock()
         mock_rtp_transport.get_extra_info.return_value = ("127.0.0.1", 12000)
         protocol._rtp_protocol = mux
@@ -1405,7 +1439,7 @@ class TestSIPProtocol:
         loop = asyncio.get_running_loop()
         protocol = self._CapturingSIP()
         protocol.transport = make_mock_transport()
-        protocol.local_address = ("127.0.0.1", 5061)
+        protocol.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
         mux = RealtimeTransportProtocol(stun_server_address=None)
         rtp_transport, _ = await loop.create_datagram_endpoint(
             lambda: mux, local_addr=("127.0.0.1", 0)
@@ -1463,7 +1497,7 @@ class TestSIPProtocol:
         loop = asyncio.get_running_loop()
         protocol = self._CapturingSIP()
         protocol.transport = make_mock_transport()
-        protocol.local_address = ("127.0.0.1", 5061)
+        protocol.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
         mux = RealtimeTransportProtocol(stun_server_address=None)
         rtp_transport, _ = await loop.create_datagram_endpoint(
             lambda: mux, local_addr=("127.0.0.1", 0)
@@ -1499,10 +1533,10 @@ class TestSIPProtocol:
         loop = asyncio.get_running_loop()
         protocol = self._CapturingSIP()
         protocol.transport = make_mock_transport()
-        protocol.local_address = ("127.0.0.1", 5061)
+        protocol.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
         mux = RealtimeTransportProtocol()
         mux.public_address = loop.create_future()
-        mux.public_address.set_result(("127.0.0.1", 12000))
+        mux.public_address.set_result((ipaddress.IPv4Address("127.0.0.1"), 12000))
         mock_rtp_transport = MagicMock()
         mock_rtp_transport.get_extra_info.return_value = ("127.0.0.1", 12000)
         protocol._rtp_protocol = mux
@@ -1523,17 +1557,17 @@ class TestSIPProtocol:
         response, _ = protocol._sent[0]
         assert isinstance(response, Response)
         assert response.status_code == 486
-        assert response.reason == "Busy Here"
+        assert response.phrase == "Busy Here"
 
     def test_reject__custom_status(self):
         """Send the specified status code and reason."""
         protocol = self._CapturingSIP()
         request = make_invite()
         protocol._pending_invites.add(request.headers["Call-ID"])
-        protocol.reject(request, status_code=603, reason="Decline")
+        protocol.reject(request, status_code=SIPStatus.DECLINE)
         response, _ = protocol._sent[0]
         assert response.status_code == 603
-        assert response.reason == "Decline"
+        assert response.phrase == "Decline"
 
     def test_reject__copies_dialog_headers(self):
         """Copy Via, To, From, Call-ID, and CSeq headers into the response."""
@@ -1585,7 +1619,7 @@ class TestSIPProtocol:
     async def test_request_received__unsupported_method__raises(self):
         """Raise NotImplementedError for any non-INVITE SIP request method."""
         protocol = SIP(outbound_proxy=("127.0.0.1", 5060), aor="sip:test@example.com")
-        protocol.connection_made(MagicMock())
+        protocol.connection_made(make_mock_transport())
         request = Request(method="OPTIONS", uri="sip:alice@atlanta.com")
         with pytest.raises(NotImplementedError, match="OPTIONS"):
             protocol.request_received(request, ("192.0.2.1", 5060))
@@ -1621,6 +1655,20 @@ class TestSIPProtocol:
 # ---------------------------------------------------------------------------
 # Tests for SIP REGISTER / digest-auth / response handling
 # ---------------------------------------------------------------------------
+
+
+class TestFormatHost:
+    def test_format_host__ipv4__unchanged(self):
+        """IPv4 addresses are returned unchanged."""
+        assert _format_host("192.0.2.1") == "192.0.2.1"
+
+    def test_format_host__ipv6__bracketed(self):
+        """IPv6 addresses are wrapped in square brackets."""
+        assert _format_host("2001:db8::1") == "[2001:db8::1]"
+
+    def test_format_host__hostname__unchanged(self):
+        """Hostnames (non-IP strings) are returned unchanged."""
+        assert _format_host("example.com") == "example.com"
 
 
 class TestRegistration:
@@ -1667,12 +1715,45 @@ class TestRegistration:
         # sip: AOR → sip: registrar URI even over TLS.
         assert b"REGISTER sip:example.com SIP/2.0" in data
 
+    async def test_initialize__ipv6_local_address_binds_rtp_to_double_colon(self):
+        """When the SIP connection is IPv6, RTP is bound to '::' instead of '0.0.0.0'."""
+        bound_addresses: list[tuple] = []
+
+        class _TrackingSession(SessionInitiationProtocol):
+            pass
+
+        p = _TrackingSession(
+            outbound_proxy=("2001:db8::1", 5061),
+            aor="sips:alice@example.com",
+            rtp_stun_server_address=None,
+        )
+        p.local_address = (ipaddress.IPv6Address("2001:db8::2"), 5061)
+        p._is_tls = True
+
+        loop = asyncio.get_running_loop()
+
+        async def fake_create_datagram(factory, *, local_addr=None, **kwargs):
+            if local_addr is not None:
+                bound_addresses.append(local_addr)
+            transport = MagicMock()
+            transport.get_extra_info.return_value = local_addr or ("::1", 0)
+            proto = factory()
+            proto.connection_made(transport)
+            return transport, proto
+
+        with patch.object(loop, "create_datagram_endpoint", fake_create_datagram):
+            p.transport = make_mock_transport("2001:db8::2", 5061)
+            await p._initialize()
+
+        assert bound_addresses, "create_datagram_endpoint was not called"
+        assert bound_addresses[0][0] == "::"
+
     async def test_register__includes_required_headers(self):
         """REGISTER request includes From, To, Call-ID, CSeq, Contact and Expires."""
         p = make_register_session()
         transport = make_mock_transport()
         p.transport = transport
-        p.local_address = ("127.0.0.1", 5061)
+        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
         p._is_tls = True
         await p.register()
         (data,) = transport.write.call_args[0]
@@ -1685,7 +1766,7 @@ class TestRegistration:
     async def test_register__increments_cseq(self):
         """CSeq increments with each REGISTER sent."""
         p = make_register_session()
-        p.local_address = ("127.0.0.1", 5061)
+        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
         p.transport = make_mock_transport()
         await p.register()
         assert p.cseq == 1
@@ -1698,7 +1779,7 @@ class TestRegistration:
         p = make_register_session()
         transport = make_mock_transport()
         p.transport = transport
-        p.local_address = "127.0.0.1", 5061
+        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
         await p.register(authorization='Digest username="alice"')
         (data,) = transport.write.call_args[0]
         assert b'Authorization: Digest username="alice"' in data
@@ -1708,7 +1789,7 @@ class TestRegistration:
         p = make_register_session()
         transport = make_mock_transport()
         p.transport = transport
-        p.local_address = "127.0.0.1", 5061
+        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
         await p.register(proxy_authorization='Digest username="alice"')
         (data,) = transport.write.call_args[0]
         assert b'Proxy-Authorization: Digest username="alice"' in data
@@ -1729,7 +1810,7 @@ class TestRegistration:
         )
         p.connection_made(make_mock_transport())
         p.response_received(
-            Response(status_code=200, reason="OK", headers={"CSeq": "1 REGISTER"}),
+            Response(status_code=200, phrase="OK", headers={"CSeq": "1 REGISTER"}),
             ("192.0.2.2", 5060),
         )
         assert calls == [True]
@@ -1740,7 +1821,7 @@ class TestRegistration:
         p.connection_made(make_mock_transport())
         with pytest.raises(RegistrationError):
             p.response_received(
-                Response(status_code=200, reason="OK", headers={"CSeq": "1 INVITE"}),
+                Response(status_code=200, phrase="OK", headers={"CSeq": "1 INVITE"}),
                 ("192.0.2.2", 5060),
             )
 
@@ -1749,12 +1830,12 @@ class TestRegistration:
         p = make_register_session(username="alice", password="secret")  # noqa: S106
         transport = make_mock_transport()
         p.transport = transport
-        p.local_address = ("127.0.0.1", 5061)
+        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
         challenge = 'Digest realm="example.com", nonce="abc123"'
         p.response_received(
             Response(
                 status_code=401,
-                reason="Unauthorized",
+                phrase="Unauthorized",
                 headers={"WWW-Authenticate": challenge, "CSeq": "1 REGISTER"},
             ),
             ("192.0.2.2", 5061),
@@ -1772,12 +1853,12 @@ class TestRegistration:
         p = make_register_session(username="alice", password="secret")  # noqa: S106
         transport = make_mock_transport()
         p.transport = transport
-        p.local_address = ("127.0.0.1", 5061)
+        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
         challenge = 'Digest realm="example.com", nonce="xyz"'
         p.response_received(
             Response(
                 status_code=407,
-                reason="Proxy Auth Required",
+                phrase="Proxy Auth Required",
                 headers={"Proxy-Authenticate": challenge, "CSeq": "1 REGISTER"},
             ),
             ("192.0.2.2", 5061),
@@ -1792,12 +1873,12 @@ class TestRegistration:
         p = make_register_session()
         transport = make_mock_transport()
         p.transport = transport
-        p.local_address = ("127.0.0.1", 5061)
+        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
         challenge = 'Digest realm="example.com", nonce="n", qop="auth"'
         p.response_received(
             Response(
                 status_code=401,
-                reason="Unauthorized",
+                phrase="Unauthorized",
                 headers={"WWW-Authenticate": challenge, "CSeq": "1 REGISTER"},
             ),
             ("192.0.2.2", 5061),
@@ -1813,12 +1894,12 @@ class TestRegistration:
         p = make_register_session()
         transport = make_mock_transport()
         p.transport = transport
-        p.local_address = ("127.0.0.1", 5061)
+        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
         challenge = 'Digest realm="example.com", nonce="n", opaque="secret-opaque"'
         p.response_received(
             Response(
                 status_code=401,
-                reason="Unauthorized",
+                phrase="Unauthorized",
                 headers={"WWW-Authenticate": challenge, "CSeq": "1 REGISTER"},
             ),
             ("192.0.2.2", 5061),
@@ -1829,10 +1910,8 @@ class TestRegistration:
 
     async def test_register__via_header_has_rport(self):
         """REGISTER request includes a Via header with the rport parameter."""
-        import re
-
         p = make_register_session()
-        p.local_address = "192.0.2.10", 5061
+        p.local_address = (ipaddress.IPv4Address("192.0.2.10"), 5061)
         transport = make_mock_transport("192.0.2.10", 5061)
         p.transport = transport
         p._is_tls = True
@@ -1843,10 +1922,8 @@ class TestRegistration:
 
     async def test_register__via_branch_is_unique_per_request(self):
         """Each REGISTER generates a unique Via branch."""
-        import re
-
         p = make_register_session()
-        p.local_address = "127.0.0.1", 5061
+        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
         transport = make_mock_transport()
         p.transport = transport
         await p.register()
@@ -1861,7 +1938,7 @@ class TestRegistration:
     async def test_register__contact_uses_local_addr(self):
         """Contact header uses sip:;transport=tls when AOR is sip: over TLS."""
         p = make_register_session()
-        p.local_address = "10.0.0.5", 5061
+        p.local_address = (ipaddress.IPv4Address("10.0.0.5"), 5061)
         transport = make_mock_transport("10.0.0.5", 5061)
         p.transport = transport
         p._is_tls = True
@@ -1872,7 +1949,7 @@ class TestRegistration:
     async def test_register__contact_uses_sips_when_aor_is_sips(self):
         """Contact header uses sips: when AOR scheme is sips:."""
         p = make_register_session(aor="sips:alice@example.com")
-        p.local_address = "10.0.0.5", 5061
+        p.local_address = (ipaddress.IPv4Address("10.0.0.5"), 5061)
         transport = make_mock_transport("10.0.0.5", 5061)
         p.transport = transport
         p._is_tls = True
@@ -1880,16 +1957,38 @@ class TestRegistration:
         (data,) = transport.write.call_args[0]
         assert b"Contact: <sips:alice@10.0.0.5:5061>" in data
 
+    async def test_register__contact_wraps_ipv6_in_brackets(self):
+        """Contact header wraps an IPv6 local address in square brackets."""
+        p = make_register_session(aor="sips:alice@example.com")
+        p.local_address = (ipaddress.IPv6Address("2001:db8::1"), 5061)
+        transport = make_mock_transport("2001:db8::1", 5061)
+        p.transport = transport
+        p._is_tls = True
+        await p.register()
+        (data,) = transport.write.call_args[0]
+        assert b"Contact: <sips:alice@[2001:db8::1]:5061>" in data
+
+    async def test_register__via_wraps_ipv6_in_brackets(self):
+        """Via header wraps an IPv6 local address in square brackets."""
+        p = make_register_session()
+        p.local_address = (ipaddress.IPv6Address("::1"), 5061)
+        transport = make_mock_transport("::1", 5061)
+        p.transport = transport
+        p._is_tls = True
+        await p.register()
+        (data,) = transport.write.call_args[0]
+        assert b"Via: SIP/2.0/TLS [::1]:5061" in data
+
     async def test_response_received__403_raises_registration_error(self):
         """403 Forbidden for REGISTER raises RegistrationError with the response message."""
         p = make_register_session()
-        p.local_address = ("127.0.0.1", 5061)
+        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
         p.transport = make_mock_transport()
         with pytest.raises(RegistrationError, match="403 Forbidden"):
             p.response_received(
                 Response(
                     status_code=403,
-                    reason="Forbidden",
+                    phrase="Forbidden",
                     headers={"CSeq": "1 REGISTER"},
                 ),
                 ("192.0.2.2", 5061),
@@ -1898,13 +1997,13 @@ class TestRegistration:
     async def test_response_received__unexpected_raises_registration_error(self):
         """Any unexpected REGISTER response raises RegistrationError."""
         p = make_register_session()
-        p.local_address = ("127.0.0.1", 5061)
+        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
         p.transport = make_mock_transport()
         with pytest.raises(RegistrationError, match="500 Server Error"):
             p.response_received(
                 Response(
                     status_code=500,
-                    reason="Server Error",
+                    phrase="Server Error",
                     headers={"CSeq": "1 REGISTER"},
                 ),
                 ("192.0.2.2", 5061),
@@ -1962,7 +2061,7 @@ class TestRegistration:
         p.connection_made(make_mock_transport())
         with caplog.at_level(logging.INFO, logger="voip.sip"):
             p.response_received(
-                Response(status_code=200, reason="OK", headers={"CSeq": "1 REGISTER"}),
+                Response(status_code=200, phrase="OK", headers={"CSeq": "1 REGISTER"}),
                 ("192.0.2.2", 5060),
             )
         assert any("Registration successful" in r.message for r in caplog.records)
@@ -1980,7 +2079,7 @@ class TestRegistration:
                 p.response_received(
                     Response(
                         status_code=500,
-                        reason="Server Error",
+                        phrase="Server Error",
                         headers={"CSeq": "1 REGISTER"},
                     ),
                     ("192.0.2.2", 5060),
@@ -2086,12 +2185,12 @@ class TestDigestResponse:
         p = make_register_session(username="alice", password="secret")  # noqa: S106
         transport = make_mock_transport()
         p.transport = transport
-        p.local_address = ("127.0.0.1", 5061)
+        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
         challenge = 'Digest realm="example.com", nonce="abc123", algorithm="SHA-256"'
         p.response_received(
             Response(
                 status_code=401,
-                reason="Unauthorized",
+                phrase="Unauthorized",
                 headers={"WWW-Authenticate": challenge, "CSeq": "1 REGISTER"},
             ),
             ("192.0.2.2", 5061),

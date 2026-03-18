@@ -74,7 +74,7 @@ async def main():
         lambda: MySession(
             aor="sips:alice@example.com",
             username="alice",
-            password="secret",
+            password="secret",  # noqa: S106
         ),
         host="sip.example.com",
         port=5061,

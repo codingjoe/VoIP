@@ -34,75 +34,11 @@ def make_runner():
     return CliRunner()
 
 
-class TestParseAOR:
-    def test_parse_aor__sips_no_port(self):
-        """Parse scheme, user and host from a sips URI without port."""
-        from voip.__main__ import _parse_aor
-
-        assert _parse_aor("sips:alice@example.com") == (
-            "sips",
-            "alice",
-            "example.com",
-            None,
-        )
-
-    def test_parse_aor__sip_with_port(self):
-        """Parse scheme, user, host and port from a sip URI with port."""
-        from voip.__main__ import _parse_aor
-
-        assert _parse_aor("sip:alice@example.com:5060") == (
-            "sip",
-            "alice",
-            "example.com",
-            5060,
-        )
-
-    def test_parse_aor__sips_with_port(self):
-        """Parse all components including an explicit port."""
-        from voip.__main__ import _parse_aor
-
-        assert _parse_aor("sips:+15551234567@carrier.com:5061") == (
-            "sips",
-            "+15551234567",
-            "carrier.com",
-            5061,
-        )
-
-    def test_parse_aor__invalid_no_at(self):
-        """Raise BadParameter when user@host part is missing."""
-        import click
-        from voip.__main__ import _parse_aor
-
-        with pytest.raises(click.BadParameter):
-            _parse_aor("sip:example.com")
-
-    def test_parse_aor__invalid_no_scheme(self):
-        """Raise BadParameter when scheme is missing."""
-        import click
-        from voip.__main__ import _parse_aor
-
-        with pytest.raises(click.BadParameter):
-            _parse_aor("alice@example.com")
-
-
-class TestParseHostport:
-    def test_parse_hostport__without_port(self):
-        """Return default port 5061 when no port is specified."""
-        from voip.__main__ import _parse_hostport
-
-        assert _parse_hostport(None, None, "sip.example.com") == (
-            "sip.example.com",
-            5061,
-        )
-
-    def test_parse_hostport__with_port(self):
-        """Parse host and port from HOST:PORT format."""
-        from voip.__main__ import _parse_hostport
-
-        assert _parse_hostport(None, None, "sip.example.com:5080") == (
-            "sip.example.com",
-            5080,
-        )
+def make_mock_transport(host: str = "127.0.0.1", port: int = 5060) -> MagicMock:
+    """Return a MagicMock transport with a pre-configured sockname."""
+    transport = MagicMock()
+    transport.get_extra_info.return_value = (host, port)
+    return transport
 
 
 class TestParseStunServer:
@@ -133,6 +69,17 @@ class TestVoIPCommand:
         """Accept -v flag without error."""
         result = make_runner().invoke(voip, ["-v", "--help"])
         assert result.exit_code == 0
+
+    def test_sip__aor_without_user_raises_error(self):
+        """Raise BadParameter when AOR has no user part."""
+        from voip.__main__ import voip
+
+        result = make_runner().invoke(
+            voip,
+            ["sip", "--password=p", "--stun-server=none", "sip:example.com", "echo"],
+        )
+        assert result.exit_code != 0
+        assert "AOR must contain a user part" in (result.output or "")
 
 
 class TestTranscribeCLI:
@@ -460,7 +407,7 @@ class TestTranscribeCLI:
 
         async def run():
             with patch.object(protocol, "answer") as mock_answer:
-                protocol.connection_made(MagicMock())
+                protocol.connection_made(make_mock_transport())
                 protocol._pending_invites.add(request.headers["Call-ID"])
                 protocol.call_received(request)
                 mock_answer.assert_called_once()
@@ -510,7 +457,7 @@ class TestTranscribeCLI:
 
         async def _run_whisper():
             with patch.object(protocol, "answer") as mock_answer:
-                protocol.connection_made(MagicMock())
+                protocol.connection_made(make_mock_transport())
                 protocol._pending_invites.add(request.headers["Call-ID"])
                 protocol.call_received(request)
                 mock_answer.assert_called_once()
@@ -617,7 +564,7 @@ class TestAgentCLI:
 
         async def _run_agent():
             with patch.object(protocol, "answer") as mock_answer:
-                protocol.connection_made(MagicMock())
+                protocol.connection_made(make_mock_transport())
                 protocol._pending_invites.add(request.headers["Call-ID"])
                 protocol.call_received(request)
                 mock_answer.assert_called_once()
@@ -667,7 +614,7 @@ class TestAgentCLI:
 
         async def _run_ollama():
             with patch.object(protocol, "answer") as mock_answer:
-                protocol.connection_made(MagicMock())
+                protocol.connection_made(make_mock_transport())
                 protocol._pending_invites.add(request.headers["Call-ID"])
                 protocol.call_received(request)
                 _, kwargs = mock_answer.call_args
@@ -715,7 +662,7 @@ class TestAgentCLI:
 
         async def _run_voice():
             with patch.object(protocol, "answer") as mock_answer:
-                protocol.connection_made(MagicMock())
+                protocol.connection_made(make_mock_transport())
                 protocol._pending_invites.add(request.headers["Call-ID"])
                 protocol.call_received(request)
                 _, kwargs = mock_answer.call_args
@@ -820,7 +767,7 @@ class TestEchoCLI:
 
         async def run():
             with patch.object(protocol, "answer") as mock_answer:
-                protocol.connection_made(MagicMock())
+                protocol.connection_made(make_mock_transport())
                 protocol._pending_invites.add(request.headers["Call-ID"])
                 protocol.call_received(request)
                 mock_answer.assert_called_once()

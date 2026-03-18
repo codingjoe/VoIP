@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import ipaddress
 import struct
 from unittest.mock import MagicMock
 
@@ -261,7 +262,7 @@ class TestRealtimeTransportProtocol:
         )
         try:
             result = await proto.public_address
-            assert result == ("203.0.113.5", 54321)
+            assert result == (ipaddress.IPv4Address("203.0.113.5"), 54321)
             assert len(received_requests) == 1
         finally:
             rtp_t.close()
