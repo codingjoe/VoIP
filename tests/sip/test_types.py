@@ -214,7 +214,7 @@ class TestSipUri:
                 SipUri(
                     scheme="sip",
                     user="alice",
-                    password="secret",
+                    password="secret",  # noqa: S106
                     host="example.com",
                     port=5060,
                 ),
