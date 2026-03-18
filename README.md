@@ -28,6 +28,13 @@ Answer calls and transcribe them live from the terminal:
 SIP_PASSWORD=******** uvx 'voip[cli]' sip sips:alice@sip.example.com transcribe
 ```
 
+A simple echo server can be started with:
+
+````console
+```console
+SIP_PASSWORD=******** uvx 'voip[cli]' sip sips:alice@sip.example.com echo
+````
+
 You can also talk to a local agent (needs [Ollama]):
 
 ```console
@@ -40,7 +47,7 @@ SIP_PASSWORD=******** uvx 'voip[cli]' sip sips:alice@sip.example.com agent
 uv add voip[audio,ai,pygments]
 ```
 
-Subclass `WhisperCall` and override `transcription_received` to handle results.
+Subclass `TranscribeCall` and override `transcription_received` to handle results.
 Pass it as `call_class` when answering an incoming call:
 
 ```python

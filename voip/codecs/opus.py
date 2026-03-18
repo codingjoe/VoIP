@@ -4,6 +4,8 @@ The [`Opus`][voip.codecs.opus.Opus] class wraps raw Opus RTP payloads in a
 minimal [Ogg][] container before passing them to PyAV for decoding, and
 encodes float32 PCM via `libopus`.
 
+Requires the ``pyav`` extra: ``pip install voip[pyav]``.
+
 [Ogg]: https://wiki.xiph.org/Ogg
 """
 
@@ -15,12 +17,12 @@ from typing import ClassVar
 
 import numpy as np
 
-from voip.codecs.base import RTPCodec
+from voip.codecs.av import PyAVCodec
 
 __all__ = ["Opus"]
 
 
-class Opus(RTPCodec):
+class Opus(PyAVCodec):
     """Opus audio codec ([RFC 7587][]).
 
     Opus is a highly flexible codec for interactive real-time speech and audio
@@ -43,7 +45,7 @@ class Opus(RTPCodec):
     channels: ClassVar[int] = 2
 
     @staticmethod
-    def ogg_crc32(data: bytes) -> int:
+    def _ogg_crc32(data: bytes) -> int:
         """Compute an Ogg CRC32 checksum (polynomial 0x04C11DB7).
 
         Args:
@@ -60,7 +62,7 @@ class Opus(RTPCodec):
         return crc & 0xFFFFFFFF
 
     @classmethod
-    def ogg_page(
+    def _ogg_page(
         cls,
         header_type: int,
         granule_position: int,
@@ -68,7 +70,7 @@ class Opus(RTPCodec):
         sequence_number: int,
         packets: list[bytes],
     ) -> bytes:
-        """Build a single Ogg page ([RFC 3533][]).
+        """Build a single Ogg page ([RFC 3533](https://datatracker.ietf.org/doc/html/rfc3533)).
 
         Args:
             header_type: Page header type flags (e.g. `0x02` for BOS, `0x04` for EOS).
@@ -79,8 +81,6 @@ class Opus(RTPCodec):
 
         Returns:
             Complete Ogg page bytes including CRC.
-
-        [RFC 3533]: https://datatracker.ietf.org/doc/html/rfc3533
         """
         lacing: list[int] = []
         for packet in packets:
@@ -101,23 +101,21 @@ class Opus(RTPCodec):
             len(lacing),
         ) + bytes(lacing)
         page = header + b"".join(packets)
-        return page[:22] + struct.pack("<I", cls.ogg_crc32(page)) + page[26:]
+        return page[:22] + struct.pack("<I", cls._ogg_crc32(page)) + page[26:]
 
     @classmethod
-    def ogg_container(cls, packet: bytes) -> bytes:
+    def _ogg_container(cls, packet: bytes) -> bytes:
         """Wrap a raw Opus RTP payload in a minimal Ogg Opus container.
 
         Produces a three-page Ogg stream: BOS (OpusHead), comment
         (OpusTags), and the single data page.  Opus always uses 48 000 Hz
-        internally ([RFC 7587 §4][]).
+        internally ([RFC 7587 §4](https://datatracker.ietf.org/doc/html/rfc7587#section-4)).
 
         Args:
             packet: Raw Opus RTP payload bytes.
 
         Returns:
             Ogg Opus container bytes suitable for PyAV decoding.
-
-        [RFC 7587 §4]: https://datatracker.ietf.org/doc/html/rfc7587#section-4
         """
         serial_number = int.from_bytes(os.urandom(4), "little")
         vendor = b"voip"
@@ -138,9 +136,9 @@ class Opus(RTPCodec):
         )
         return b"".join(
             [
-                cls.ogg_page(0x02, 0, serial_number, 0, [opus_head]),  # BOS
-                cls.ogg_page(0x00, 0, serial_number, 1, [opus_tags]),
-                cls.ogg_page(0x04, 0, serial_number, 2, [packet]),
+                cls._ogg_page(0x02, 0, serial_number, 0, [opus_head]),  # BOS
+                cls._ogg_page(0x00, 0, serial_number, 1, [opus_tags]),
+                cls._ogg_page(0x04, 0, serial_number, 2, [packet]),
             ]
         )
 
@@ -152,7 +150,7 @@ class Opus(RTPCodec):
         *,
         input_rate_hz: int | None = None,
     ) -> np.ndarray:
-        return cls.decode_pcm(cls.ogg_container(payload), "ogg", output_rate_hz)
+        return cls.decode_pcm(cls._ogg_container(payload), "ogg", output_rate_hz)
 
     @classmethod
     def encode(cls, samples: np.ndarray) -> bytes:

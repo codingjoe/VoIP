@@ -11,143 +11,83 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import datetime
 import logging
-from typing import Any, ClassVar
+import re
+import typing
 
 import numpy as np
 import ollama
 from faster_whisper import WhisperModel
 from pocket_tts import TTSModel
 
-from voip.audio import AudioCall
-from voip.codecs import Codec
-from voip.codecs.g722 import G722
-from voip.codecs.opus import Opus
-from voip.codecs.pcma import PCMA
-from voip.codecs.pcmu import PCMU
+from voip.audio import VoiceActivityCall
+
+if typing.TYPE_CHECKING:
+    import pathlib
+
+    import torch
 
 __all__ = ["TranscribeCall", "AgentCall"]
 
 logger = logging.getLogger(__name__)
 
 
-@dataclasses.dataclass(kw_only=True)
-class TranscribeCall(AudioCall):
-    """RTP call handler that transcribes audio with faster-whisper.
+@dataclasses.dataclass(kw_only=True, slots=True)
+class TranscribeCall(VoiceActivityCall):
+    """Transcribe incoming call audio.
 
     Audio is decoded by [`AudioCall`][voip.audio.AudioCall] on a per-packet
     basis and delivered to [`audio_received`][voip.audio.AudioCall.audio_received],
-    which applies an energy-based voice activity detector (VAD).  Speech
-    packets are accumulated until silence is sustained for
-    `silence_gap` seconds, then the
-    entire utterance is sent to Whisper as one chunk.  This avoids cutting
-    sentences in the middle and prevents background microphone noise from
-    being passed to Whisper as spurious audio.
+    which applies an energy-based voice activity detector (VAD) from
+    [`VoiceActivityCall`][voip.audio.VoiceActivityCall].  All audio frames
+    (speech and silence) are accumulated until silence is sustained for
+    `silence_gap` seconds, then the entire utterance is sent to Whisper as
+    one chunk.  This avoids cutting sentences in the middle and prevents
+    background microphone noise from being passed to Whisper as spurious audio.
 
-    Override [`transcription_received`][voip.ai.TranscribeCall.transcription_received]
-    to handle the resulting text:
+    Example:
+        Override [`transcription_received`][voip.ai.TranscribeCall.transcription_received]
+        to handle the resulting text:
 
-    ```python
-    class MySession(SessionInitiationProtocol):
-        def call_received(self, request: Request) -> None:
-            self.answer(request=request, call_class=MyCall)
-    ```
+        ```python
+        class MySession(SessionInitiationProtocol):
+            def call_received(self, request: Request) -> None:
+                self.answer(request=request, call_class=MyCall)
+        ```
 
-    To share one model instance across multiple calls (recommended to avoid
-    loading it multiple times) pass a pre-loaded `WhisperModel`:
+        To share one model instance across multiple calls (recommended to avoid
+        loading it multiple times) pass a pre-loaded `WhisperModel`:
 
-    ```python
-    shared_model = WhisperModel("base")
+        ```python
+        shared_model = WhisperModel("base")
 
-    class MyCall(TranscribeCall):
-        model = shared_model
-    ```
+        class MyCall(TranscribeCall):
+            model = shared_model
+        ```
+
+    Args:
+        stt_model: Whisper model to use for transcription.  Defaults to "base".
 
     """
 
-    model: str | WhisperModel = dataclasses.field(default="kyutai/stt-1b-en_fr-trfs")
-    whisper_model: WhisperModel = dataclasses.field(init=False, repr=False)
-
-    speech_threshold: float = dataclasses.field(default=0.001)
-    silence_gap: float = dataclasses.field(default=0.5)
-
-    speech_buffer: list[np.ndarray] = dataclasses.field(
-        init=False, repr=False, default_factory=list
-    )
-    transcription_handle: asyncio.TimerHandle | None = dataclasses.field(
-        init=False, repr=False, default=None
+    stt_model: WhisperModel = dataclasses.field(
+        default_factory=lambda: WhisperModel("base")
     )
 
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        if isinstance(self.model, str):
-            logger.debug("Loading Whisper model %r", self.model)
-            self.whisper_model = WhisperModel(self.model)
-        else:
-            self.whisper_model = self.model
-        self.speech_buffer = []
-        self.transcription_handle = None
-
-    def audio_received(self, *, audio: np.ndarray, rms: float) -> None:
-        self.speech_buffer.append(audio)
-        if rms > self.speech_threshold:
-            self.on_audio_speech()
-        else:
-            self.on_audio_silence()
-
-    def on_audio_speech(self) -> None:
-        """Cancel any pending transcription timer when speech is detected."""
-        if self.transcription_handle is not None:
-            self.transcription_handle.cancel()
-            self.transcription_handle = None
-
-    def on_audio_silence(self) -> None:
-        """Arm the transcription debounce timer on silence if not already running."""
-        if self.transcription_handle is None:
-            logger.debug("Silence detected")
-            loop = asyncio.get_event_loop()
-            self.transcription_handle = loop.call_later(
-                self.silence_gap,
-                self.flush_speech_buffer,
-            )
-
-    def flush_speech_buffer(self) -> None:
-        """Concatenate buffered audio and schedule async transcription.
-
-        Resets speech state so the next utterance starts with a clean buffer.
-        """
-        self.transcription_handle = None
-        # Ensure at least one second of audio to avoid cutting words in half.
-        if sum(len(c) for c in self.speech_buffer) < self.RESAMPLING_RATE_HZ:
-            self.speech_buffer.clear()
-            return
-        audio = np.concatenate(self.speech_buffer)
-        self.speech_buffer.clear()
-        asyncio.create_task(self.transcribe(audio))
+    async def voice_received(self, audio: np.ndarray) -> None:
+        await self.transcribe(audio)
 
     async def transcribe(self, audio: np.ndarray) -> None:
-        """Transcribe decoded audio and deliver non-empty text to the handler.
-
-        Args:
-            audio: Float32 mono PCM array at `RESAMPLING_RATE_HZ` Hz.
-        """
         loop = asyncio.get_running_loop()
         raw = await loop.run_in_executor(None, self.run_transcription, audio)
         if text := raw.strip():
             self.transcription_received(text)
 
     def run_transcription(self, audio: np.ndarray) -> str:
-        """Transcribe a float32 PCM array using the Whisper model.
-
-        Args:
-            audio: Float32 mono PCM array at `RESAMPLING_RATE_HZ` Hz.
-
-        Returns:
-            Concatenated transcription text from all segments.
-        """
-        segments, _ = self.whisper_model.transcribe(audio)
+        segments, _ = self.stt_model.transcribe(audio)
         result = "".join(segment.text for segment in segments)
-        logger.debug("Transcription result: %r", segments)
+        logger.debug("Transcription result: %r", result)
         return result
 
     def transcription_received(self, text: str) -> None:
@@ -158,124 +98,110 @@ class TranscribeCall(AudioCall):
         """
 
 
-@dataclasses.dataclass(kw_only=True)
+@dataclasses.dataclass(kw_only=True, slots=True)
 class AgentCall(TranscribeCall):
-    """RTP call handler that responds to caller speech using Ollama and Pocket TTS.
+    """
+    Respond to caller voice inputs with voice responses.
 
-    Extends [`TranscribeCall`][voip.ai.TranscribeCall] by feeding each
-    transcription to an Ollama language model, then synthesising the reply as
-    speech with Pocket TTS and streaming it back to the caller via RTP.
+    Uses Ollama to generate responses to transcribed
+    text and Pocket TTS to synthesize voice replies.
 
-    Chat history is maintained across turns so the language model can follow
-    the conversation.  A built-in system prompt informs the model that it is
-    on a phone call.
-
-    To share the TTS model across multiple calls pass a pre-loaded
-    `TTSModel`:
-
-    ```python
-    shared_tts = TTSModel.load_model()
-    AgentCall(rtp=..., sip=..., tts_model=shared_tts)
-    ```
+    Args:
+        system_prompt: Prompt to guide the language model.
+        llm_model: Ollama model to use for text generation.
+        tts_model: Pocket TTS model to use for voice synthesis.
+        voice: Voice to use for synthesis.
+        audio_interrupt_duration: Time you have to talk over the agent to interrupt the outbound audio.
     """
 
     system_prompt: str = (
-        "You are a person on a phone call. "
-        "Keep your answers very brief and conversational."
+        "You are a person on a phone call."
+        " Keep your answers very brief and conversational."
+        " YOU MUST NEVER USE NON-VERBAL CHARACTERS IN YOUR RESPONSES!"
     )
-    #: Preferred codecs in priority order (highest first).
-    PREFERRED_CODECS: ClassVar[list[type[Codec]]] = [Opus, G722, PCMU, PCMA]
+    llm_model: str = dataclasses.field(default="ministral-3")
+    tts_model: TTSModel = dataclasses.field(
+        default_factory=lambda: TTSModel.load_model()
+    )
+    voice: pathlib.Path | str | torch.Tensor = dataclasses.field(default="azelma")
+    audio_interrupt_duration: datetime.timedelta = datetime.timedelta(seconds=0.75)
+    _voice_state: dict[str, dict[str, torch.Tensor]] = dataclasses.field(
+        init=False, repr=False
+    )
+    _messages: list[dict] = dataclasses.field(init=False, repr=False)
+    _response_task: asyncio.Task | None = dataclasses.field(
+        init=False, repr=False, default=None
+    )
+    _cancel_audio_handle: asyncio.Handle | None = dataclasses.field(
+        init=False, repr=False, default=None
+    )
 
-    #: Ollama model name for generating replies.
-    ollama_model: str = dataclasses.field(default="llama3")
-    #: Pocket TTS voice name or path to a conditioning audio file.
-    voice: str = dataclasses.field(default="azelma")
-    #: Pre-loaded Pocket TTS model.  Pass a shared instance to avoid
-    #: loading the model separately for each call.
-    tts_model: TTSModel | None = dataclasses.field(default=None)
-
-    tts_instance: TTSModel = dataclasses.field(init=False, repr=False)
-    voice_state: Any = dataclasses.field(init=False, repr=False)
-    messages: list[dict] = dataclasses.field(init=False, repr=False)
-    pending_text: list[str] = dataclasses.field(init=False, repr=False)
-    response_task: asyncio.Task | None = dataclasses.field(init=False, repr=False)
+    emoji_pattern: typing.ClassVar[typing.Pattern[str]] = re.compile(
+        "["
+        "\U0001f600-\U0001f64f"  # emoticons
+        "\U0001f300-\U0001f5ff"  # symbols & pictographs
+        "\U0001f680-\U0001f6ff"  # transport & map symbols
+        "\U0001f1e0-\U0001f1ff"  # flags (iOS)
+        "\U00002702-\U000027b0"
+        "\U000024c2-\U0001f251"
+        "]+",
+        flags=re.UNICODE,
+    )
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.tts_instance = self.tts_model or TTSModel.load_model()
-        self.voice_state = self.tts_instance.get_state_for_audio_prompt(self.voice)  # type: ignore[arg-type]
-        self.messages = [
+        self.tts_model = self.tts_model or TTSModel.load_model()
+        self._voice_state = self.tts_model.get_state_for_audio_prompt(self.voice)
+        self._messages = [
             {
                 "role": "system",
-                "content": self.system_prompt
-                + "\n\nYOU MUST NEVER USE NON-VERBAL CHARACTERS IN YOUR RESPONSES!",
+                "content": self.system_prompt,
             }
         ]
-        self.pending_text = []
-        self.response_task = None
 
     def transcription_received(self, text: str) -> None:
-        match text:
-            case "":
-                return
-            case _:
-                self.pending_text.append(text)
-                if self.response_task is not None and not self.response_task.done():
-                    self.response_task.cancel()
-                self.response_task = asyncio.create_task(self.respond())
+        self.cancel_outbound_audio()
+        self._messages.append({"role": "user", "content": text})
+        if self._response_task is not None and not self._response_task.done():
+            self._response_task.cancel()
+        self._response_task = asyncio.create_task(self.respond())
 
     async def respond(self) -> None:
-        """Fetch an Ollama reply for pending text and stream it as speech via RTP.
-
-        On cancellation (human started speaking) the partial user turn is
-        removed from the chat history so the history stays consistent.
-        """
-        self.messages.append({"role": "user", "content": "\n".join(self.pending_text)})
-        self.pending_text.clear()
-        try:
-            response = await ollama.AsyncClient().chat(
-                model=self.ollama_model,
-                messages=self.messages,
-            )
-            reply = (response.message.content or "").encode("ascii", "ignore").decode()
-            self.messages.append({"role": "assistant", "content": reply})
-            logger.info("Agent reply: %r", reply)
-            await self.send_speech(reply)
-        except asyncio.CancelledError:
-            # Remove the partial user turn so history stays consistent.
-            if self.messages and self.messages[-1]["role"] == "user":
-                self.messages.pop()
-            raise
-        except Exception:
-            logger.exception("Error while generating agent response")
+        response = await ollama.AsyncClient().chat(
+            model=self.llm_model,
+            messages=self._messages,
+        )
+        # clean non-ascii characters from the response for TTS processing
+        reply = self.emoji_pattern.sub("", response.message.content or "")
+        self._messages.append({"role": "assistant", "content": reply})
+        logger.debug("Agent reply: %r", reply)
+        await self.send_speech(reply)
 
     async def send_speech(self, text: str) -> None:
-        """Stream synthesised speech from Pocket TTS and send via RTP.
-
-        Yields audio chunks from
-        `TTSModel.generate_audio_stream` as soon as they are decoded,
-        enabling low-latency real-time delivery to the caller.
-
-        Args:
-            text: Text to synthesise and transmit.
-        """
-        loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[np.ndarray | None] = asyncio.Queue()
-
-        def generate() -> None:
-            for chunk in self.tts_instance.generate_audio_stream(
-                self.voice_state,
-                text,  # type: ignore[too-many-positional-arguments]
-            ):
-                asyncio.run_coroutine_threadsafe(
-                    queue.put(chunk.numpy()), loop
-                ).result()
-            asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
-
-        future = loop.run_in_executor(None, generate)
-        while (tts_chunk := await queue.get()) is not None:
-            resampled = self.resample(
-                tts_chunk, self.tts_instance.sample_rate, self.codec.sample_rate_hz
+        audio = self.tts_model.generate_audio(
+            self._voice_state,
+            text,
+        )
+        await self.send_audio(
+            self.resample(
+                audio.numpy(), self.tts_model.sample_rate, self.codec.sample_rate_hz
             )
-            await self.send_rtp_audio(resampled)
-        await future
+        )
+
+    def on_audio_speech(self) -> None:
+        loop = asyncio.get_event_loop()
+        if self._cancel_audio_handle is None:
+            self._cancel_audio_handle = loop.call_later(
+                self.audio_interrupt_duration.total_seconds(),
+                self.cancel_outbound_audio,
+            )
+        super().on_audio_speech()
+
+    def on_audio_silence(self) -> None:
+        super().on_audio_silence()
+        try:
+            self._cancel_audio_handle.cancel()
+        except AttributeError:
+            pass
+        else:
+            self._cancel_audio_handle = None

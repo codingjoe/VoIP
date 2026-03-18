@@ -51,6 +51,7 @@ jobs:
           - "3.14"
         extra:
           - audio
+          - hd-audio
           - cli
           - pygments
     runs-on: ${{ matrix.os }}

@@ -1,11 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="640" height="320" font-family="Segoe UI, system-ui, sans-serif" viewBox="0 0 1280 640">
   <g transform="translate(120)">
     <circle cx="260" cy="320" r="200" fill="#FFD43B"/>
-    <path fill="none" stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="20" d="M180 222h48l24 60-30 18a132 132 0 0 0 60 60l18-30 60 24v48a24 24 0 0 1-24 24 192 192 0 0 1-180-180 24 24 0 0 1 24-24"/>
+    <path fill="#333" stroke="#333" stroke-linecap="round" stroke-linejoin="round" stroke-width="5" d="M180 222h48l24 60-30 18a132 132 0 0 0 60 60l18-30 60 24v48a24 24 0 0 1-24 24 192 192 0 0 1-180-180 24 24 0 0 1 24-24"/>
     <text x="240" y="90" fill="#306998" font-size="64" font-weight="bold" transform="matrix(1.6 0 0 1.6 120 120)">
       Python
     </text>
-    <text x="240" y="210" fill="#222" font-size="144" font-weight="bold" transform="matrix(1.6 0 0 1.6 120 120)">
+    <text x="240" y="210" fill="#333" font-size="144" font-weight="bold" transform="matrix(1.6 0 0 1.6 120 120)">
       VoIP
     </text>
   </g>

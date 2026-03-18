@@ -101,29 +101,11 @@ def _mask_caller(header: str) -> str:
 @dataclasses.dataclass(kw_only=True, slots=True)
 class SessionInitiationProtocol(asyncio.Protocol):
     """
-    SIP User Agent Client (UAC) over TLS/TCP [RFC 3261].
+    SIP User Agent Client (UAC) over TLS/TCP [RFC 3261][RFC 3261].
 
     Handles incoming calls and, optionally, carrier registration with digest
-    authentication [RFC 3261 §22].  All signalling is sent over a single
+    authentication [RFC 3261 §22].  All signaling is sent over a single
     persistent TLS/TCP connection.
-
-    RFC 3261 topology overview
-    --------------------------
-    *Outbound proxy* (§8.1.2): the SIP server this UA sends all requests to.
-    It may be a carrier edge proxy whose address differs from the registrar.
-
-    *Registrar* (§10): the server that maintains location bindings for a
-    domain.  Its URI is derived automatically from the `aor` by
-    stripping the user part (e.g. ``sips:alice@example.com`` →
-    ``sips:example.com``).  When no `outbound_proxy` is configured,
-    the UA is expected to connect directly to the registrar server.
-
-    When an `outbound_proxy` is configured it acts as the first SIP
-    hop and may differ from the registrar domain — for example when a carrier
-    provides a dedicated proxy at ``proxy.carrier.com`` while the AOR domain
-    (and thus the registrar Request-URI) is ``carrier.com``.
-
-    Subclass and override `call_received` to handle incoming calls:
 
     ```python
     class MySession(SessionInitiationProtocol):
@@ -145,6 +127,13 @@ class SessionInitiationProtocol(asyncio.Protocol):
 
     [RFC 3261]: https://datatracker.ietf.org/doc/html/rfc3261
     [RFC 3261 §22]: https://datatracker.ietf.org/doc/html/rfc3261#section-22
+
+    Attributes:
+        VIA_BRANCH_PREFIX:
+            RFC 3261 §8.1.1.7 Via branch magic cookie (indicates RFC 3261 compliance).
+        ALLOW:
+            RFC 3261 §11 – methods supported by this UA (used in Allow header).
+
     """
 
     #: RFC 3261 §8.1.1.7 Via branch magic cookie (indicates RFC 3261 compliance).
@@ -207,14 +196,6 @@ class SessionInitiationProtocol(asyncio.Protocol):
             pass  # no running loop in synchronous test setups
 
     async def _initialize(self) -> None:
-        """Set up the RTP mux and register with the carrier (in that order).
-
-        Creates a dedicated UDP socket for RTP (with optional STUN discovery
-        for NAT traversal) before sending REGISTER so the SDP answer can
-        advertise the correct public RTP address.  When the SIP connection is
-        over IPv6, the RTP socket is bound to ``::`` so media can also flow
-        over IPv6.
-        """
         loop = asyncio.get_running_loop()
         rtp_bind = (
             "::"
@@ -230,12 +211,6 @@ class SessionInitiationProtocol(asyncio.Protocol):
         await self.register()
 
     def data_received(self, data: bytes) -> None:
-        """Buffer incoming bytes and dispatch complete SIP messages.
-
-        SIP over TCP uses the ``Content-Length`` header to frame messages
-        (RFC 3261 §18.3).  Partial datagrams are accumulated until a full
-        message is available.
-        """
         self._buffer.extend(data)
         while True:
             end_of_headers = self._buffer.find(b"\r\n\r\n")
@@ -522,32 +497,32 @@ class SessionInitiationProtocol(asyncio.Protocol):
             request: The SIP CANCEL request.
         """
 
-    async def answer(self, request: Request, *, call_class: type[RTPCall]) -> None:
+    async def answer(
+        self, request: Request, *, call_class: type[RTPCall], **call_kwargs: typing.Any
+    ) -> None:
         """Answer an incoming call by setting up RTP and sending 200 OK with SDP.
 
-        This coroutine can be awaited directly or wrapped in a task:
+        Example:
+            This coroutine can be awaited directly or wrapped in a task:
 
-        ```python
-        # inside a sync call_received:
-        asyncio.create_task(self.answer(request=request, call_class=MyCall))
+            ```python
+            # inside a sync call_received:
+            asyncio.create_task(self.answer(request=request, call_class=MyCall))
 
-        # inside an async call_received:
-        await self.answer(request=request, call_class=MyCall)
-        ```
+            # inside an async call_received:
+            await self.answer(request=request, call_class=MyCall)
+            ```
 
         Args:
             request: The SIP INVITE request (from `call_received`).
             call_class: A `Call` subclass whose `negotiate_codec` selects the codec.
                 The class is constructed with ``rtp``, ``sip``, ``caller``,
                 and ``media`` keyword arguments.
+            call_kwargs: Optional additional keyword arguments to pass to the call class constructor.
 
         Raises:
             NotImplementedError: When `negotiate_codec` raises (no supported codec in the remote SDP offer).
         """
-        await self._answer(request, call_class)
-
-    async def _answer(self, request: Request, call_class: type[RTPCall]) -> None:
-        """Perform the asynchronous part of answering: set up RTP, send 200 OK."""
         call_id = request.headers.get("Call-ID", "")
         if call_id not in self._pending_invites:
             logger.error("No pending INVITE found for Call-ID %r", call_id)
@@ -611,6 +586,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
             caller=caller,
             media=negotiated_media,
             srtp=srtp_session,
+            **call_kwargs,
         )
         # Determine the remote RTP address for routing.
         # Per RFC 4566 §5.7 the effective connection address is taken from the

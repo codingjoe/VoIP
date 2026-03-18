@@ -6,7 +6,11 @@
 
 ::: voip.audio.AudioCall
 
-## AI / Agentic Calls
+::: voip.audio.VoiceActivityCall
+
+::: voip.audio.EchoCall
+
+## AI Calls
 
 ::: voip.ai.TranscribeCall
 

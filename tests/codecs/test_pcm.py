@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
-
 import pytest
 
 np = pytest.importorskip("numpy")
-av = pytest.importorskip("av")
 
 from voip.codecs.pcma import PCMA  # noqa: E402
 from voip.codecs.pcmu import PCMU  # noqa: E402
@@ -40,29 +37,45 @@ class TestPCMAConstants:
 
 
 class TestPCMADecode:
-    def test_decode__uses_alaw_format(self):
-        """Decode calls decode_pcm with the alaw PyAV format string."""
-        with patch.object(
-            PCMA, "decode_pcm", return_value=np.zeros(8000, dtype=np.float32)
-        ) as mock:
-            PCMA.decode(b"payload", 8000)
-        assert mock.call_args[0][1] == "alaw"
+    def test_decode__returns_float32(self):
+        """Decode produces float32 samples from A-law encoded input."""
+        payload = PCMA.encode(np.zeros(160, dtype=np.float32))
+        assert PCMA.decode(payload, 8000).dtype == np.float32
 
-    def test_decode__passes_sample_rate_as_default(self):
-        """Decode passes sample_rate_hz as input_rate_hz when not overridden."""
-        with patch.object(
-            PCMA, "decode_pcm", return_value=np.zeros(8000, dtype=np.float32)
-        ) as mock:
-            PCMA.decode(b"payload", 8000)
-        assert mock.call_args[1]["input_rate_hz"] == PCMA.sample_rate_hz
+    def test_decode__native_rate_preserves_sample_count(self):
+        """Decode at native 8 kHz returns one sample per byte."""
+        payload = PCMA.encode(np.zeros(160, dtype=np.float32))
+        assert len(PCMA.decode(payload, 8000)) == 160
 
-    def test_decode__uses_input_rate_hz_override(self):
-        """Decode passes the caller-supplied input_rate_hz when provided."""
-        with patch.object(
-            PCMA, "decode_pcm", return_value=np.zeros(16000, dtype=np.float32)
-        ) as mock:
-            PCMA.decode(b"payload", 16000, input_rate_hz=16000)
-        assert mock.call_args[1]["input_rate_hz"] == 16000
+    def test_decode__resamples_to_output_rate(self):
+        """Decode resamples to the requested output rate."""
+        payload = PCMA.encode(np.zeros(160, dtype=np.float32))
+        assert len(PCMA.decode(payload, 16000)) == 320
+
+    def test_decode__silence_roundtrip(self):
+        """Encode then decode silence returns values near zero."""
+        payload = PCMA.encode(np.zeros(160, dtype=np.float32))
+        result = PCMA.decode(payload, 8000)
+        assert np.allclose(result, 0.0, atol=0.02)
+
+    def test_decode__positive_and_negative_differ(self):
+        """Positive and negative input decode to values with opposite sign."""
+        pos = PCMA.decode(PCMA.encode(np.full(1, 0.5, dtype=np.float32)), 8000)
+        neg = PCMA.decode(PCMA.encode(np.full(1, -0.5, dtype=np.float32)), 8000)
+        assert pos[0] > 0
+        assert neg[0] < 0
+
+    def test_decode__uses_input_rate_hz_as_source_rate(self):
+        """input_rate_hz is treated as the source sample rate for resampling."""
+        payload = PCMA.encode(np.zeros(160, dtype=np.float32))
+        # 160 samples interpreted at 16 kHz, resampled to 8 kHz → 80 output samples.
+        result = PCMA.decode(payload, 8000, input_rate_hz=16000)
+        assert len(result) == 80
+
+    def test_decode__max_amplitude_codeword(self):
+        """A-law codeword 0xAA (max positive) decodes to exactly 0.984375 per ITU-T G.711."""
+        decoded = PCMA.decode(bytes([0xAA]), 8000)
+        assert abs(decoded[0] - 0.984375) < 1e-6
 
     def test_decode__real_decode_returns_float32(self):
         """Decode produces a float32 array from real A-law encoded input."""
@@ -86,6 +99,26 @@ class TestPCMAEncode:
         pos = PCMA.encode(np.array([0.5], dtype=np.float32))
         neg = PCMA.encode(np.array([-0.5], dtype=np.float32))
         assert pos != neg
+
+    def test_encode__silence_codeword(self):
+        """Silence (0.0) must encode to 0xD5 per ITU-T G.711 A-law."""
+        assert PCMA.encode(np.zeros(1, dtype=np.float32))[0] == 0xD5
+
+    def test_encode__max_amplitude_codeword(self):
+        """Maximum positive amplitude (1.0) must encode to 0xAA per ITU-T G.711."""
+        assert PCMA.encode(np.array([1.0], dtype=np.float32))[0] == 0xAA
+
+    def test_encode_decode__roundtrip_midrange(self):
+        """Roundtrip encode→decode stays within one G.711 quantisation step.
+
+        Values in segments 2–5 had ~3× the expected error with the old (wrong)
+        mantissa shift; this test guards against regression.
+        """
+        # Values chosen so all four land in segments 3–5 (magnitudes 1 000–8 191).
+        original = np.array([0.05, -0.05, 0.1, -0.1], dtype=np.float32)
+        recovered = PCMA.decode(PCMA.encode(original), 8000)
+        # Maximum step for segment 5 is 256/32768 ≈ 0.0078; allow ~2 steps of margin.
+        assert np.allclose(original, recovered, atol=1 / 64)
 
 
 class TestPCMUConstants:
@@ -115,29 +148,42 @@ class TestPCMUConstants:
 
 
 class TestPCMUDecode:
-    def test_decode__uses_mulaw_format(self):
-        """Decode calls decode_pcm with the mulaw PyAV format string."""
-        with patch.object(
-            PCMU, "decode_pcm", return_value=np.zeros(8000, dtype=np.float32)
-        ) as mock:
-            PCMU.decode(b"payload", 8000)
-        assert mock.call_args[0][1] == "mulaw"
+    def test_decode__returns_float32(self):
+        """Decode produces float32 samples from mu-law encoded input."""
+        payload = PCMU.encode(np.zeros(160, dtype=np.float32))
+        assert PCMU.decode(payload, 8000).dtype == np.float32
 
-    def test_decode__passes_sample_rate_as_default(self):
-        """Decode passes sample_rate_hz as input_rate_hz when not overridden."""
-        with patch.object(
-            PCMU, "decode_pcm", return_value=np.zeros(8000, dtype=np.float32)
-        ) as mock:
-            PCMU.decode(b"payload", 8000)
-        assert mock.call_args[1]["input_rate_hz"] == PCMU.sample_rate_hz
+    def test_decode__native_rate_preserves_sample_count(self):
+        """Decode at native 8 kHz returns one sample per byte."""
+        payload = PCMU.encode(np.zeros(160, dtype=np.float32))
+        assert len(PCMU.decode(payload, 8000)) == 160
 
-    def test_decode__uses_input_rate_hz_override(self):
-        """Decode passes the caller-supplied input_rate_hz when provided."""
-        with patch.object(
-            PCMU, "decode_pcm", return_value=np.zeros(16000, dtype=np.float32)
-        ) as mock:
-            PCMU.decode(b"payload", 16000, input_rate_hz=16000)
-        assert mock.call_args[1]["input_rate_hz"] == 16000
+    def test_decode__resamples_to_output_rate(self):
+        """Decode resamples to the requested output rate."""
+        payload = PCMU.encode(np.zeros(160, dtype=np.float32))
+        assert len(PCMU.decode(payload, 16000)) == 320
+
+    def test_decode__max_positive_roundtrip(self):
+        """Max positive amplitude (0x00) decodes to a large positive value."""
+        decoded = PCMU.decode(bytes([0x00]), 8000)
+        assert decoded[0] > 0.9
+
+    def test_decode__max_negative_roundtrip(self):
+        """Max negative amplitude (0x80) decodes to a large negative value."""
+        decoded = PCMU.decode(bytes([0x80]), 8000)
+        assert decoded[0] < -0.9
+
+    def test_decode__uses_input_rate_hz_as_source_rate(self):
+        """input_rate_hz is treated as the source sample rate for resampling."""
+        payload = PCMU.encode(np.zeros(160, dtype=np.float32))
+        # 160 samples interpreted at 16 kHz, resampled to 8 kHz → 80 output samples.
+        result = PCMU.decode(payload, 8000, input_rate_hz=16000)
+        assert len(result) == 80
+
+    def test_decode__silence_codeword(self):
+        """µ-law codeword 0x7F (silence) decodes to exactly 0.0 per ITU-T G.711."""
+        decoded = PCMU.decode(bytes([0x7F]), 8000)
+        assert decoded[0] == pytest.approx(0.0, abs=1e-7)
 
     def test_decode__real_decode_returns_float32(self):
         """Decode produces a float32 array from real mu-law encoded input."""

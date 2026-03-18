@@ -1,4 +1,4 @@
-"""Tests for AI-powered call handlers (WhisperCall and AgentCall)."""
+"""Tests for AI-powered call handlers (TranscribeCall and AgentCall)."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ G722_MEDIA = _make_media("9", "9 G722/8000")
 def make_whisper_call(
     model_mock: MagicMock, call_class=None, media: MediaDescription | None = None
 ) -> TranscribeCall:
-    """Return a WhisperCall with a mocked Whisper model."""
+    """Return a TranscribeCall with a mocked Whisper model."""
     cls = call_class or TranscribeCall
     med = media if media is not None else OPUS_MEDIA
     with patch("voip.ai.WhisperModel", return_value=model_mock):
@@ -75,13 +75,13 @@ def make_agent_call(
         )
 
 
-class TestWhisperCall:
+class TestTranscribeCall:
     def test_whisper_call__is_audio_call(self):
-        """WhisperCall is a subclass of AudioCall."""
+        """TranscribeCall is a subclass of AudioCall."""
         assert issubclass(TranscribeCall, AudioCall)
 
     def test_init__uses_pre_loaded_model_instance(self):
-        """When model is a WhisperModel instance it is stored directly (no re-load)."""
+        """When stt_model is a WhisperModel instance it is stored directly (no re-load)."""
         model_instance = MagicMock()
         with patch("voip.ai.WhisperModel") as wm_cls:
             # Pass the instance directly — the constructor must NOT be called again.
@@ -89,11 +89,11 @@ class TestWhisperCall:
                 rtp=MagicMock(),
                 sip=MagicMock(),
                 media=OPUS_MEDIA,
-                model=model_instance,
+                stt_model=model_instance,
                 caller=CallerID(""),
             )
         wm_cls.assert_not_called()
-        assert call.whisper_model is model_instance
+        assert call.stt_model is model_instance
 
     def test_init__stores_media(self):
         """Media is stored and accessible as self.media."""
@@ -111,63 +111,64 @@ class TestWhisperCall:
         assert call.payload_type == RTPPayloadType.PCMA
 
     def test_audio_received__initializes_vad_state(self):
-        """WhisperCall starts with an empty speech buffer and no timer."""
+        """TranscribeCall starts with an empty speech buffer and no flush timer."""
         call = make_whisper_call(MagicMock())
-        assert call.speech_buffer == []
-        assert call.transcription_handle is None
+        assert call._speech_buffer.size == 0
+        assert call._flush_voice_buffer_handle is None
 
     def test_audio_received__silence_audio_accumulates_in_buffer(self):
-        """Silence audio (below speech_threshold) is still buffered for transcription."""
+        """Silence audio (below voice_rms_threshold) is still buffered."""
         call = make_whisper_call(MagicMock())
-        with patch("voip.ai.asyncio.get_event_loop"):
+        with patch("voip.audio.asyncio.get_event_loop"):
             call.audio_received(audio=np.zeros(320, dtype=np.float32), rms=0.0)
-        assert len(call.speech_buffer) == 1
+        assert call._speech_buffer.size == 320
 
     def test_audio_received__speech_audio_accumulates_in_buffer(self):
-        """Audio above speech_threshold is added to _speech_buffer."""
+        """Audio above voice_rms_threshold is added to _speech_buffer."""
         call = make_whisper_call(MagicMock())
         speech = np.ones(320, dtype=np.float32) * 0.6
         call.audio_received(audio=speech, rms=0.6)
-        assert len(call.speech_buffer) == 1
+        assert call._speech_buffer.size == 320
 
-    def test_audio_received__silence_arms_transcription_timer(self):
-        """Silence arms the transcription debounce timer."""
+    def test_audio_received__silence_arms_flush_timer(self):
+        """Silence arms the flush debounce timer."""
         call = make_whisper_call(MagicMock())
-        with patch("voip.ai.asyncio.get_event_loop") as mock_loop:
+        with patch("voip.audio.asyncio.get_event_loop") as mock_loop:
             handle = MagicMock()
             mock_loop.return_value.call_later.return_value = handle
             call.audio_received(audio=np.zeros(320, dtype=np.float32), rms=0.0)
         mock_loop.return_value.call_later.assert_called_once_with(
-            call.silence_gap, call.flush_speech_buffer
+            call.silence_gap.total_seconds(),
+            call.flush_voice_buffer,
         )
-        assert call.transcription_handle is handle
+        assert call._flush_voice_buffer_handle is handle
 
     def test_audio_received__silence_does_not_rearm_when_timer_running(self):
         """A second silence packet does not create a second timer."""
         call = make_whisper_call(MagicMock())
-        call.transcription_handle = MagicMock()
-        with patch("voip.ai.asyncio.get_event_loop") as mock_loop:
+        call._flush_voice_buffer_handle = MagicMock()
+        with patch("voip.audio.asyncio.get_event_loop") as mock_loop:
             call.audio_received(audio=np.zeros(320, dtype=np.float32), rms=0.0)
         mock_loop.return_value.call_later.assert_not_called()
 
     def test_audio_received__speech_cancels_pending_timer(self):
-        """Speech audio cancels any running transcription debounce timer."""
+        """Speech audio cancels any running flush timer."""
         call = make_whisper_call(MagicMock())
         handle = MagicMock()
-        call.transcription_handle = handle
+        call._flush_voice_buffer_handle = handle
         call.audio_received(audio=np.ones(320, dtype=np.float32) * 0.6, rms=0.6)
         handle.cancel.assert_called_once()
-        assert call.transcription_handle is None
+        assert call._flush_voice_buffer_handle is None
 
     def test_audio_received__empty_array_accumulates_in_buffer(self):
         """Zero-length audio arrays are accepted into the speech buffer."""
         call = make_whisper_call(MagicMock())
-        with patch("voip.ai.asyncio.get_event_loop"):
+        with patch("voip.audio.asyncio.get_event_loop"):
             call.audio_received(audio=np.zeros(0, dtype=np.float32), rms=0.0)
-        assert len(call.speech_buffer) == 1
+        assert call._speech_buffer.size == 0
 
     async def test_flush_speech_buffer__transcribes_accumulated_audio(self):
-        """_flush_speech_buffer concatenates speech and schedules transcription."""
+        """flush_voice_buffer concatenates speech and schedules transcription."""
         transcriptions = []
         model_mock = MagicMock()
         seg = MagicMock()
@@ -179,30 +180,39 @@ class TestWhisperCall:
                 transcriptions.append(text)
 
         call = make_whisper_call(model_mock, Capture)
-        chunk = np.ones(320, dtype=np.float32)
-        call.speech_buffer = [chunk] * 60
-        # Set silence_gap=0 so the minimum-length check passes with one chunk.
-        call.silence_gap = 0
-        call.flush_speech_buffer()
+        # Fill buffer with 2 s of audio to pass the length and RMS thresholds.
+        call._speech_buffer = np.ones(call.sampling_rate_hz * 2, dtype=np.float32)
+        call.flush_voice_buffer()
         await asyncio.sleep(0.1)
         assert transcriptions == ["hello"]
-        assert call.speech_buffer == []
+        assert call._speech_buffer.size == 0
 
     def test_flush_speech_buffer__no_op_when_buffer_empty(self):
-        """_flush_speech_buffer does nothing when the speech buffer is empty."""
+        """flush_voice_buffer does nothing when the speech buffer is empty."""
         call = make_whisper_call(MagicMock())
-        with patch("voip.ai.asyncio.create_task") as mock_ct:
-            call.flush_speech_buffer()
+        with patch("voip.audio.asyncio.create_task") as mock_ct:
+            call.flush_voice_buffer()
         mock_ct.assert_not_called()
 
     def test_flush_speech_buffer__resets_state(self):
-        """_flush_speech_buffer clears _transcription_handle and the speech buffer."""
+        """flush_voice_buffer clears _flush_voice_buffer_handle and the speech buffer."""
         call = make_whisper_call(MagicMock())
-        call.transcription_handle = MagicMock()
-        call.speech_buffer = [np.zeros(1, dtype=np.float32)]
-        with patch("voip.ai.asyncio.create_task"):
-            call.flush_speech_buffer()
-        assert call.transcription_handle is None
+        call._flush_voice_buffer_handle = MagicMock()
+        call._speech_buffer = np.ones(call.sampling_rate_hz * 2, dtype=np.float32)
+        with patch("voip.audio.asyncio.create_task", side_effect=lambda c: c.close()):
+            call.flush_voice_buffer()
+        assert call._flush_voice_buffer_handle is None
+
+    async def test_speech_buffer_ready__skips_short_audio(self):
+        """flush_voice_buffer discards audio shorter than silence_gap."""
+        model_mock = MagicMock()
+        call = make_whisper_call(model_mock)
+        # Pre-fill the buffer with fewer samples than sampling_rate_hz * silence_gap_secs.
+        call._speech_buffer = np.ones(100, dtype=np.float32)
+        with patch("voip.audio.asyncio.create_task") as mock_ct:
+            call.flush_voice_buffer()
+        mock_ct.assert_not_called()
+        model_mock.transcribe.assert_not_called()
 
     async def test_transcribe__strips_whitespace(self):
         """Strip leading and trailing whitespace from the transcription text."""
@@ -254,7 +264,7 @@ class TestWhisperCall:
         ) as mock_decode:
             call.decode_payload(b"pkt")
         mock_decode.assert_called_once_with(
-            b"pkt", AudioCall.RESAMPLING_RATE_HZ, input_rate_hz=call.sample_rate
+            b"pkt", call.sampling_rate_hz, input_rate_hz=call.sample_rate
         )
 
     def test_decode_payload__pcma__delegates_to_pcma_codec(self):
@@ -266,7 +276,7 @@ class TestWhisperCall:
         ) as mock_decode:
             call.decode_payload(b"pkt")
         mock_decode.assert_called_once_with(
-            b"pkt", AudioCall.RESAMPLING_RATE_HZ, input_rate_hz=call.sample_rate
+            b"pkt", call.sampling_rate_hz, input_rate_hz=call.sample_rate
         )
 
     def test_decode_payload__pcmu__delegates_to_pcmu_codec(self):
@@ -278,7 +288,7 @@ class TestWhisperCall:
         ) as mock_decode:
             call.decode_payload(b"pkt")
         mock_decode.assert_called_once_with(
-            b"pkt", AudioCall.RESAMPLING_RATE_HZ, input_rate_hz=call.sample_rate
+            b"pkt", call.sampling_rate_hz, input_rate_hz=call.sample_rate
         )
 
     def test_decode_payload__passes_sdp_sample_rate_as_input(self):
@@ -291,7 +301,7 @@ class TestWhisperCall:
         ) as mock_decode:
             call.decode_payload(b"pkt")
         mock_decode.assert_called_once_with(
-            b"pkt", AudioCall.RESAMPLING_RATE_HZ, input_rate_hz=16000
+            b"pkt", call.sampling_rate_hz, input_rate_hz=16000
         )
 
     async def test_transcribe__raises_on_general_error(self):
@@ -334,7 +344,7 @@ class TestWhisperCall:
 
 class TestAgentCall:
     def test_agent_call__is_whisper_call(self):
-        """AgentCall is a subclass of WhisperCall."""
+        """AgentCall is a subclass of TranscribeCall."""
         assert issubclass(AgentCall, TranscribeCall)
 
     def test_init__loads_tts_model_when_none(self):
@@ -350,7 +360,7 @@ class TestAgentCall:
                 rtp=MagicMock(), sip=MagicMock(), media=OPUS_MEDIA, caller=CallerID("")
             )
         tts_cls.load_model.assert_called_once()
-        assert call.tts_instance is tts_mock
+        assert call.tts_model is tts_mock
 
     def test_init__uses_provided_tts_model(self):
         """Use the provided TTSModel instance instead of loading a new one."""
@@ -368,7 +378,7 @@ class TestAgentCall:
                 caller=CallerID(""),
             )
         tts_cls.load_model.assert_not_called()
-        assert call.tts_instance is tts_mock
+        assert call.tts_model is tts_mock
 
     def test_init__loads_voice_state(self):
         """Get the voice state from the TTS model on init."""
@@ -388,35 +398,39 @@ class TestAgentCall:
                 caller=CallerID(""),
             )
         tts_mock.get_state_for_audio_prompt.assert_called_once_with("alba")
-        assert call.voice_state is voice_state
+        assert call._voice_state is voice_state
 
     def test_init__initializes_pending_state(self):
-        """AgentCall starts with empty pending text and no response task."""
+        """AgentCall starts with an empty response task."""
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
         call = make_agent_call(MagicMock(), tts_mock)
-        assert call.pending_text == []
-        assert call.response_task is None
+        assert call._response_task is None
 
     def test_init__initializes_chat_history_with_system_prompt(self):
         """Chat history is seeded with a system prompt mentioning a phone call."""
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
         call = make_agent_call(MagicMock(), tts_mock)
-        assert len(call.messages) == 1
-        assert call.messages[0]["role"] == "system"
-        assert "phone" in call.messages[0]["content"].lower()
+        assert len(call._messages) == 1
+        assert call._messages[0]["role"] == "system"
+        assert "phone" in call._messages[0]["content"].lower()
 
     def test_transcription_received__ignores_empty_text(self):
-        """transcription_received does not buffer empty text."""
+        """transcription_received appends empty text and creates a response task."""
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
         call = make_agent_call(MagicMock(), tts_mock)
-        call.transcription_received("")
-        assert call.pending_text == []
+        with patch(
+            "voip.ai.asyncio.create_task",
+            side_effect=lambda c: c.close() or MagicMock(),
+        ) as mock_ct:
+            call.transcription_received("")
+        mock_ct.assert_called_once()
+        assert {"role": "user", "content": ""} in call._messages
 
     def test_transcription_received__buffers_non_empty_text(self):
-        """transcription_received buffers text and creates a response task."""
+        """transcription_received appends a user message and creates a response task."""
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
         call = make_agent_call(MagicMock(), tts_mock)
@@ -425,7 +439,7 @@ class TestAgentCall:
             side_effect=lambda c: c.close() or MagicMock(),
         ) as mock_ct:
             call.transcription_received("hello")
-        assert call.pending_text == ["hello"]
+        assert {"role": "user", "content": "hello"} in call._messages
         mock_ct.assert_called_once()
 
     def test_transcription_received__schedules_response_task(self):
@@ -439,7 +453,7 @@ class TestAgentCall:
         ) as mock_ct:
             call.transcription_received("hello world")
         mock_ct.assert_called_once()
-        assert call.response_task is task_mock
+        assert call._response_task is task_mock
 
     def test_transcription_received__cancels_running_task_before_creating_new(self):
         """transcription_received cancels any existing response task."""
@@ -448,17 +462,17 @@ class TestAgentCall:
         call = make_agent_call(MagicMock(), tts_mock)
         old_task = MagicMock()
         old_task.done.return_value = False
-        call.response_task = old_task
+        call._response_task = old_task
         with patch("voip.ai.asyncio.create_task", side_effect=lambda c: c.close()):
             call.transcription_received("hello")
         old_task.cancel.assert_called_once()
 
     async def test_respond__calls_ollama_and_sends_speech(self):
-        """_respond fetches an Ollama reply, records it in history, and sends speech."""
+        """Respond fetches an Ollama reply, records it in history, and sends speech."""
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
         call = make_agent_call(MagicMock(), tts_mock)
-        call.pending_text = ["hello"]
+        call._messages.append({"role": "user", "content": "hello"})
         mock_response = MagicMock()
         mock_response.message.content = "I am an AI assistant."
         with (
@@ -473,18 +487,18 @@ class TestAgentCall:
             await call.respond()
 
         mock_send_speech.assert_awaited_once_with("I am an AI assistant.")
-        assert {"role": "user", "content": "hello"} in call.messages
+        assert {"role": "user", "content": "hello"} in call._messages
         assert {
             "role": "assistant",
             "content": "I am an AI assistant.",
-        } in call.messages
+        } in call._messages
 
     async def test_respond__passes_full_history_to_ollama(self):
-        """_respond passes the full message history (including system prompt) to Ollama."""
+        """Respond passes the full message history (including system prompt) to Ollama."""
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
         call = make_agent_call(MagicMock(), tts_mock)
-        call.pending_text = ["hello"]
+        call._messages.append({"role": "user", "content": "hello"})
         mock_response = MagicMock()
         mock_response.message.content = "reply"
         with (
@@ -501,31 +515,27 @@ class TestAgentCall:
         assert messages[0]["role"] == "system"
         assert messages[1] == {"role": "user", "content": "hello"}
 
-    async def test_respond__logs_exception_on_error(self, caplog):
-        """Log an exception when Ollama raises an error."""
-        import logging
-
+    async def test_respond__raises_exception_on_error(self):
+        """Exceptions from Ollama propagate out of respond()."""
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
         call = make_agent_call(MagicMock(), tts_mock)
-        call.pending_text = ["hello"]
+        call._messages.append({"role": "user", "content": "hello"})
         with (
             patch("voip.ai.ollama.AsyncClient") as mock_client_cls,
-            caplog.at_level(logging.ERROR, logger="voip.ai"),
+            pytest.raises(RuntimeError, match="ollama error"),
         ):
             mock_client = MagicMock()
             mock_client.chat = AsyncMock(side_effect=RuntimeError("ollama error"))
             mock_client_cls.return_value = mock_client
             await call.respond()
-        assert any("agent response" in r.message for r in caplog.records)
 
     async def test_respond__re_raises_cancelled_error(self):
-        """Re-raise CancelledError from Ollama and remove the partial user turn."""
+        """Re-raise CancelledError from Ollama."""
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
         call = make_agent_call(MagicMock(), tts_mock)
-        call.pending_text = ["hello"]
-        initial_history_len = len(call.messages)
+        call._messages.append({"role": "user", "content": "hello"})
         with (
             patch("voip.ai.ollama.AsyncClient") as mock_client_cls,
             pytest.raises(asyncio.CancelledError),
@@ -534,9 +544,7 @@ class TestAgentCall:
             mock_client.chat = AsyncMock(side_effect=asyncio.CancelledError())
             mock_client_cls.return_value = mock_client
             await call.respond()
-        # Partial user turn must be rolled back to keep history consistent
-        assert len(call.messages) == initial_history_len
 
     def test_preferred_codecs__opus_is_first(self):
         """AgentCall prefers Opus as the highest-priority outbound codec."""
-        assert AgentCall.PREFERRED_CODECS[0].payload_type == RTPPayloadType.OPUS
+        assert AgentCall.supported_codecs[0].payload_type == RTPPayloadType.OPUS

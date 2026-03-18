@@ -12,6 +12,7 @@ nav:
       - RFC Implementation Status: rfc_status.md
   - API Reference:
       - Calls: calls.md
+      - Codecs: codecs.md
       - RTP: rtp.md
       - SDP: sdp.md
       - SIP: sip.md

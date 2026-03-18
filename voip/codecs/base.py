@@ -1,41 +1,85 @@
-"""PyAV-based codec base class for RTP audio streams.
+"""Base class for RTP audio codecs.
 
-All concrete codec classes in this package inherit from [`PyAVCodec`][voip.codecs.av.PyAVCodec],
-which provides shared [`decode_pcm`][voip.codecs.av.PyAVCodec.decode_pcm] and
-[`encode_pcm`][voip.codecs.av.PyAVCodec.encode_pcm] helpers backed by [PyAV][].
+All concrete codec classes in this package inherit from
+[`RTPCodec`][voip.codecs.base.RTPCodec].
+
+Codecs that require [PyAV][] for decode/encode additionally inherit from
+[`PyAVCodec`][voip.codecs.av.PyAVCodec], which provides
+[`decode_pcm`][voip.codecs.av.PyAVCodec.decode_pcm] and
+[`encode_pcm`][voip.codecs.av.PyAVCodec.encode_pcm].
+
+Pure-NumPy codecs ([`PCMA`][voip.codecs.pcma.PCMA], [`PCMU`][voip.codecs.pcmu.PCMU])
+inherit directly from `RTPCodec` and require no PyAV dependency.
 
 [PyAV]: https://pyav.basswood-io.com/
 """
 
 from __future__ import annotations
 
-import io
+import dataclasses
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import ClassVar, Protocol
 
-import av
-import av.audio.resampler
 import numpy as np
 
 from voip.sdp.types import RTPPayloadFormat
 
-if TYPE_CHECKING:
-    pass
+__all__ = ["PayloadDecoder", "PerPacketDecoder", "RTPCodec"]
 
-__all__ = ["RTPCodec"]
+
+class PayloadDecoder(Protocol):
+    """Protocol for per-call RTP payload decoders.
+
+    Implementations decode raw RTP payload bytes to float32 mono PCM.
+    Stateful implementations (e.g. [`G722Decoder`][voip.codecs.g722.G722Decoder])
+    preserve codec predictor state across successive
+    [`decode`][voip.codecs.base.PayloadDecoder.decode] calls within a single
+    call session.
+    """
+
+    def decode(self, payload: bytes) -> np.ndarray:
+        """Decode one RTP payload to float32 mono PCM.
+
+        Args:
+            payload: Raw RTP payload bytes for a single packet.
+
+        Returns:
+            Float32 mono PCM array.
+        """
+        ...
 
 
 class RTPCodec:
-    """Base class for RTP audio codecs that decode and encode via PyAV.
+    """Base class for RTP audio codecs.
 
-    Concrete subclasses define codec-specific class variables and may override
-    [`decode`][voip.codecs.av.PyAVCodec.decode],
-    [`encode`][voip.codecs.av.PyAVCodec.encode], and
-    [`packetize`][voip.codecs.av.PyAVCodec.packetize].
+    Concrete implementations: [`Opus`][voip.codecs.Opus],
+    [`G722`][voip.codecs.G722], [`PCMA`][voip.codecs.pcma.PCMA],
+    [`PCMU`][voip.codecs.pcmu.PCMU].
+
+    Codec classes are stateless; every method is a classmethod or staticmethod
+    and codecs are referenced as `type[RTPCodec]`, never instantiated.
+    Per-call decoder state (required for ADPCM codecs such as G.722) is
+    managed by [`PayloadDecoder`][voip.codecs.base.PayloadDecoder] instances
+    returned by [`create_decoder`][voip.codecs.base.RTPCodec.create_decoder].
+
+    Concrete subclasses define codec-specific class variables and override
+    [`decode`][voip.codecs.base.RTPCodec.decode],
+    [`encode`][voip.codecs.base.RTPCodec.encode], and optionally
+    [`packetize`][voip.codecs.base.RTPCodec.packetize].
+
+    Subclasses may use the shared PyAV-backed helpers or implement
+    [`decode`][voip.codecs.base.RTPCodec.decode] and
+    [`encode`][voip.codecs.base.RTPCodec.encode] using alternative backends
+    such as NumPy.
 
     Subclasses that produce variable-length output across frames (e.g. G.722
     ADPCM) should override `packetize` to encode the whole buffer at once and
     preserve predictor state.
+
+    Subclasses that require [PyAV][] additionally inherit from
+    [`PyAVCodec`][voip.codecs.av.PyAVCodec].
+
+    [PyAV]: https://pyav.basswood-io.com/
     """
 
     payload_type: ClassVar[int]
@@ -60,80 +104,32 @@ class RTPCodec:
     """Channel count (1 = mono, 2 = stereo)."""
 
     @classmethod
-    def decode_pcm(
-        cls,
-        data: bytes,
-        av_format: str,
-        output_rate_hz: int,
-        *,
-        input_rate_hz: int | None = None,
+    def resample(
+        cls, audio: np.ndarray, source_rate_hz: int, destination_rate_hz: int
     ) -> np.ndarray:
-        """Decode raw audio bytes via PyAV into float32 mono PCM.
+        """Resample *audio* from *source_rate_hz* to *destination_rate_hz*.
+
+        Uses linear interpolation via [`numpy.interp`][].
 
         Args:
-            data: Raw audio bytes in the codec's wire format.
-            av_format: PyAV format string (e.g. `"ogg"`, `"alaw"`).
-            output_rate_hz: Target sample rate in Hz.
-            input_rate_hz: Input clock rate hint for the PyAV decoder, or
-                `None` for self-describing formats like Ogg.
+            audio: Float32 mono PCM array.
+            source_rate_hz: Sample rate of *audio* in Hz.
+            destination_rate_hz: Target sample rate in Hz.
 
         Returns:
-            Float32 mono PCM array at *output_rate_hz* Hz.
+            Resampled float32 array at *destination_rate_hz* Hz, or *audio*
+            unchanged when both rates are equal.
         """
-        resampler = av.audio.resampler.AudioResampler(
-            format="fltp", layout="mono", rate=output_rate_hz
-        )
-        frames: list[np.ndarray] = []
-        with av.open(
-            io.BytesIO(data),
-            mode="r",
-            format=av_format,
-            options=(
-                {"sample_rate": str(input_rate_hz)} if input_rate_hz is not None else {}
-            ),
-        ) as container:
-            for frame in container.decode(audio=0):
-                for resampled in resampler.resample(frame):
-                    frames.append(resampled.to_ndarray().flatten())
-        for resampled in resampler.resample(None):
-            frames.append(resampled.to_ndarray().flatten())
-        return np.concatenate(frames) if frames else np.array([], dtype=np.float32)
-
-    @classmethod
-    def encode_pcm(
-        cls,
-        samples: np.ndarray,
-        av_codec_name: str,
-        sample_rate_hz: int,
-    ) -> bytes:
-        """Encode float32 mono PCM to raw codec bytes via PyAV.
-
-        Args:
-            samples: Float32 mono PCM array in the range `[-1, 1]`.
-            av_codec_name: PyAV codec name (e.g. `"g722"` or `"libopus"`).
-            sample_rate_hz: Sample rate of *samples* in Hz.
-
-        Returns:
-            Encoded audio bytes.
-        """
-        codec: av.AudioCodecContext = cast(
-            av.AudioCodecContext, av.CodecContext.create(av_codec_name, "w")
-        )
-        codec.sample_rate = sample_rate_hz
-        codec.format = av.AudioFormat("s16")
-        codec.layout = av.AudioLayout("mono")
-        codec.open()
-        pcm = np.clip(np.round(samples * 32768.0), -32768, 32767).astype(np.int16)
-        frame = av.AudioFrame.from_ndarray(
-            pcm[np.newaxis, :], format="s16", layout="mono"
-        )
-        frame.sample_rate = sample_rate_hz
-        frame.pts = 0
-        return b"".join(
-            bytes(packet)
-            for segment in (codec.encode(frame), codec.encode(None))
-            for packet in segment
-        )
+        if source_rate_hz == destination_rate_hz:
+            return audio
+        if len(audio) == 0:
+            return np.empty(0, dtype=np.float32)
+        n_out = max(1, round(len(audio) * destination_rate_hz / source_rate_hz))
+        return np.interp(
+            np.linspace(0, len(audio) - 1, n_out),
+            np.arange(len(audio)),
+            audio,
+        ).astype(np.float32)
 
     @classmethod
     def to_payload_format(cls) -> RTPPayloadFormat:
@@ -163,8 +159,7 @@ class RTPCodec:
     ) -> np.ndarray:
         """Decode an RTP payload to float32 mono PCM.
 
-        Override in subclasses to wrap the payload in a container format
-        (e.g. Ogg for Opus) or select a codec-specific PyAV format string.
+        Override in subclasses to implement codec-specific decoding.
 
         Args:
             payload: Raw RTP payload bytes.
@@ -176,6 +171,28 @@ class RTPCodec:
             Float32 mono PCM array at *output_rate_hz* Hz.
         """
         raise NotImplementedError(f"{cls.__name__} does not implement decode.")
+
+    @classmethod
+    def create_decoder(
+        cls, output_rate_hz: int, *, input_rate_hz: int | None = None
+    ) -> PayloadDecoder:
+        """Create a stateless per-call payload decoder for this codec.
+
+        Override in subclasses that require stateful decoding across RTP
+        packets (e.g. G.722 ADPCM — see
+        [`G722.create_decoder`][voip.codecs.g722.G722.create_decoder]).
+
+        Args:
+            output_rate_hz: Target PCM sample rate in Hz for decoded audio.
+            input_rate_hz: Input clock rate override, or `None` to use the
+                codec default.
+
+        Returns:
+            A [`PayloadDecoder`][voip.codecs.base.PayloadDecoder] that, by
+            default, is a [`PerPacketDecoder`][voip.codecs.base.PerPacketDecoder]
+            delegating each call to [`decode`][voip.codecs.base.RTPCodec.decode].
+        """
+        return PerPacketDecoder(cls, output_rate_hz, input_rate_hz)
 
     @classmethod
     def encode(cls, samples: np.ndarray) -> bytes:
@@ -207,3 +224,36 @@ class RTPCodec:
         """
         for i in range(0, len(audio), cls.frame_size):
             yield cls.encode(audio[i : i + cls.frame_size])
+
+
+@dataclasses.dataclass(frozen=True)
+class PerPacketDecoder:
+    """Stateless payload decoder that processes each RTP packet independently.
+
+    Delegate each call to
+    [`RTPCodec.decode`][voip.codecs.base.RTPCodec.decode], decoding each
+    payload independently without preserving cross-packet state. Suitable for
+    stateless codecs such as PCMA, PCMU, and Opus.
+
+    Attributes:
+        codec: Codec class to delegate decoding to.
+        output_rate_hz: Target PCM sample rate in Hz.
+        input_rate_hz: Input clock rate override, or `None` to use the codec default.
+    """
+
+    codec: type[RTPCodec]
+    output_rate_hz: int
+    input_rate_hz: int | None = None
+
+    def decode(self, payload: bytes) -> np.ndarray:
+        """Decode one RTP payload to float32 PCM.
+
+        Args:
+            payload: Raw RTP payload bytes.
+
+        Returns:
+            Float32 mono PCM array at `output_rate_hz` Hz.
+        """
+        return self.codec.decode(
+            payload, self.output_rate_hz, input_rate_hz=self.input_rate_hz
+        )
