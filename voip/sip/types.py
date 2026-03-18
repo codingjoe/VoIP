@@ -17,7 +17,6 @@ __all__ = [
 import typing
 import urllib.parse
 from collections.abc import Iterator
-from typing import Any
 
 
 @dataclasses.dataclass(slots=True, eq=True)
