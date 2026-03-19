@@ -8,7 +8,7 @@ import ssl
 import time
 
 from voip.sip import messages
-from voip.sip.protocol import SessionInitiationProtocol, start_server
+from voip.sip.protocol import SessionInitiationProtocol
 from voip.sip.types import SipUri
 
 try:
@@ -305,9 +305,9 @@ async def _serve_sip(
 ) -> None:
     """Start a SIP server and listen indefinitely for incoming connections."""
     host, port = listen_addr
-    server = await start_server(
+    server = await asyncio.get_running_loop().create_server(
         session_factory,
-        host=host,
+        host=str(host),
         port=port,
     )
     async with server:

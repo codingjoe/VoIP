@@ -18,7 +18,6 @@ from voip.sip.protocol import (
     SessionInitiationProtocol,
     _format_host,
     _mask_caller,
-    start_server,
 )
 from voip.sip.types import CallerID, DigestAlgorithm, SIPStatus
 
@@ -1652,6 +1651,102 @@ class TestSIPProtocol:
         await asyncio.sleep(0.05)
         assert len(protocol._sent) == 1
 
+    async def test_run_keepalive__sends_double_crlf(self):
+        """Keep-alive task sends double-CRLF after the configured interval."""
+        protocol = SIP(
+            outbound_proxy=("127.0.0.1", 5061),
+            aor="sip:test@example.com",
+            rtp_stun_server_address=None,
+            keepalive_interval_secs=0.01,
+        )
+        transport = make_mock_transport()
+        protocol.connection_made(transport)
+        transport.write.reset_mock()
+        await asyncio.sleep(0.05)
+        transport.write.assert_any_call(b"\r\n\r\n")
+        protocol._keepalive_task.cancel()
+        protocol._initialize_task.cancel()
+
+    async def test_run_keepalive__stops_when_transport_cleared(self):
+        """Keep-alive loop exits cleanly when the transport is set to None."""
+        protocol = SIP(
+            outbound_proxy=("127.0.0.1", 5061),
+            aor="sip:test@example.com",
+            rtp_stun_server_address=None,
+            keepalive_interval_secs=0.01,
+        )
+        transport = make_mock_transport()
+        protocol.connection_made(transport)
+        transport.write.reset_mock()
+        protocol.transport = None
+        await asyncio.sleep(0.05)
+        transport.write.assert_not_called()
+        protocol._initialize_task.cancel()
+
+    async def test_connection_lost__cancels_and_clears_keepalive_task(self):
+        """connection_lost cancels the keepalive task and clears _keepalive_task."""
+        protocol = SIP(
+            outbound_proxy=("127.0.0.1", 5061),
+            aor="sip:test@example.com",
+            rtp_stun_server_address=None,
+        )
+
+        async def _long_running() -> None:
+            await asyncio.sleep(100)
+
+        task = asyncio.get_running_loop().create_task(_long_running())
+        protocol._keepalive_task = task
+        protocol.connection_lost(None)
+        assert protocol._keepalive_task is None
+        await asyncio.sleep(0)
+        assert task.done()
+
+    async def test_connection_lost__sets_disconnected_event(self):
+        """connection_lost sets the disconnected_event."""
+        protocol = SIP(
+            outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
+        )
+        assert not protocol.disconnected_event.is_set()
+        protocol.connection_lost(None)
+        assert protocol.disconnected_event.is_set()
+
+    async def test_disconnected_event__resolves_after_connection_lost(self):
+        """disconnected_event resolves once connection_lost is called."""
+        protocol = SIP(
+            outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
+        )
+
+        async def lose_connection() -> None:
+            await asyncio.sleep(0.01)
+            protocol.connection_lost(None)
+
+        asyncio.create_task(lose_connection())
+        await asyncio.wait_for(protocol.disconnected_event.wait(), timeout=1.0)
+        assert protocol.disconnected_event.is_set()
+
+    async def test_create_server__accepts_incoming_connection(self):
+        """loop.create_server with a SIP factory accepts incoming TCP connections."""
+        connected = asyncio.Event()
+
+        class ServerSession(SIP):
+            def connection_made(self, transport) -> None:
+                connected.set()
+
+        loop = asyncio.get_running_loop()
+        server = await loop.create_server(
+            lambda: ServerSession(aor="sip:test@example.com"),
+            host="127.0.0.1",
+            port=0,
+        )
+        port = server.sockets[0].getsockname()[1]
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        await asyncio.wait_for(connected.wait(), timeout=1.0)
+        assert connected.is_set()
+        writer.close()
+        await writer.wait_closed()
+        server.close()
+        await server.wait_closed()
+
 
 # ---------------------------------------------------------------------------
 # Tests for SIP REGISTER / digest-auth / response handling
@@ -2088,6 +2183,30 @@ class TestRegistration:
                     ("192.0.2.2", 5060),
                 )
 
+    def test_build_contact__default__no_ob_param(self):
+        """Contact without ob=True has no ;ob parameter."""
+        p = make_register_session()
+        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
+        p._is_tls = True
+        contact = p._build_contact("alice")
+        assert ";ob" not in contact
+
+    def test_build_contact__ob_true__includes_ob_uri_param(self):
+        """Contact with ob=True includes the ;ob URI parameter (RFC 5626 §5)."""
+        p = make_register_session()
+        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
+        p._is_tls = True
+        assert p._build_contact("alice", ob=True) == (
+            "<sip:alice@127.0.0.1:5061;transport=tls;ob>"
+        )
+
+    def test_build_contact__sips_with_ob__includes_ob_before_closing_bracket(self):
+        """sips: Contact with ob=True places ;ob inside the angle brackets."""
+        p = make_register_session(aor="sips:alice@example.com")
+        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
+        p._is_tls = True
+        assert p._build_contact("alice", ob=True) == "<sips:alice@127.0.0.1:5061;ob>"
+
 
 # ---------------------------------------------------------------------------
 # Tests for digest_response (RFC 3261 §22, RFC 8760)
@@ -2273,179 +2392,3 @@ class TestDigestResponse:
             )
 
 
-# ---------------------------------------------------------------------------
-# Tests for RFC 5626 keep-alive pings
-# ---------------------------------------------------------------------------
-
-
-class TestKeepalive:
-    """Tests for RFC 5626 §4.4.1 client-initiated keep-alive pings."""
-
-    @pytest.mark.asyncio
-    async def test_run_keepalive__sends_double_crlf(self):
-        """Keep-alive task sends double-CRLF after the configured interval."""
-        p = SessionInitiationProtocol(
-            outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
-        )
-        transport = MagicMock()
-        p.transport = transport
-        p.keepalive_interval_secs = 0.01
-        task = asyncio.get_running_loop().create_task(p._run_keepalive())
-        await asyncio.sleep(0.05)
-        task.cancel()
-        transport.write.assert_called_with(b"\r\n\r\n")
-
-    @pytest.mark.asyncio
-    async def test_run_keepalive__stops_when_transport_is_none(self):
-        """Keep-alive loop exits cleanly when the transport is cleared."""
-        p = SessionInitiationProtocol(
-            outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
-        )
-        transport = MagicMock()
-        p.transport = transport
-        p.keepalive_interval_secs = 0.01
-        # Clear the transport before the first ping fires.
-        p.transport = None
-        task = asyncio.get_running_loop().create_task(p._run_keepalive())
-        await asyncio.sleep(0.05)
-        assert task.done()
-        transport.write.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_connection_made__starts_keepalive_task(self):
-        """connection_made starts a keep-alive task."""
-        p = SessionInitiationProtocol(
-            outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
-        )
-        transport = MagicMock()
-        transport.get_extra_info.side_effect = lambda key, default=None: {
-            "sockname": ("127.0.0.1", 5061),
-            "ssl_object": None,
-        }.get(key, default)
-
-        async def run():
-            p.connection_made(transport)
-            assert p._keepalive_task is not None
-            p._keepalive_task.cancel()
-            p._initialize_task.cancel()
-
-        await run()
-
-    def test_connection_lost__cancels_keepalive_task(self):
-        """connection_lost cancels any running keep-alive task."""
-        p = SessionInitiationProtocol(
-            outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
-        )
-        mock_task = MagicMock()
-        p._keepalive_task = mock_task
-        p.connection_lost(None)
-        mock_task.cancel.assert_called_once()
-        assert p._keepalive_task is None
-
-    def test_connection_lost__sets_disconnected_event(self):
-        """connection_lost sets the disconnected_event."""
-        p = SessionInitiationProtocol(
-            outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
-        )
-        assert not p.disconnected_event.is_set()
-        p.connection_lost(None)
-        assert p.disconnected_event.is_set()
-
-    @pytest.mark.asyncio
-    async def test_disconnected_event__can_be_awaited(self):
-        """disconnected_event resolves once connection_lost is called."""
-        p = SessionInitiationProtocol(
-            outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
-        )
-
-        async def lose_connection():
-            await asyncio.sleep(0.01)
-            p.connection_lost(None)
-
-        asyncio.create_task(lose_connection())
-        await asyncio.wait_for(p.disconnected_event.wait(), timeout=1.0)
-        assert p.disconnected_event.is_set()
-
-
-# ---------------------------------------------------------------------------
-# Tests for start_server
-# ---------------------------------------------------------------------------
-
-
-class TestStartServer:
-    @pytest.mark.asyncio
-    async def test_start_server__returns_asyncio_server(self):
-        """start_server returns a running asyncio.Server listening on the given port."""
-        p = SessionInitiationProtocol(
-            outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
-        )
-        server = await start_server(
-            lambda: p,
-            host="127.0.0.1",
-            port=0,  # OS assigns a free port
-        )
-        assert isinstance(server, asyncio.Server)
-        assert server.is_serving()
-        server.close()
-        await server.wait_closed()
-
-    @pytest.mark.asyncio
-    async def test_start_server__accepts_connection(self):
-        """start_server accepts an incoming TCP connection."""
-        connected = asyncio.Event()
-
-        class PingSession(SessionInitiationProtocol):
-            def connection_made(self, transport) -> None:
-                connected.set()
-
-        server = await start_server(
-            lambda: PingSession(aor="sip:test@example.com"),
-            host="127.0.0.1",
-            port=0,
-        )
-        port = server.sockets[0].getsockname()[1]
-        reader, writer = await asyncio.open_connection("127.0.0.1", port)
-        await asyncio.wait_for(connected.wait(), timeout=1.0)
-        assert connected.is_set()
-        writer.close()
-        await writer.wait_closed()
-        server.close()
-        await server.wait_closed()
-
-
-# ---------------------------------------------------------------------------
-# Tests for _build_contact with RFC 5626 ;ob parameter
-# ---------------------------------------------------------------------------
-
-
-class TestBuildContactOb:
-    def test_build_contact__ob_false__no_ob_param(self):
-        """Contact without ob=True has no ;ob parameter."""
-        p = SessionInitiationProtocol(
-            outbound_proxy=("127.0.0.1", 5061), aor="sip:alice@example.com"
-        )
-        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        p._is_tls = True
-        contact = p._build_contact("alice")
-        assert ";ob" not in contact
-
-    def test_build_contact__ob_true__includes_ob_param(self):
-        """Contact with ob=True includes the ;ob URI parameter."""
-        p = SessionInitiationProtocol(
-            outbound_proxy=("127.0.0.1", 5061), aor="sip:alice@example.com"
-        )
-        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        p._is_tls = True
-        contact = p._build_contact("alice", ob=True)
-        assert ";ob" in contact
-        assert contact == "<sip:alice@127.0.0.1:5061;transport=tls;ob>"
-
-    def test_build_contact__sips_with_ob(self):
-        """sips: Contact with ob=True includes ;ob inside the angle brackets."""
-        p = SessionInitiationProtocol(
-            outbound_proxy=("127.0.0.1", 5061), aor="sips:alice@example.com"
-        )
-        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        p._is_tls = True
-        contact = p._build_contact("alice", ob=True)
-        assert contact == "<sips:alice@127.0.0.1:5061;ob>"

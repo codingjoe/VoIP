@@ -496,6 +496,74 @@ class TestTranscribeCLI:
 
         asyncio.run(_run_whisper())
 
+    def test_transcribe__retries_on_os_error(self):
+        """_connect_sip retries when the outbound connection fails with OSError."""
+        from unittest.mock import AsyncMock
+
+        call_count = 0
+
+        async def fake_connection(factory, *, host, port, ssl):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise OSError("Connection refused")
+            raise KeyboardInterrupt
+
+        with (
+            patch.dict(sys.modules, _WHISPER_STUBS),
+            patch("asyncio.get_event_loop"),
+            patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
+            patch("voip.__main__.asyncio.sleep", new=AsyncMock()),
+        ):
+            mock_loop.return_value.create_connection = fake_connection
+            make_runner().invoke(
+                voip,
+                [
+                    "sip",
+                    "--password=p",
+                    "--stun-server=none",
+                    "sips:alice@example.com",
+                    "transcribe",
+                ],
+                catch_exceptions=False,
+            )
+        assert call_count == 3
+
+    def test_transcribe__reconnects_after_disconnect(self):
+        """_connect_sip reconnects when the disconnected_event is set."""
+        from unittest.mock import AsyncMock
+
+        call_count = 0
+
+        async def fake_connection(factory, *, host, port, ssl):
+            nonlocal call_count
+            call_count += 1
+            protocol = factory()
+            if call_count == 1:
+                protocol.disconnected_event.set()
+                return MagicMock(), protocol
+            raise KeyboardInterrupt
+
+        with (
+            patch.dict(sys.modules, _WHISPER_STUBS),
+            patch("asyncio.get_event_loop"),
+            patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
+            patch("voip.__main__.asyncio.sleep", new=AsyncMock()),
+        ):
+            mock_loop.return_value.create_connection = fake_connection
+            make_runner().invoke(
+                voip,
+                [
+                    "sip",
+                    "--password=p",
+                    "--stun-server=none",
+                    "sips:alice@example.com",
+                    "transcribe",
+                ],
+                catch_exceptions=False,
+            )
+        assert call_count == 2
+
 
 class TestAgentCLI:
     def test_agent__sips_aor_uses_tls(self):
@@ -806,81 +874,8 @@ class TestEchoCLI:
 
         asyncio.run(run())
 
-
-class TestReconnect:
-    def test_connect_sip__retries_on_os_error(self):
-        """_connect_sip retries when the connection fails with OSError."""
-        from unittest.mock import AsyncMock
-
-        call_count = 0
-
-        async def fake_connection(factory, *, host, port, ssl):
-            nonlocal call_count
-            call_count += 1
-            if call_count < 3:
-                raise OSError("Connection refused")
-            raise KeyboardInterrupt
-
-        with (
-            patch.dict(sys.modules, _WHISPER_STUBS),
-            patch("asyncio.get_event_loop"),
-            patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
-            patch("voip.__main__.asyncio.sleep", new=AsyncMock()),
-        ):
-            mock_loop.return_value.create_connection = fake_connection
-            make_runner().invoke(
-                voip,
-                [
-                    "sip",
-                    "--password=p",
-                    "--stun-server=none",
-                    "sips:alice@example.com",
-                    "transcribe",
-                ],
-                catch_exceptions=False,
-            )
-        assert call_count == 3
-
-    def test_connect_sip__reconnects_after_disconnect(self):
-        """_connect_sip reconnects when the connection drops (disconnected_event set)."""
-        from unittest.mock import AsyncMock
-
-        call_count = 0
-
-        async def fake_connection(factory, *, host, port, ssl):
-            nonlocal call_count
-            call_count += 1
-            protocol = factory()
-            if call_count == 1:
-                # Simulate immediate disconnect.
-                protocol.disconnected_event.set()
-                return MagicMock(), protocol
-            raise KeyboardInterrupt
-
-        with (
-            patch.dict(sys.modules, _WHISPER_STUBS),
-            patch("asyncio.get_event_loop"),
-            patch("voip.__main__.asyncio.get_running_loop") as mock_loop,
-            patch("voip.__main__.asyncio.sleep", new=AsyncMock()),
-        ):
-            mock_loop.return_value.create_connection = fake_connection
-            make_runner().invoke(
-                voip,
-                [
-                    "sip",
-                    "--password=p",
-                    "--stun-server=none",
-                    "sips:alice@example.com",
-                    "transcribe",
-                ],
-                catch_exceptions=False,
-            )
-        assert call_count == 2
-
-
-class TestListenMode:
-    def test_sip__listen_option_uses_start_server(self):
-        """--listen causes the command to call start_server instead of create_connection."""
+    def test_echo__listen_option_uses_create_server(self):
+        """--listen causes the echo command to call loop.create_server."""
         from unittest.mock import AsyncMock
 
         captured = {}

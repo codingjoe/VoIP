@@ -16,7 +16,6 @@ import logging
 import re
 import secrets
 import socket
-import ssl
 import typing
 import uuid
 
@@ -37,7 +36,7 @@ from .types import CallerID, DigestAlgorithm, DigestQoP, SIPStatus
 
 logger = logging.getLogger("voip.sip")
 
-__all__ = ["RegistrationError", "SIP", "SessionInitiationProtocol", "start_server"]
+__all__ = ["RegistrationError", "SIP", "SessionInitiationProtocol"]
 
 
 def _format_host(host: str | ipaddress.IPv4Address | ipaddress.IPv6Address) -> str:
@@ -984,65 +983,6 @@ class SessionInitiationProtocol(asyncio.Protocol):
             self._keepalive_task = None
         self.transport = None
         self.disconnected_event.set()
-
-
-async def start_server(
-    session_factory: typing.Callable[[], SessionInitiationProtocol],
-    host: str | ipaddress.IPv4Address | ipaddress.IPv6Address | None = None,
-    port: int = 5060,
-    *,
-    ssl_context: ssl.SSLContext | None = None,
-) -> asyncio.Server:
-    """Start a SIP TCP server that accepts incoming connections.
-
-    Each accepted TCP connection receives a new protocol instance created by
-    *session_factory*.  Pass an [`ssl.SSLContext`][ssl.SSLContext] to enable
-    TLS (recommended on port 5061).
-
-    Example:
-        ```python
-        import asyncio
-        import ssl
-
-        from voip.sip.protocol import SIP, start_server
-
-
-        class MySession(SIP):
-            def call_received(self, request) -> None:
-                asyncio.create_task(self.answer(request=request, call_class=MyCall))
-
-
-        async def main():
-            server = await start_server(
-                lambda: MySession(aor="sip:bob@0.0.0.0"),
-                host="0.0.0.0",
-                port=5060,
-            )
-            async with server:
-                await server.serve_forever()
-
-
-        asyncio.run(main())
-        ```
-
-    Args:
-        session_factory: Callable returning a new
-            [`SessionInitiationProtocol`][voip.sip.protocol.SessionInitiationProtocol]
-            instance for each incoming connection.
-        host: Interface to bind to.  ``None`` binds to all interfaces.
-        port: TCP port to listen on (default: 5060).
-        ssl_context: Optional TLS context.  When provided, the server
-            accepts TLS connections (recommended on port 5061).
-
-    Returns:
-        A running [`asyncio.Server`][asyncio.Server] instance.
-    """
-    return await asyncio.get_running_loop().create_server(
-        session_factory,
-        host=str(host) if host is not None else None,
-        port=port,
-        ssl=ssl_context,
-    )
 
 
 #: Short alias for `SessionInitiationProtocol`.

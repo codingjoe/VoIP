@@ -44,16 +44,16 @@ asyncio.run(main())
 
 ## SIP Server (accepting incoming connections)
 
-Use [`start_server`][voip.sip.protocol.start_server] to listen for incoming
-SIP connections instead of connecting outbound to a carrier.  This is useful
-for testing, local PBX setups, or any scenario where SIP clients connect
-directly to your application:
+Use [`loop.create_server`][asyncio.AbstractEventLoop.create_server] to listen
+for incoming SIP connections instead of connecting outbound to a carrier.  This
+is useful for testing, local PBX setups, or any scenario where SIP clients
+connect directly to your application:
 
 ```python
 import asyncio
 
 from voip.ai import TranscribeCall
-from voip.sip.protocol import SIP, start_server
+from voip.sip.protocol import SIP
 
 
 class MyCall(TranscribeCall):
@@ -67,7 +67,8 @@ class MySession(SIP):
 
 
 async def main():
-    server = await start_server(
+    loop = asyncio.get_running_loop()
+    server = await loop.create_server(
         lambda: MySession(aor="sip:alice@0.0.0.0"),
         host="0.0.0.0",
         port=5060,
