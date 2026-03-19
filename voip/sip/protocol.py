@@ -32,7 +32,7 @@ from voip.sdp.types import (
 from voip.srtp import SRTPSession
 
 from .messages import Message, Request, Response
-from .types import CallerID, DigestAlgorithm, DigestQoP, SIPStatus
+from .types import CallerID, DigestAlgorithm, DigestQoP, SIPMethod, SIPStatus
 
 logger = logging.getLogger("voip.sip")
 
@@ -140,9 +140,23 @@ class SessionInitiationProtocol(asyncio.Protocol):
     VIA_BRANCH_PREFIX: typing.ClassVar[str] = "z9hG4bK"
 
     #: RFC 3261 §11 – methods supported by this UA (used in Allow header).
-    ALLOW: typing.ClassVar[str] = (
-        "INVITE, ACK, BYE, CANCEL, REGISTER, OPTIONS, "
-        "PRACK, INFO, SUBSCRIBE, NOTIFY, REFER, MESSAGE, UPDATE, PUBLISH"
+    ALLOW: typing.ClassVar[str] = ", ".join(
+        [
+            SIPMethod.INVITE,
+            SIPMethod.ACK,
+            SIPMethod.BYE,
+            SIPMethod.CANCEL,
+            SIPMethod.REGISTER,
+            SIPMethod.OPTIONS,
+            SIPMethod.PRACK,
+            SIPMethod.INFO,
+            SIPMethod.SUBSCRIBE,
+            SIPMethod.NOTIFY,
+            SIPMethod.REFER,
+            SIPMethod.MESSAGE,
+            SIPMethod.UPDATE,
+            SIPMethod.PUBLISH,
+        ]
     )
 
     _pending_invites: set[str] = dataclasses.field(init=False, default_factory=set)
@@ -288,7 +302,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
         call_id = request.headers.get("Call-ID", "")
         peer_ip = addr[0] if addr else None
         match request.method:
-            case "INVITE":
+            case SIPMethod.INVITE:
                 caller = CallerID(request.headers.get("From", ""))
                 logger.info(
                     json.dumps(
@@ -312,9 +326,9 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 self._pending_invites.add(call_id)
                 self._to_tags[call_id] = secrets.token_hex(8)
                 self.call_received(request)
-            case "ACK":
+            case SIPMethod.ACK:
                 self.ack_received(request)
-            case "BYE":
+            case SIPMethod.BYE:
                 self._answered_calls.pop(call_id, None)
                 caller = CallerID(request.headers.get("From", ""))
                 logger.info(
@@ -345,7 +359,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 self._to_tags.pop(call_id, None)
                 self._cleanup_rtp_call(call_id)
                 self.bye_received(request)
-            case "CANCEL":
+            case SIPMethod.CANCEL:
                 caller = CallerID(request.headers.get("From", ""))
                 logger.info(
                     json.dumps(
@@ -389,7 +403,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 self._to_tags.pop(call_id, None)
                 self._cleanup_rtp_call(call_id)
                 self.cancel_received(request)
-            case "OPTIONS":
+            case SIPMethod.OPTIONS:
                 dialog_headers = {
                     key: value
                     for key, value in request.headers.items()
@@ -403,23 +417,23 @@ class SessionInitiationProtocol(asyncio.Protocol):
                     ),
                 )
                 self.options_received(request)
-            case "REGISTER":
+            case SIPMethod.REGISTER:
                 self.register_received(request)
-            case "INFO":
+            case SIPMethod.INFO:
                 self.info_received(request)
-            case "MESSAGE":
+            case SIPMethod.MESSAGE:
                 self.message_received(request)
-            case "NOTIFY":
+            case SIPMethod.NOTIFY:
                 self.notify_received(request)
-            case "SUBSCRIBE":
+            case SIPMethod.SUBSCRIBE:
                 self.subscribe_received(request)
-            case "PUBLISH":
+            case SIPMethod.PUBLISH:
                 self.publish_received(request)
-            case "REFER":
+            case SIPMethod.REFER:
                 self.refer_received(request)
-            case "PRACK":
+            case SIPMethod.PRACK:
                 self.prack_received(request)
-            case "UPDATE":
+            case SIPMethod.UPDATE:
                 self.update_received(request)
             case _:
                 raise NotImplementedError(
@@ -435,7 +449,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
         """
         if response.status_code == SIPStatus.OK and response.headers.get(
             "CSeq", ""
-        ).split()[-1:] == ["REGISTER"]:
+        ).split()[-1:] == [SIPMethod.REGISTER]:
             logger.info("Registration successful")
             self.registered()
             return
@@ -472,7 +486,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 password=self.password,
                 realm=realm,
                 nonce=nonce,
-                method="REGISTER",
+                method=SIPMethod.REGISTER,
                 uri=self.registrar_uri,
                 algorithm=algorithm,
                 qop=qop,
@@ -1011,7 +1025,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
             "From": self.aor,
             "To": self.aor,
             "Call-ID": self.call_id,
-            "CSeq": f"{self.cseq} REGISTER",
+            "CSeq": f"{self.cseq} {SIPMethod.REGISTER}",
             "Contact": self._build_contact(user),
             "Expires": "3600",  # 1 hour
             "Max-Forwards": "70",
@@ -1021,7 +1035,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
         if proxy_authorization is not None:
             headers["Proxy-Authorization"] = proxy_authorization
         self.send(
-            Request(method="REGISTER", uri=self.registrar_uri, headers=headers),
+            Request(method=SIPMethod.REGISTER, uri=self.registrar_uri, headers=headers),
         )
 
     def registered(self) -> None:
