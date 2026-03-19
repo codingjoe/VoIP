@@ -2,6 +2,7 @@
 
 import asyncio
 import dataclasses
+import datetime
 import hashlib
 import ipaddress
 import re
@@ -1657,7 +1658,7 @@ class TestSIPProtocol:
             outbound_proxy=("127.0.0.1", 5061),
             aor="sip:test@example.com",
             rtp_stun_server_address=None,
-            keepalive_interval_secs=0.01,
+            keepalive_interval=datetime.timedelta(seconds=0.01),
         )
         transport = make_mock_transport()
         protocol.connection_made(transport)
@@ -1673,7 +1674,7 @@ class TestSIPProtocol:
             outbound_proxy=("127.0.0.1", 5061),
             aor="sip:test@example.com",
             rtp_stun_server_address=None,
-            keepalive_interval_secs=0.01,
+            keepalive_interval=datetime.timedelta(seconds=0.01),
         )
         transport = make_mock_transport()
         protocol.connection_made(transport)
@@ -1703,18 +1704,14 @@ class TestSIPProtocol:
 
     async def test_connection_lost__sets_disconnected_event(self):
         """connection_lost sets the disconnected_event."""
-        protocol = SIP(
-            outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
-        )
+        protocol = SIP(outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com")
         assert not protocol.disconnected_event.is_set()
         protocol.connection_lost(None)
         assert protocol.disconnected_event.is_set()
 
     async def test_disconnected_event__resolves_after_connection_lost(self):
         """disconnected_event resolves once connection_lost is called."""
-        protocol = SIP(
-            outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
-        )
+        protocol = SIP(outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com")
 
         async def lose_connection() -> None:
             await asyncio.sleep(0.01)
@@ -2367,5 +2364,3 @@ class TestDigestResponse:
                 uri="sip:example.com",
                 algorithm="BLAKE2b",
             )
-
-

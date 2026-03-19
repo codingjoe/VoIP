@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import dataclasses
+import datetime
 import hashlib
 import ipaddress
 import json
@@ -134,6 +135,9 @@ class SessionInitiationProtocol(asyncio.Protocol):
         ALLOW:
             RFC 3261 §11 – methods supported by this UA (used in Allow header).
 
+    Args:
+        keepalive_interval: Keep-alive ping interval. Should be between 30 and 90 seconds.
+
     """
 
     #: RFC 3261 §8.1.1.7 Via branch magic cookie (indicates RFC 3261 compliance).
@@ -175,10 +179,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
     password: str | None = None
     #: STUN server used for RTP NAT traversal (SIP uses TLS/TCP; no STUN needed).
     rtp_stun_server_address: tuple[str, int] | None = ("stun.cloudflare.com", 3478)
-    #: RFC 5626 §4.4.1 keep-alive ping interval in seconds.
-    #: Pings are sent as double-CRLF (``\\r\\n\\r\\n``) over the TLS/TCP connection.
-    #: RFC 5626 §10 recommends at most 90 seconds; 30 s is a safe default for most NATs.
-    keepalive_interval_secs: float = 30.0
+    keepalive_interval: datetime.timedelta = datetime.timedelta(seconds=30)
     call_id: str = dataclasses.field(init=False)
     cseq: int = dataclasses.field(init=False, default=0)
     #: Local TCP socket address (host, port) — set when connection is established.
@@ -224,15 +225,8 @@ class SessionInitiationProtocol(asyncio.Protocol):
         await self.register()
 
     async def _run_keepalive(self) -> None:
-        r"""Periodically send RFC 5626 §4.4.1 keep-alive pings over the connection.
-
-        Sends a double-CRLF (``\r\n\r\n``) every
-        [`keepalive_interval_secs`][voip.sip.protocol.SessionInitiationProtocol.keepalive_interval_secs]
-        seconds to keep the TCP connection and any intermediate NAT mappings
-        alive.  The remote peer responds with a single CRLF (``\r\n``).
-        """
         while True:
-            await asyncio.sleep(self.keepalive_interval_secs)
+            await asyncio.sleep(self.keepalive_interval.total_seconds())
             if self.transport is None:
                 return
             logger.debug("Sending RFC 5626 §4.4.1 keep-alive ping")
