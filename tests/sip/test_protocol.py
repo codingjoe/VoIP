@@ -1129,6 +1129,36 @@ class TestSIPProtocol:
         assert received[0] is request
         assert request.headers["Call-ID"] in protocol._pending_invites
 
+    async def test_invite_received__calls_call_received(self):
+        """invite_received calls call_received as the user hook."""
+        received = []
+
+        class MySIP(SIP):
+            def call_received(self, request):
+                received.append(request)
+
+        protocol = MySIP(outbound_proxy=("127.0.0.1", 5060), aor="sip:test@example.com")
+        protocol.connection_made(make_mock_transport())
+        request = make_invite()
+        protocol.invite_received(request)
+        assert len(received) == 1
+        assert received[0] is request
+
+    async def test_invite_received__dedup_retransmission(self):
+        """invite_received silently drops a duplicate INVITE for the same Call-ID."""
+        received = []
+
+        class MySIP(SIP):
+            def call_received(self, request):
+                received.append(request)
+
+        protocol = MySIP(outbound_proxy=("127.0.0.1", 5060), aor="sip:test@example.com")
+        protocol.connection_made(make_mock_transport())
+        request = make_invite()
+        protocol.invite_received(request)
+        protocol.invite_received(request)  # retransmission
+        assert len(received) == 1  # only dispatched once
+
     async def test_call_received__noop_by_default(self):
         """call_received is a no-op in the base class."""
         protocol = SIP(outbound_proxy=("127.0.0.1", 5060), aor="sip:test@example.com")
@@ -1616,16 +1646,27 @@ class TestSIPProtocol:
         protocol.data_received(b"\r\n\r\n")
         transport.write.assert_called_once_with(b"\r\n")
 
-    async def test_request_received__unsupported_method__raises(self):
-        """Raise NotImplementedError for a completely unknown SIP method."""
-        protocol = SIP(outbound_proxy=("127.0.0.1", 5060), aor="sip:test@example.com")
-        protocol.connection_made(make_mock_transport())
-        request = Request(method="FOOBAR", uri="sip:alice@atlanta.com")
-        with pytest.raises(NotImplementedError, match="FOOBAR"):
-            protocol.request_received(request, ("192.0.2.1", 5060))
+    def test_request_received__unsupported_method__sends_405(self):
+        """Unknown SIP method returns 405 and logs a warning (does not raise)."""
+        protocol = self._CapturingSIP()
+        request = Request(
+            method="FOOBAR",
+            uri="sip:alice@atlanta.com",
+            headers={
+                "Via": "SIP/2.0/UDP pc33.atlanta.com",
+                "From": "sip:alice@atlanta.com",
+                "To": "sip:bob@biloxi.com",
+                "Call-ID": "foobar-1",
+                "CSeq": "1 FOOBAR",
+            },
+        )
+        protocol.request_received(request, ("192.0.2.1", 5060))
+        assert len(protocol._sent) == 1
+        response, _ = protocol._sent[0]
+        assert response.status_code == 405
 
     def test_allowed_methods__base_class__core_only(self):
-        """Base class advertises only the core SIP methods."""
+        """Base class advertises exactly the five methods that have base implementations."""
         protocol = self._CapturingSIP()
         assert protocol.allowed_methods == frozenset(
             {
