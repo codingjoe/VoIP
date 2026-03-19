@@ -271,9 +271,7 @@ async def _connect_sip(
             )
             backoff_secs = 1
             await protocol.disconnected_event.wait()
-            logger.info(
-                "SIP connection closed; reconnecting in %s s", backoff_secs
-            )
+            logger.info("SIP connection closed; reconnecting in %s s", backoff_secs)
         except (OSError, ssl.SSLError) as exc:
             logger.warning(
                 "SIP connection failed (%s); retrying in %s s", exc, backoff_secs

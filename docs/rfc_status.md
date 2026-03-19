@@ -2,14 +2,14 @@
 
 ## SIP Signaling
 
-| RFC                                                       | Title                                         | Status   | Notes                                                                   |
-| --------------------------------------------------------- | --------------------------------------------- | -------- | ----------------------------------------------------------------------- |
-| [RFC 3261](https://datatracker.ietf.org/doc/html/rfc3261) | SIP: Session Initiation Protocol              | Partial  | UAC only; REGISTER, INVITE, BYE, and digest authentication over TLS/TCP |
+| RFC                                                       | Title                                         | Status   | Notes                                                                                                                                                        |
+| --------------------------------------------------------- | --------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [RFC 3261](https://datatracker.ietf.org/doc/html/rfc3261) | SIP: Session Initiation Protocol              | Partial  | UAC only; REGISTER, INVITE, BYE, and digest authentication over TLS/TCP                                                                                      |
 | [RFC 5626](https://datatracker.ietf.org/doc/html/rfc5626) | Managing Client-Initiated Connections in SIP  | Complete | Double-CRLF keepalive ping/pong (§4.4.1); client keepalive task; `Supported: outbound` and `;ob` Contact parameter (§5); reconnect with exponential back-off |
-| [RFC 8760](https://datatracker.ietf.org/doc/html/rfc8760) | SIP Digest Authentication Using AES-HMAC-SHA2 | Complete | MD5, SHA-256, and SHA-512/256 digest responses                          |
-| [RFC 3824](https://datatracker.ietf.org/doc/html/rfc3824) | Using E.164 Numbers with SIP                  | Planned  | Phone number mapping into SIP/ENUM                                      |
-| [RFC 3966](https://datatracker.ietf.org/doc/html/rfc3966) | The tel URI for Telephone Numbers             | Planned  | Canonical `tel:` URI scheme                                             |
-| [RFC 6116](https://datatracker.ietf.org/doc/html/rfc6116) | The E.164 to URI DDDS Application (ENUM)      | Planned  | DNS-based E.164 number-to-URI mapping                                   |
+| [RFC 8760](https://datatracker.ietf.org/doc/html/rfc8760) | SIP Digest Authentication Using AES-HMAC-SHA2 | Complete | MD5, SHA-256, and SHA-512/256 digest responses                                                                                                               |
+| [RFC 3824](https://datatracker.ietf.org/doc/html/rfc3824) | Using E.164 Numbers with SIP                  | Planned  | Phone number mapping into SIP/ENUM                                                                                                                           |
+| [RFC 3966](https://datatracker.ietf.org/doc/html/rfc3966) | The tel URI for Telephone Numbers             | Planned  | Canonical `tel:` URI scheme                                                                                                                                  |
+| [RFC 6116](https://datatracker.ietf.org/doc/html/rfc6116) | The E.164 to URI DDDS Application (ENUM)      | Planned  | DNS-based E.164 number-to-URI mapping                                                                                                                        |
 
 ## Media Transport
 
