@@ -11,7 +11,7 @@ import asyncio
 import ssl
 
 from voip.ai import TranscribeCall
-from voip.sip.protocol import SIP, start_server
+from voip.sip.protocol import SIP
 
 
 class MyCall(TranscribeCall):
