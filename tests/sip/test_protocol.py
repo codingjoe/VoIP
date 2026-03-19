@@ -19,7 +19,7 @@ from voip.sip.protocol import (
     _format_host,
     _mask_caller,
 )
-from voip.sip.types import CallerID, DigestAlgorithm, SIPStatus
+from voip.sip.types import CallerID, DigestAlgorithm, SIPMethod, SIPStatus
 
 INVITE_WITH_PCMA = (
     b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
@@ -1624,8 +1624,44 @@ class TestSIPProtocol:
         with pytest.raises(NotImplementedError, match="FOOBAR"):
             protocol.request_received(request, ("192.0.2.1", 5060))
 
-    def test_request_received__options__sends_200_ok(self):
-        """Send 200 OK with Allow header for OPTIONS and call options_received."""
+    def test_allowed_methods__base_class__core_only(self):
+        """Base class advertises only the core SIP methods."""
+        protocol = self._CapturingSIP()
+        assert protocol.allowed_methods == frozenset(
+            {
+                SIPMethod.INVITE,
+                SIPMethod.ACK,
+                SIPMethod.BYE,
+                SIPMethod.CANCEL,
+                SIPMethod.OPTIONS,
+            }
+        )
+
+    def test_allow_header__format(self):
+        """allow_header returns comma-separated methods in SIPMethod enum order."""
+        protocol = self._CapturingSIP()
+        parts = [p.strip() for p in protocol.allow_header.split(",")]
+        assert set(parts) == {str(m) for m in protocol.allowed_methods}
+        # Verify enum order is preserved (no items from outside allowed_methods)
+        assert all(p in list(SIPMethod) for p in parts)
+
+    def test_allowed_methods__with_handler__includes_method(self):
+        """Subclass that defines a handler gets that method added to allowed_methods."""
+
+        class MySIP(self._CapturingSIP):
+            def register_received(self, request: Request) -> None:
+                pass
+
+            def message_received(self, request: Request) -> None:
+                pass
+
+        protocol = MySIP()
+        assert SIPMethod.REGISTER in protocol.allowed_methods
+        assert SIPMethod.MESSAGE in protocol.allowed_methods
+        assert SIPMethod.INFO not in protocol.allowed_methods
+
+    def test_request_received__options__sends_200_ok_with_allow(self):
+        """OPTIONS returns 200 OK whose Allow header lists all supported methods."""
         protocol = self._CapturingSIP()
         request = Request(
             method="OPTIONS",
@@ -1642,15 +1678,40 @@ class TestSIPProtocol:
         assert len(protocol._sent) == 1
         response, _ = protocol._sent[0]
         assert response.status_code == 200
-        assert "Allow" in response.headers
+        allowed = {m.strip() for m in response.headers["Allow"].split(",")}
+        assert allowed == {str(m) for m in protocol.allowed_methods}
 
-    def test_request_received__options__calls_options_received(self):
-        """Call options_received hook when an OPTIONS request is received."""
-        received = []
+    def test_request_received__options__allow_grows_with_handlers(self):
+        """Allow header in OPTIONS response reflects dynamically detected handlers."""
+
+        class MySIP(self._CapturingSIP):
+            def register_received(self, request: Request) -> None:
+                pass
+
+        protocol = MySIP()
+        request = Request(
+            method="OPTIONS",
+            uri="sip:bob@biloxi.com",
+            headers={
+                "Via": "SIP/2.0/UDP pc33.atlanta.com",
+                "From": "sip:alice@atlanta.com",
+                "To": "sip:bob@biloxi.com",
+                "Call-ID": "options-dyn-1",
+                "CSeq": "1 OPTIONS",
+            },
+        )
+        protocol.request_received(request, ("192.0.2.1", 5060))
+        response, _ = protocol._sent[0]
+        allowed = {m.strip() for m in response.headers["Allow"].split(",")}
+        assert SIPMethod.REGISTER in allowed
+
+    def test_request_received__options__override(self):
+        """Subclass override of options_received replaces the base implementation."""
+        called = []
 
         class MySIP(self._CapturingSIP):
             def options_received(self, request: Request) -> None:
-                received.append(request)
+                called.append(request)
 
         protocol = MySIP()
         request = Request(
@@ -1665,18 +1726,14 @@ class TestSIPProtocol:
             },
         )
         protocol.request_received(request, ("192.0.2.1", 5060))
-        assert len(received) == 1
-        assert received[0] is request
+        # Override is called, base 200 OK is NOT sent (subclass controls fully)
+        assert len(called) == 1
+        assert called[0] is request
+        assert len(protocol._sent) == 0
 
-    def test_request_received__register__calls_register_received(self):
-        """Call register_received hook when a REGISTER request is received."""
-        received = []
-
-        class MySIP(self._CapturingSIP):
-            def register_received(self, request: Request) -> None:
-                received.append(request)
-
-        protocol = MySIP()
+    def test_request_received__unimplemented_optional__returns_405(self):
+        """Known SIP method with no handler returns 405 Method Not Allowed."""
+        protocol = self._CapturingSIP()
         request = Request(
             method="REGISTER",
             uri="sip:example.com",
@@ -1684,201 +1741,86 @@ class TestSIPProtocol:
                 "Via": "SIP/2.0/UDP pc33.atlanta.com",
                 "From": "sip:alice@atlanta.com",
                 "To": "sip:alice@atlanta.com",
-                "Call-ID": "register-1",
+                "Call-ID": "reg-405-1",
                 "CSeq": "1 REGISTER",
             },
         )
         protocol.request_received(request, ("192.0.2.1", 5060))
-        assert len(received) == 1
-        assert received[0] is request
+        assert len(protocol._sent) == 1
+        response, _ = protocol._sent[0]
+        assert response.status_code == 405
+        assert "Allow" in response.headers
 
-    def test_request_received__info__calls_info_received(self):
-        """Call info_received hook when an INFO request is received."""
-        received = []
-
-        class MySIP(self._CapturingSIP):
-            def info_received(self, request: Request) -> None:
-                received.append(request)
-
-        protocol = MySIP()
+    @pytest.mark.parametrize(
+        "method",
+        [
+            SIPMethod.REGISTER,
+            SIPMethod.INFO,
+            SIPMethod.MESSAGE,
+            SIPMethod.NOTIFY,
+            SIPMethod.SUBSCRIBE,
+            SIPMethod.PUBLISH,
+            SIPMethod.REFER,
+            SIPMethod.PRACK,
+            SIPMethod.UPDATE,
+        ],
+    )
+    def test_request_received__optional_method__405_when_not_implemented(
+        self, method: SIPMethod
+    ):
+        """Each optional SIP method returns 405 when handler is absent."""
+        protocol = self._CapturingSIP()
         request = Request(
-            method="INFO",
+            method=method,
             uri="sip:bob@biloxi.com",
             headers={
                 "Via": "SIP/2.0/UDP pc33.atlanta.com",
                 "From": "sip:alice@atlanta.com",
                 "To": "sip:bob@biloxi.com",
-                "Call-ID": "info-1",
-                "CSeq": "2 INFO",
+                "Call-ID": f"{method.lower()}-405",
+                "CSeq": f"1 {method}",
             },
         )
         protocol.request_received(request, ("192.0.2.1", 5060))
-        assert len(received) == 1
-        assert received[0] is request
+        assert len(protocol._sent) == 1
+        response, _ = protocol._sent[0]
+        assert response.status_code == 405
 
-    def test_request_received__message__calls_message_received(self):
-        """Call message_received hook when a MESSAGE request is received."""
+    @pytest.mark.parametrize(
+        "method",
+        [
+            SIPMethod.REGISTER,
+            SIPMethod.INFO,
+            SIPMethod.MESSAGE,
+            SIPMethod.NOTIFY,
+            SIPMethod.SUBSCRIBE,
+            SIPMethod.PUBLISH,
+            SIPMethod.REFER,
+            SIPMethod.PRACK,
+            SIPMethod.UPDATE,
+        ],
+    )
+    def test_request_received__optional_method__calls_handler_when_defined(
+        self, method: SIPMethod
+    ):
+        """When a subclass defines the handler for an optional method, it is called."""
         received = []
+        handler_name = f"{method.lower()}_received"
 
         class MySIP(self._CapturingSIP):
-            def message_received(self, request: Request) -> None:
-                received.append(request)
+            pass
 
+        setattr(MySIP, handler_name, lambda self, req: received.append(req))
         protocol = MySIP()
         request = Request(
-            method="MESSAGE",
+            method=method,
             uri="sip:bob@biloxi.com",
             headers={
                 "Via": "SIP/2.0/UDP pc33.atlanta.com",
                 "From": "sip:alice@atlanta.com",
                 "To": "sip:bob@biloxi.com",
-                "Call-ID": "message-1",
-                "CSeq": "1 MESSAGE",
-            },
-        )
-        protocol.request_received(request, ("192.0.2.1", 5060))
-        assert len(received) == 1
-        assert received[0] is request
-
-    def test_request_received__notify__calls_notify_received(self):
-        """Call notify_received hook when a NOTIFY request is received."""
-        received = []
-
-        class MySIP(self._CapturingSIP):
-            def notify_received(self, request: Request) -> None:
-                received.append(request)
-
-        protocol = MySIP()
-        request = Request(
-            method="NOTIFY",
-            uri="sip:alice@atlanta.com",
-            headers={
-                "Via": "SIP/2.0/UDP pc33.atlanta.com",
-                "From": "sip:bob@biloxi.com",
-                "To": "sip:alice@atlanta.com",
-                "Call-ID": "notify-1",
-                "CSeq": "1 NOTIFY",
-            },
-        )
-        protocol.request_received(request, ("192.0.2.1", 5060))
-        assert len(received) == 1
-        assert received[0] is request
-
-    def test_request_received__subscribe__calls_subscribe_received(self):
-        """Call subscribe_received hook when a SUBSCRIBE request is received."""
-        received = []
-
-        class MySIP(self._CapturingSIP):
-            def subscribe_received(self, request: Request) -> None:
-                received.append(request)
-
-        protocol = MySIP()
-        request = Request(
-            method="SUBSCRIBE",
-            uri="sip:bob@biloxi.com",
-            headers={
-                "Via": "SIP/2.0/UDP pc33.atlanta.com",
-                "From": "sip:alice@atlanta.com",
-                "To": "sip:bob@biloxi.com",
-                "Call-ID": "subscribe-1",
-                "CSeq": "1 SUBSCRIBE",
-            },
-        )
-        protocol.request_received(request, ("192.0.2.1", 5060))
-        assert len(received) == 1
-        assert received[0] is request
-
-    def test_request_received__publish__calls_publish_received(self):
-        """Call publish_received hook when a PUBLISH request is received."""
-        received = []
-
-        class MySIP(self._CapturingSIP):
-            def publish_received(self, request: Request) -> None:
-                received.append(request)
-
-        protocol = MySIP()
-        request = Request(
-            method="PUBLISH",
-            uri="sip:presence@example.com",
-            headers={
-                "Via": "SIP/2.0/UDP pc33.atlanta.com",
-                "From": "sip:alice@atlanta.com",
-                "To": "sip:presence@example.com",
-                "Call-ID": "publish-1",
-                "CSeq": "1 PUBLISH",
-            },
-        )
-        protocol.request_received(request, ("192.0.2.1", 5060))
-        assert len(received) == 1
-        assert received[0] is request
-
-    def test_request_received__refer__calls_refer_received(self):
-        """Call refer_received hook when a REFER request is received."""
-        received = []
-
-        class MySIP(self._CapturingSIP):
-            def refer_received(self, request: Request) -> None:
-                received.append(request)
-
-        protocol = MySIP()
-        request = Request(
-            method="REFER",
-            uri="sip:bob@biloxi.com",
-            headers={
-                "Via": "SIP/2.0/UDP pc33.atlanta.com",
-                "From": "sip:alice@atlanta.com",
-                "To": "sip:bob@biloxi.com",
-                "Call-ID": "refer-1",
-                "CSeq": "1 REFER",
-            },
-        )
-        protocol.request_received(request, ("192.0.2.1", 5060))
-        assert len(received) == 1
-        assert received[0] is request
-
-    def test_request_received__prack__calls_prack_received(self):
-        """Call prack_received hook when a PRACK request is received."""
-        received = []
-
-        class MySIP(self._CapturingSIP):
-            def prack_received(self, request: Request) -> None:
-                received.append(request)
-
-        protocol = MySIP()
-        request = Request(
-            method="PRACK",
-            uri="sip:bob@biloxi.com",
-            headers={
-                "Via": "SIP/2.0/UDP pc33.atlanta.com",
-                "From": "sip:alice@atlanta.com",
-                "To": "sip:bob@biloxi.com",
-                "Call-ID": "prack-1",
-                "CSeq": "2 PRACK",
-                "RAck": "1 1 INVITE",
-            },
-        )
-        protocol.request_received(request, ("192.0.2.1", 5060))
-        assert len(received) == 1
-        assert received[0] is request
-
-    def test_request_received__update__calls_update_received(self):
-        """Call update_received hook when an UPDATE request is received."""
-        received = []
-
-        class MySIP(self._CapturingSIP):
-            def update_received(self, request: Request) -> None:
-                received.append(request)
-
-        protocol = MySIP()
-        request = Request(
-            method="UPDATE",
-            uri="sip:bob@biloxi.com",
-            headers={
-                "Via": "SIP/2.0/UDP pc33.atlanta.com",
-                "From": "sip:alice@atlanta.com",
-                "To": "sip:bob@biloxi.com",
-                "Call-ID": "update-1",
-                "CSeq": "2 UPDATE",
+                "Call-ID": f"{method.lower()}-handler",
+                "CSeq": f"1 {method}",
             },
         )
         protocol.request_received(request, ("192.0.2.1", 5060))
