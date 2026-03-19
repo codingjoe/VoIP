@@ -161,7 +161,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
         init=False, default_factory=dict
     )
     _buffer: bytearray = dataclasses.field(init=False, default_factory=bytearray)
-    _disconnected_event: asyncio.Event = dataclasses.field(
+    disconnected_event: asyncio.Event = dataclasses.field(
         init=False, default_factory=asyncio.Event
     )
     #: RFC 3261 §8.1.2 — outbound SIP proxy address ``(host, port)``.
@@ -742,11 +742,11 @@ class SessionInitiationProtocol(asyncio.Protocol):
         aor_scheme = self.aor.partition(":")[0]  # "sip" or "sips"
         host_port = f"{_format_host(self.local_address[0])}:{self.local_address[1]}"
         addr = f"{user}@{host_port}" if user else host_port
-        ob_param = ";ob" if ob else ""
+        ob_uri_param = ";ob" if ob else ""
         if aor_scheme == "sips":
-            return f"<sips:{addr}{ob_param}>"
+            return f"<sips:{addr}{ob_uri_param}>"
         tls_param = ";transport=tls" if self._is_tls else ""
-        return f"<sip:{addr}{tls_param}{ob_param}>"
+        return f"<sip:{addr}{tls_param}{ob_uri_param}>"
 
     def ringing(self, request: Request) -> None:
         """Send a 180 Ringing provisional response to the caller.
@@ -983,7 +983,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
             self._keepalive_task.cancel()
             self._keepalive_task = None
         self.transport = None
-        self._disconnected_event.set()
+        self.disconnected_event.set()
 
 
 async def start_server(

@@ -2343,17 +2343,17 @@ class TestKeepalive:
         assert p._keepalive_task is None
 
     def test_connection_lost__sets_disconnected_event(self):
-        """connection_lost sets the _disconnected_event."""
+        """connection_lost sets the disconnected_event."""
         p = SessionInitiationProtocol(
             outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
         )
-        assert not p._disconnected_event.is_set()
+        assert not p.disconnected_event.is_set()
         p.connection_lost(None)
-        assert p._disconnected_event.is_set()
+        assert p.disconnected_event.is_set()
 
     @pytest.mark.asyncio
     async def test_disconnected_event__can_be_awaited(self):
-        """_disconnected_event resolves once connection_lost is called."""
+        """disconnected_event resolves once connection_lost is called."""
         p = SessionInitiationProtocol(
             outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
         )
@@ -2363,8 +2363,8 @@ class TestKeepalive:
             p.connection_lost(None)
 
         asyncio.create_task(lose_connection())
-        await asyncio.wait_for(p._disconnected_event.wait(), timeout=1.0)
-        assert p._disconnected_event.is_set()
+        await asyncio.wait_for(p.disconnected_event.wait(), timeout=1.0)
+        assert p.disconnected_event.is_set()
 
 
 # ---------------------------------------------------------------------------

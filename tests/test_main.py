@@ -853,7 +853,7 @@ class TestReconnect:
             protocol = factory()
             if call_count == 1:
                 # Simulate immediate disconnect.
-                protocol._disconnected_event.set()
+                protocol.disconnected_event.set()
                 return MagicMock(), protocol
             raise KeyboardInterrupt
 

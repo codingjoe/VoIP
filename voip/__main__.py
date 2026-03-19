@@ -287,7 +287,7 @@ async def _connect_sip(
                 ssl=ssl_context,
             )
             backoff_secs = 1
-            await protocol._disconnected_event.wait()
+            await protocol.disconnected_event.wait()
             logger.info(
                 "SIP connection closed; reconnecting in %s s", backoff_secs
             )
