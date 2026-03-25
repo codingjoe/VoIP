@@ -13,7 +13,7 @@ from voip.sip.types import SIPMethod, SipUri
 from .conftest import INVITE_BYTES, FakeTransport
 
 
-class TestSessionInitiationProtocolConnectionMade:
+class TestSessionInitiationProtocol:
     def test_connection_made__stores_transport(self, fake_transport, rtp):
         """Store transport reference after connection_made."""
         session = SessionInitiationProtocol(
@@ -80,8 +80,6 @@ class TestSessionInitiationProtocolConnectionMade:
         assert session.keepalive_task is not None
         session.keepalive_task.cancel()
 
-
-class TestSessionInitiationProtocolSendKeepalive:
     async def test_send_keepalive__sends_ping(self, sip, fake_transport):
         """Send a CRLF CRLF ping after the keepalive interval elapses."""
         sip.keepalive_interval = datetime.timedelta(milliseconds=10)
@@ -96,8 +94,6 @@ class TestSessionInitiationProtocolSendKeepalive:
         sip.keepalive_interval = datetime.timedelta(milliseconds=1)
         await sip.send_keepalive()
 
-
-class TestSessionInitiationProtocolDataReceived:
     def test_data_received__pong(self, sip):
         r"""Receive a PONG (\r\n keepalive reply) without sending any reply."""
         initial_sent = len(sip.transport.sent)
@@ -130,8 +126,6 @@ class TestSessionInitiationProtocolDataReceived:
         ).encode()
         sip.data_received(response_bytes)
 
-
-class TestSessionInitiationProtocolSend:
     def test_send__writes_message_bytes(self, sip, fake_transport):
         """Serialize and write a SIP message to the transport."""
         response = Response(status_code=200, phrase="OK")
@@ -144,8 +138,6 @@ class TestSessionInitiationProtocolSend:
         response = Response(status_code=200, phrase="OK")
         sip.send(response)
 
-
-class TestSessionInitiationProtocolClose:
     def test_close__closes_transport(self, sip, fake_transport):
         """Close the underlying transport."""
         sip.close()
@@ -156,8 +148,6 @@ class TestSessionInitiationProtocolClose:
         sip.transport = None
         sip.close()
 
-
-class TestSessionInitiationProtocolAllowedMethods:
     def test_allowed_methods__includes_options(self, sip):
         """Always include OPTIONS in allowed methods."""
         assert "OPTIONS" in sip.allowed_methods
@@ -174,8 +164,6 @@ class TestSessionInitiationProtocolAllowedMethods:
         assert "OPTIONS" in header
         assert "," in header
 
-
-class TestSessionInitiationProtocolMethodNotAllowed:
     def test_method_not_allowed__sends_405(self, sip, fake_transport):
         """Send a 405 Method Not Allowed response."""
         request = Message.parse(
@@ -190,8 +178,6 @@ class TestSessionInitiationProtocolMethodNotAllowed:
         sip.method_not_allowed(request)
         assert any(b"405" in data for data in fake_transport.sent)
 
-
-class TestSessionInitiationProtocolRequestReceived:
     def test_request_received__options__sends_200(self, sip, fake_transport):
         """Reply with 200 OK for an OPTIONS request."""
         request = Message.parse(
@@ -263,8 +249,6 @@ class TestSessionInitiationProtocolRequestReceived:
         sip.request_received(cancel)
         assert any(b"410" in data for data in fake_transport.sent)
 
-
-class TestSessionInitiationProtocolResponseReceived:
     async def test_response_received__delegates_to_transaction(self, sip):
         """Delegate a response to the matching transaction by branch."""
         branch = list(sip.transactions.keys())[0]
@@ -279,8 +263,6 @@ class TestSessionInitiationProtocolResponseReceived:
         )
         sip.response_received(response)
 
-
-class TestSessionInitiationProtocolContact:
     def test_contact__sips_aor_produces_sips_contact(self, sip):
         """Build a sips: Contact for a sips: AOR."""
         assert sip.contact.startswith("<sips:")
@@ -322,8 +304,6 @@ class TestSessionInitiationProtocolContact:
             session.keepalive_task.cancel()
         assert "@" not in session.contact
 
-
-class TestSessionInitiationProtocolConnectionLost:
     async def test_connection_lost__cancels_keepalive_task(self, sip):
         """Cancel and clear the keepalive task on connection loss."""
         sip.keepalive_task = asyncio.create_task(asyncio.sleep(9999))

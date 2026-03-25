@@ -659,16 +659,16 @@ class TestInviteTransaction:
 
 
 class TestRegistrationError:
-    def test_registration_error__is_exception(self):
+    def test_is_exception(self):
         """RegistrationError is a subclass of Exception."""
         assert issubclass(RegistrationError, Exception)
 
-    def test_registration_error__can_be_raised(self):
+    def test_raise(self):
         """RegistrationError can be raised and caught."""
         with pytest.raises(RegistrationError, match="403 Forbidden"):
             raise RegistrationError("403 Forbidden")
 
-    def test_registration_error__message(self):
+    def test___str__(self):
         """RegistrationError stores the message string."""
         err = RegistrationError("500 Server Error")
         assert str(err) == "500 Server Error"

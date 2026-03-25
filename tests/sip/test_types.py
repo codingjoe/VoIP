@@ -272,16 +272,6 @@ class TestSipUri:
         """Parse flag URI parameters and valueless headers."""
         assert SipUri.parse(uri_str) == expected_uri_obj
 
-
-def _ok() -> Response:
-    return Response(status_code=200, phrase="OK")
-
-
-def _trying() -> Response:
-    return Response(status_code=100, phrase="Trying")
-
-
-class TestSipUriMaddr:
     def test_maddr__with_parameter(self):
         """Parse NetworkAddress from maddr URI parameter."""
         uri = SipUri.parse("sip:alice@example.com;maddr=192.0.2.1:5060")
@@ -312,6 +302,14 @@ class TestSipUriMaddr:
         """Return explicit transport parameter value."""
         uri = SipUri.parse("sip:alice@example.com;transport=udp")
         assert uri.transport == "udp"
+
+
+def _ok() -> Response:
+    return Response(status_code=200, phrase="OK")
+
+
+def _trying() -> Response:
+    return Response(status_code=100, phrase="Trying")
 
 
 class TestCallerID:
