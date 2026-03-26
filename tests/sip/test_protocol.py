@@ -365,13 +365,13 @@ class TestSessionInitiationProtocol:
     def test_extract_frames__empty_buffer(self, rtp):
         """Return an empty iterator when the receive buffer is empty."""
         session = self._make_session(rtp)
-        assert [bytes(f) for f in session.extract_frames()] == []
+        assert [bytes(f) for f in session._extract_frames()] == []
 
     def test_extract_frames__complete_message(self, rtp):
         """Extract a single complete SIP message and clear the buffer."""
         session = self._make_session(rtp)
         session.recv_buffer.extend(INVITE_BYTES)
-        frames = [bytes(f) for f in session.extract_frames()]
+        frames = [bytes(f) for f in session._extract_frames()]
         assert frames == [INVITE_BYTES]
         assert len(session.recv_buffer) == 0
 
@@ -379,7 +379,7 @@ class TestSessionInitiationProtocol:
         """Keep partial message bytes in the buffer until complete."""
         session = self._make_session(rtp)
         session.recv_buffer.extend(INVITE_BYTES[:20])
-        assert [bytes(f) for f in session.extract_frames()] == []
+        assert [bytes(f) for f in session._extract_frames()] == []
         assert len(session.recv_buffer) == 20
 
     def test_extract_frames__two_coalesced_messages(self, rtp):
@@ -395,7 +395,7 @@ class TestSessionInitiationProtocol:
         )
         session = self._make_session(rtp)
         session.recv_buffer.extend(INVITE_BYTES + second)
-        frames = [bytes(f) for f in session.extract_frames()]
+        frames = [bytes(f) for f in session._extract_frames()]
         assert len(frames) == 2
         assert frames[0] == INVITE_BYTES
         assert frames[1] == second
@@ -418,7 +418,7 @@ class TestSessionInitiationProtocol:
         message = headers + body
         session = self._make_session(rtp)
         session.recv_buffer.extend(message)
-        frames = [bytes(f) for f in session.extract_frames()]
+        frames = [bytes(f) for f in session._extract_frames()]
         assert frames == [message]
         assert len(session.recv_buffer) == 0
 
@@ -437,14 +437,14 @@ class TestSessionInitiationProtocol:
         )
         session = self._make_session(rtp)
         session.recv_buffer.extend(headers + body[:5])
-        assert [bytes(f) for f in session.extract_frames()] == []
+        assert [bytes(f) for f in session._extract_frames()] == []
         assert len(session.recv_buffer) == len(headers) + 5
 
     def test_extract_frames__ping(self, rtp):
         """Extract an RFC 5626 PING (CRLF CRLF) keepalive frame."""
         session = self._make_session(rtp)
         session.recv_buffer.extend(PING)
-        frames = [bytes(f) for f in session.extract_frames()]
+        frames = [bytes(f) for f in session._extract_frames()]
         assert frames == [PING]
         assert len(session.recv_buffer) == 0
 
@@ -452,7 +452,7 @@ class TestSessionInitiationProtocol:
         """Extract an RFC 5626 PONG (CRLF) keepalive frame."""
         session = self._make_session(rtp)
         session.recv_buffer.extend(PONG)
-        frames = [bytes(f) for f in session.extract_frames()]
+        frames = [bytes(f) for f in session._extract_frames()]
         assert frames == [PONG]
         assert len(session.recv_buffer) == 0
 
@@ -460,14 +460,14 @@ class TestSessionInitiationProtocol:
         """Buffer a partial PING (CRLF CR) without dispatching until the 4th byte arrives."""
         session = self._make_session(rtp)
         session.recv_buffer.extend(b"\r\n\r")
-        assert [bytes(f) for f in session.extract_frames()] == []
+        assert [bytes(f) for f in session._extract_frames()] == []
         assert len(session.recv_buffer) == 3
 
     def test_extract_frames__ping_followed_by_message(self, rtp):
         """Extract a PING and a SIP message from the same buffer."""
         session = self._make_session(rtp)
         session.recv_buffer.extend(PING + INVITE_BYTES)
-        frames = [bytes(f) for f in session.extract_frames()]
+        frames = [bytes(f) for f in session._extract_frames()]
         assert len(frames) == 2
         assert frames[0] == PING
         assert frames[1] == INVITE_BYTES
@@ -476,7 +476,7 @@ class TestSessionInitiationProtocol:
         """Extract a PONG and a SIP message coalesced in the same buffer."""
         session = self._make_session(rtp)
         session.recv_buffer.extend(PONG + INVITE_BYTES)
-        frames = [bytes(f) for f in session.extract_frames()]
+        frames = [bytes(f) for f in session._extract_frames()]
         assert len(frames) == 2
         assert frames[0] == PONG
         assert frames[1] == INVITE_BYTES
@@ -495,14 +495,14 @@ class TestSessionInitiationProtocol:
         )
         session = self._make_session(rtp)
         session.recv_buffer.extend(message)
-        frames = [bytes(f) for f in session.extract_frames()]
+        frames = [bytes(f) for f in session._extract_frames()]
         assert len(frames) == 1
 
     def test_extract_frames__single_cr_waits(self, rtp):
         """Keep a lone CR in the buffer without dispatching (incomplete keepalive)."""
         session = self._make_session(rtp)
         session.recv_buffer.extend(b"\r")
-        assert [bytes(f) for f in session.extract_frames()] == []
+        assert [bytes(f) for f in session._extract_frames()] == []
         assert session.recv_buffer == bytearray(b"\r")
 
     # ------------------------------------------------------------------
@@ -515,21 +515,21 @@ class TestSessionInitiationProtocol:
 
         session = self._make_session(rtp, fake_transport)
         with caplog.at_level(logging.INFO):
-            session.dispatch_frame(b"\r\n")
+            session._dispatch_frame(b"\r\n")
         assert "PONG" in caplog.text
         assert fake_transport.sent == []
 
     def test_dispatch_frame__ping__sends_pong(self, rtp, fake_transport):
         """Reply with a CRLF PONG when a PING (CRLF CRLF) frame is dispatched."""
         session = self._make_session(rtp, fake_transport)
-        session.dispatch_frame(b"\r\n\r\n")
+        session._dispatch_frame(b"\r\n\r\n")
         assert b"\r\n" in fake_transport.sent
 
     def test_dispatch_frame__sip_request(self, rtp, fake_transport):
         """Dispatch a SIP request frame to request_received."""
         session = self._make_session(rtp, fake_transport)
         before = len(session.transactions)
-        session.dispatch_frame(INVITE_BYTES)
+        session._dispatch_frame(INVITE_BYTES)
         assert len(session.transactions) > before
 
     def test_dispatch_frame__sip_response(self, rtp, fake_transport):
@@ -551,7 +551,7 @@ class TestSessionInitiationProtocol:
             f"CSeq: 1 INVITE\r\n"
             f"\r\n"
         ).encode()
-        session.dispatch_frame(response_bytes)
+        session._dispatch_frame(response_bytes)
 
     # ------------------------------------------------------------------
     # data_received – stream reassembly
@@ -671,7 +671,9 @@ class TestSessionInitiationProtocol:
         assert "OPTIONS" in header
         assert "," in header
 
-    def test_method_not_allowed__sends_405_without_sip_fixture(self, rtp, fake_transport):
+    def test_method_not_allowed__sends_405_without_sip_fixture(
+        self, rtp, fake_transport
+    ):
         """method_not_allowed() sends a 405 Method Not Allowed response."""
         session = self._make_session(rtp, fake_transport)
         request = Message.parse(

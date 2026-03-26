@@ -133,39 +133,11 @@ class SessionInitiationProtocol(asyncio.Protocol):
             self.transport.write(PING)
 
     def data_received(self, data: bytes) -> None:
-        """Buffer incoming bytes and dispatch each complete frame."""
         self.recv_buffer.extend(data)
-        for frame in self.extract_frames():
-            self.dispatch_frame(frame)
+        for frame in self._extract_frames():
+            self._dispatch_frame(frame)
 
-    def extract_frames(self) -> typing.Generator[memoryview | bytes, None, None]:
-        """Extract complete SIP messages and keepalive frames from [`recv_buffer`][voip.sip.protocol.SessionInitiationProtocol.recv_buffer].
-
-        TCP is a stream protocol; a single [`data_received`][voip.sip.protocol.SessionInitiationProtocol.data_received]
-        call may carry a partial message, an exact message, or several coalesced messages.
-        This method uses the `Content-Length` header for body framing per
-        [RFC 3261 §18.3](https://datatracker.ietf.org/doc/html/rfc3261#section-18.3)
-        and recognises [RFC 5626](https://datatracker.ietf.org/doc/html/rfc5626)
-        [`PING`][voip.sip.protocol.PING] and [`PONG`][voip.sip.protocol.PONG] keepalive sequences.
-
-        Each call mutates [`recv_buffer`][voip.sip.protocol.SessionInitiationProtocol.recv_buffer]
-        in-place, consuming only the bytes that belong to complete frames.
-
-        For SIP messages a [`memoryview`][] into the buffer is yielded — zero copy until
-        [`dispatch_frame`][voip.sip.protocol.SessionInitiationProtocol.dispatch_frame] converts
-        to [`bytes`][] for parsing.  The view is explicitly released and the consumed bytes
-        removed from the buffer before the next frame is extracted.
-
-        !!! warning
-            Each yielded [`memoryview`][] is only valid until the generator is advanced to
-            the next frame.  Callers **must not** hold a reference to the view after the
-            current loop iteration (i.e. after [`dispatch_frame`][voip.sip.protocol.SessionInitiationProtocol.dispatch_frame]
-            returns).  Use `bytes(frame)` to materialise the data if a longer-lived copy is needed.
-
-        Yields:
-            A [`memoryview`][] for each complete SIP message, or the [`PING`][voip.sip.protocol.PING] /
-            [`PONG`][voip.sip.protocol.PONG] constant for keepalive frames.
-        """
+    def _extract_frames(self) -> typing.Generator[memoryview | bytes]:  # noqa: C901
         while self.recv_buffer:
             if self.recv_buffer[0:1] != b"\r":
                 # SIP message: wait for the header-body separator.
@@ -201,15 +173,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 # Single CR or other incomplete sequence – wait for more data.
                 break
 
-    def dispatch_frame(self, frame: memoryview | bytes) -> None:
-        """Dispatch a single complete frame (SIP message or keepalive).
-
-        Args:
-            frame: A [`memoryview`][] (SIP message) or keepalive constant
-                ([`PING`][voip.sip.protocol.PING] / [`PONG`][voip.sip.protocol.PONG])
-                as yielded by
-                [`extract_frames`][voip.sip.protocol.SessionInitiationProtocol.extract_frames].
-        """
+    def _dispatch_frame(self, frame: memoryview | bytes) -> None:
         peer = NetworkAddress(*self.transport.get_extra_info("peername"))
         if frame == PONG:
             logger.info("PONG", extra={"addr": peer})
