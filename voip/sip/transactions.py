@@ -1,7 +1,5 @@
 """SIP transaction layer (RFC 3261 §17)."""
 
-from __future__ import annotations
-
 import dataclasses
 import datetime
 import hashlib

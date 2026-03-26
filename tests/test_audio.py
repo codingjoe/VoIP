@@ -1,7 +1,5 @@
 """Tests for audio call handler and codec utilities."""
 
-from __future__ import annotations
-
 import asyncio
 import datetime
 from unittest.mock import AsyncMock, MagicMock, patch

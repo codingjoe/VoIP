@@ -14,8 +14,6 @@ inherit directly from `RTPCodec` and require no PyAV dependency.
 [PyAV]: https://pyav.basswood-io.com/
 """
 
-from __future__ import annotations
-
 import dataclasses
 from collections.abc import Iterator
 from typing import ClassVar, Protocol

@@ -4,8 +4,6 @@ SIP asyncio protocol handler.
 See also: https://datatracker.ietf.org/doc/html/rfc3261
 """
 
-from __future__ import annotations
-
 import asyncio
 import dataclasses
 import datetime

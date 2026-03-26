@@ -23,7 +23,6 @@ classifiers = [
   "Programming Language :: Python",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
   "Framework :: AsyncIO",
   "Topic :: Communications :: Internet Phone",
@@ -35,7 +34,7 @@ classifiers = [
   "Topic :: System :: Networking",
   "Topic :: Home Automation",
 ]
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 dependencies = ["cryptography"]
 
 [project.optional-dependencies]

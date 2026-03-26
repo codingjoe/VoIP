@@ -1,7 +1,5 @@
 """Tests for the SIP transaction layer."""
 
-from __future__ import annotations
-
 import pytest
 from voip.rtp import RealtimeTransportProtocol
 from voip.sip.exceptions import RegistrationError
@@ -68,7 +66,7 @@ class TestTransaction:
         """Raise ValueError when branch does not start with 'z9hG4bK'."""
         sip = create_sip_session()
         with pytest.raises(ValueError):
-            InviteTransaction(
+            RegistrationTransaction(
                 sip=sip,
                 method=SIPMethod.INVITE,
                 branch="invalid-branch",

@@ -1,7 +1,5 @@
 """Shared fixtures for SIP tests."""
 
-from __future__ import annotations
-
 import dataclasses
 import ipaddress
 

@@ -1,7 +1,5 @@
 """SDP field types as defined by RFC 4566."""
 
-from __future__ import annotations
-
 import dataclasses
 import enum
 from collections.abc import Generator

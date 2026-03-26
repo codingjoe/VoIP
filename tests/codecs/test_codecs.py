@@ -1,7 +1,5 @@
 """Tests for the voip.codecs package (voip/codecs/__init__.py)."""
 
-from __future__ import annotations
-
 import importlib
 import sys
 

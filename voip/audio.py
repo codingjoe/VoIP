@@ -9,8 +9,6 @@ AI-powered subclasses (Whisper transcription, Ollama agent) live in
 [`voip.ai`][voip.ai] and require the ``ai`` extra.
 """
 
-from __future__ import annotations
-
 import asyncio
 import dataclasses
 import datetime

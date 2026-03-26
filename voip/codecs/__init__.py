@@ -14,8 +14,6 @@ name (case-insensitive).
 When the ``pyav`` extra is not installed only PCMA and PCMU are registered.
 """
 
-from __future__ import annotations
-
 from voip.codecs.base import RTPCodec
 from voip.codecs.pcma import PCMA
 from voip.codecs.pcmu import PCMU

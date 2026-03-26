@@ -13,8 +13,6 @@ Concrete subclasses: [`Opus`][voip.codecs.Opus], [`G722`][voip.codecs.G722].
 [PyAV]: https://pyav.basswood-io.com/
 """
 
-from __future__ import annotations
-
 import io
 from typing import cast
 

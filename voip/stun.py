@@ -1,7 +1,5 @@
 """Session Traversal Utilities for NAT (STUN) implementation of RFC 5389."""
 
-from __future__ import annotations
-
 import asyncio
 import dataclasses
 import enum

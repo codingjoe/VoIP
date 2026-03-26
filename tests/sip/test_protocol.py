@@ -1,7 +1,5 @@
 """Tests for the SIP asyncio protocol handler."""
 
-from __future__ import annotations
-
 import asyncio
 import datetime
 

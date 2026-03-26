@@ -1,6 +1,3 @@
-from __future__ import annotations
-
-
 class RegistrationError(Exception):
     """Raised when a SIP REGISTER request fails with an unexpected response.
 

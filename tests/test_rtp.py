@@ -1,7 +1,5 @@
 """Tests for the RTP protocol implementation (RFC 3550)."""
 
-from __future__ import annotations
-
 import asyncio
 import dataclasses
 import ipaddress

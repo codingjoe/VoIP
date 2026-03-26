@@ -1,7 +1,5 @@
 """SDP message parsing and serialization as defined by RFC 4566."""
 
-from __future__ import annotations
-
 import dataclasses
 from collections.abc import Generator
 

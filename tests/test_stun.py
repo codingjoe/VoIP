@@ -1,7 +1,5 @@
 """Tests for the STUN utility functions (RFC 5389)."""
 
-from __future__ import annotations
-
 import asyncio
 import ipaddress
 import socket

@@ -5,8 +5,6 @@ payloads using a pure-NumPy implementation of the ITU-T G.711 A-law segmented
 companding algorithm.  No PyAV dependency is required.
 """
 
-from __future__ import annotations
-
 from typing import ClassVar
 
 import numpy as np

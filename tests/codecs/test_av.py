@@ -1,7 +1,5 @@
 """Tests for the PyAVCodec base class (voip.codecs.av)."""
 
-from __future__ import annotations
-
 from unittest.mock import MagicMock, patch
 
 import pytest

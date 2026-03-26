@@ -4,8 +4,6 @@ Real-time Transport Protocol (RTP) implementation of [RFC 3550].
 [RFC 3550]: https://datatracker.ietf.org/doc/html/rfc3550#section-5
 """
 
-from __future__ import annotations
-
 import asyncio
 import dataclasses
 import enum

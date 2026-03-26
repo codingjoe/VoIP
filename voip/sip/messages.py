@@ -1,7 +1,5 @@
 """SIP message types as defined by RFC 3261."""
 
-from __future__ import annotations
-
 import abc
 import dataclasses
 import datetime

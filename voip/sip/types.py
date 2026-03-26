@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import dataclasses
 import enum
 import ipaddress
@@ -80,7 +78,7 @@ class SipUri:
     SIP_URL_PATTERN: typing.ClassVar[re.Pattern[str]] = re.compile(
         r"^(?P<scheme>sips?):"
         r"((?P<user>[^@;:]+)(?P<password>:[^@;]*)?@)?"
-        r"(?P<host>(\[[0-9a-fA-F:]+\]|[^;?:@\[\]]+))"
+        r"(?P<host>(\[[0-9a-fA-F:]+]|[^;?:@\[\]]+))"
         r"(?P<port>:[0-9]+)?"
         r"(?P<parameters>;[^?]+)?"
         r"(?P<headers>\?[^?]+)?$",

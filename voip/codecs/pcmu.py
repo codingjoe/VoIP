@@ -5,8 +5,6 @@ payloads using a pure-NumPy implementation of ITU-T G.711 mu-law companding.
 No PyAV dependency is required.
 """
 
-from __future__ import annotations
-
 from typing import ClassVar
 
 import numpy as np
