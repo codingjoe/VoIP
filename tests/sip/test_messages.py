@@ -203,7 +203,7 @@ class TestRequest:
         assert b"v=0" in serialized
 
     def test_branch__with_branch(self):
-        """branch returns the branch parameter from the Via header."""
+        """Branch returns the branch parameter from the Via header."""
         request = Request(
             method="INVITE",
             uri="sip:bob@biloxi.com",
