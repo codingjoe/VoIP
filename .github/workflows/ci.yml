@@ -36,7 +36,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv run --group test pytest
-      - uses: codecov/codecov-action@v5
+      - uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
   pytest-extras:
@@ -59,7 +59,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv run --group=test --extra=${{ matrix.extra }} pytest
-      - uses: codecov/codecov-action@v5
+      - uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
   pytest-os:
@@ -79,6 +79,6 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv run --group=test pytest
-      - uses: codecov/codecov-action@v5
+      - uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
