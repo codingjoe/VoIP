@@ -24,6 +24,12 @@ from .types import (
 
 logger = logging.getLogger("voip.sip")
 
+#: RFC 5626 §4.4 keepalive PING sequence.
+PING: typing.Final[bytes] = b"\r\n\r\n"
+
+#: RFC 5626 §4.4 keepalive PONG reply.
+PONG: typing.Final[bytes] = b"\r\n"
+
 __all__ = [
     "SIP",
     "SessionInitiationProtocol",
@@ -98,6 +104,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
     )
     transport: asyncio.Transport | None = dataclasses.field(init=False, default=None)
     is_secure: bool = dataclasses.field(init=False, default=False)
+    recv_buffer: bytearray = dataclasses.field(init=False, default_factory=bytearray)
 
     def connection_made(self, transport: asyncio.Transport) -> None:  # type: ignore[override]
         """Store the TLS/TCP transport and start RTP mux + carrier registration."""
@@ -121,56 +128,74 @@ class SessionInitiationProtocol(asyncio.Protocol):
             if self.transport is None:
                 return
             logger.info("PING", extra={"addr": self.local_address})
-            self.transport.write(b"\r\n\r\n")
+            self.transport.write(PING)
 
     def data_received(self, data: bytes) -> None:
-        match data:
-            case b"\r\n":
-                logger.info(
-                    "PONG",
-                    extra={
-                        "addr": NetworkAddress(
-                            *self.transport.get_extra_info("peername")
-                        )
-                    },
-                )
-                return
-            case b"\r\n\r\n":
-                logger.info(
-                    "PING",
-                    extra={
-                        "addr": NetworkAddress(
-                            *self.transport.get_extra_info("peername")
-                        )
-                    },
-                )
-                if self.transport:
-                    logger.info("PONG", extra={"addr": self.local_address})
-                    self.transport.write(b"\r\n")
-                return
-        match Message.parse(data):
-            case Request() as request:
-                logger.info(
-                    "Request received: %r",
-                    request,
-                    extra={
-                        "addr": NetworkAddress(
-                            *self.transport.get_extra_info("peername")
-                        )
-                    },
-                )
-                self.request_received(request)
-            case Response() as response:
-                logger.info(
-                    "Response received %r",
-                    response,
-                    extra={
-                        "addr": NetworkAddress(
-                            *self.transport.get_extra_info("peername")
-                        )
-                    },
-                )
-                self.response_received(response)
+        self.recv_buffer.extend(data)
+        for frame in self._extract_frames():
+            self._dispatch_frame(frame)
+
+    def _extract_frames(self) -> typing.Generator[memoryview | bytes]:  # noqa: C901
+        while self.recv_buffer:
+            if self.recv_buffer[0:1] != b"\r":
+                # SIP message: wait for the header-body separator.
+                header_end = self.recv_buffer.find(b"\r\n\r\n")
+                if header_end == -1:
+                    break  # incomplete headers – wait for more data
+                content_length = 0
+                for line in self.recv_buffer[:header_end].split(b"\r\n")[1:]:
+                    name, sep, value = line.partition(b":")
+                    if sep and name.strip().lower() == b"content-length":
+                        try:
+                            content_length = int(value.strip())
+                        except ValueError:
+                            pass
+                        break
+                message_end = header_end + 4 + content_length
+                if len(self.recv_buffer) < message_end:
+                    break  # incomplete body – wait for more data
+                frame = memoryview(self.recv_buffer)[:message_end]
+                yield frame
+                frame.release()
+                del self.recv_buffer[:message_end]
+            elif len(self.recv_buffer) >= 4 and self.recv_buffer[:4] == PING:
+                yield PING
+                del self.recv_buffer[:4]
+            elif len(self.recv_buffer) >= 3 and self.recv_buffer[2:3] == b"\r":
+                # Third byte is CR – could be the start of PING; wait for 4th byte.
+                break
+            elif self.recv_buffer[:2] == PONG:
+                yield PONG
+                del self.recv_buffer[:2]
+            else:
+                # Single CR or other incomplete sequence – wait for more data.
+                break
+
+    def _dispatch_frame(self, frame: memoryview | bytes) -> None:
+        peer = NetworkAddress(*self.transport.get_extra_info("peername"))
+        if frame == PONG:
+            logger.info("PONG", extra={"addr": peer})
+        elif frame == PING:
+            logger.info("PING", extra={"addr": peer})
+            if self.transport:
+                logger.info("PONG", extra={"addr": self.local_address})
+                self.transport.write(PONG)
+        else:
+            match Message.parse(bytes(frame)):
+                case Request() as request:
+                    logger.info(
+                        "Request received: %r",
+                        request,
+                        extra={"addr": peer},
+                    )
+                    self.request_received(request)
+                case Response() as response:
+                    logger.info(
+                        "Response received %r",
+                        response,
+                        extra={"addr": peer},
+                    )
+                    self.response_received(response)
 
     def send(self, message: Response | Request) -> None:
         """Serialize and send a SIP message over the TLS/TCP connection."""
