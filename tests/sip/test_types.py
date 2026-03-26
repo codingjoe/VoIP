@@ -1,9 +1,9 @@
-from __future__ import annotations
-
 import ipaddress
 
 import pytest
 from voip.sip import SipUri
+from voip.sip.messages import Response
+from voip.sip.types import CallerID
 
 
 class TestSipUri:
@@ -269,3 +269,134 @@ class TestSipUri:
     ):
         """Parse flag URI parameters and valueless headers."""
         assert SipUri.parse(uri_str) == expected_uri_obj
+
+    def test_maddr__with_parameter(self):
+        """Parse NetworkAddress from maddr URI parameter."""
+        uri = SipUri.parse("sip:alice@example.com;maddr=192.0.2.1:5060")
+        assert uri.maddr == (ipaddress.IPv4Address("192.0.2.1"), 5060)
+
+    def test_maddr__without_parameter(self):
+        """Fall back to host:port when maddr parameter is absent."""
+        uri = SipUri.parse("sip:alice@192.0.2.2:5060")
+        result = uri.maddr
+        assert result.port == 5060
+
+    def test_ttl__returns_value(self):
+        """Return the ttl URI parameter value as a string."""
+        uri = SipUri.parse("sip:alice@example.com;ttl=30")
+        assert uri.ttl == 30
+
+    def test_transport__sips_returns_tls(self):
+        """Return 'TLS' for sips: URIs that have no transport parameter."""
+        uri = SipUri.parse("sips:alice@example.com")
+        assert uri.transport == "TLS"
+
+    def test_transport__sip_without_parameter_returns_none(self):
+        """Return None for a plain sip: URI without transport parameter."""
+        uri = SipUri.parse("sip:alice@example.com")
+        assert uri.transport == "TLS"
+
+    def test_transport__explicit_parameter(self):
+        """Return explicit transport parameter value."""
+        uri = SipUri.parse("sip:alice@example.com;transport=udp")
+        assert uri.transport == "UDP"
+
+
+def _ok() -> Response:
+    return Response(status_code=200, phrase="OK")
+
+
+def _trying() -> Response:
+    return Response(status_code=100, phrase="Trying")
+
+
+class TestCallerID:
+    def test_display_name__quoted(self):
+        """Parse a quoted display name before the angle bracket."""
+        assert (
+            CallerID('"Alice Smith" <sip:alice@example.com>').display_name
+            == "Alice Smith"
+        )
+
+    def test_display_name__unquoted(self):
+        """Parse an unquoted display name before the angle bracket."""
+        assert CallerID("Alice <sip:alice@example.com>").display_name == "Alice"
+
+    def test_display_name__absent(self):
+        """Return None when there is no display name."""
+        assert CallerID("sip:alice@example.com").display_name is None
+
+    def test_user__present(self):
+        """Extract the SIP user part."""
+        assert CallerID("sip:08001234567@example.com").user == "08001234567"
+
+    def test_user__absent(self):
+        """Return None when no SIP user is present."""
+        assert CallerID("example.com").user is None
+
+    def test_host__present(self):
+        """Extract the carrier domain from the SIP URI."""
+        assert CallerID("sip:alice@example.com").host == "example.com"
+
+    def test_host__absent(self):
+        """Return None when no host is found."""
+        assert CallerID("plain string").host is None
+
+    def test_tag__present(self):
+        """Extract the dialog tag parameter."""
+        assert CallerID("sip:alice@example.com;tag=abc123").tag == "abc123"
+
+    def test_tag__absent(self):
+        """Return None when no tag parameter is present."""
+        assert CallerID("sip:alice@example.com").tag is None
+
+    def test_repr__long_user(self):
+        """Mask all but the last four chars of a long caller string."""
+        assert (
+            repr(CallerID('"08001234567" <sip:08001234567@telefonica.de>;tag=abc'))
+            == "*******4567@telefonica.de"
+        )
+
+    def test_repr__short_user(self):
+        """Show all characters when the name is four characters or fewer."""
+        assert repr(CallerID("sip:alice@example.com")) == "*lice@example.com"
+
+    def test_repr__no_user_no_host(self):
+        """Fall back to asterisks when neither user nor host can be parsed."""
+        assert "****" in repr(CallerID(""))
+
+    def test_repr__no_host(self):
+        """Show only masked user when there is no carrier domain."""
+        masked = repr(CallerID("notasipuri"))
+        assert "@" not in masked
+
+
+class TestMaskCaller:
+    def test_mask_caller__with_display_name(self):
+        """Mask all but last four chars of a quoted display name."""
+        from voip.sip.types import _mask_caller
+
+        assert (
+            _mask_caller('"08001234567" <sip:08001234567@example.com>;tag=abc')
+            == "*******4567"
+        )
+
+    def test_mask_caller__bare_uri(self):
+        """Mask user part from a bare SIP URI."""
+        from voip.sip.types import _mask_caller
+
+        assert _mask_caller("sip:alice@example.com") == "*lice"
+
+    def test_mask_caller__short_name(self):
+        """Return the name unchanged when it is four characters or fewer."""
+        from voip.sip.types import _mask_caller
+
+        assert _mask_caller("sip:bob@example.com") == "bob"
+
+    def test_mask_caller__long_name(self):
+        """Mask all but last four characters of a long username."""
+        from voip.sip.types import _mask_caller
+
+        result = _mask_caller("sip:verylonguser@example.com")
+        assert result.endswith("user")
+        assert result.startswith("*")

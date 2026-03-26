@@ -154,14 +154,14 @@ class GreetingCall(AudioCall):
 
 ## Low-Level RTP Packet Handling
 
-For protocols other than audio, subclass \[`RTPCall`\][voip.rtp.RTPCall]
-directly and override \[`packet_received`\]\[voip.rtp.RTPCall.packet_received\]:
+For protocols other than audio, subclass \[`Session`\][voip.rtp.Session]
+directly and override \[`packet_received`\]\[voip.rtp.Session.packet_received\]:
 
 ```python
-from voip.rtp import RTPCall, RTPPacket
+from voip.rtp import Session, RTPPacket
 
 
-class EchoCall(RTPCall):
+class EchoCall(Session):
     def packet_received(self, packet: RTPPacket, addr: tuple[str, int]) -> None:
         # Echo every packet straight back to the sender.
         self.send_packet(packet, addr)

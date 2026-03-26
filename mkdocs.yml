@@ -11,7 +11,7 @@ nav:
       - Feature Roadmap: feature_roadmap.md
       - RFC Implementation Status: rfc_status.md
   - API Reference:
-      - Calls: calls.md
+      - Sessions: sessions.md
       - Codecs: codecs.md
       - RTP: rtp.md
       - SDP: sdp.md

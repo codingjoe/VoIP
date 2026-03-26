@@ -1,6 +1,6 @@
-# Call legs
+# Multimedia Dessions / Call Leg Handlers
 
-[RTPCall][voip.rtp.RTPCall] is the base class for all call leg handlers.
+[Session][voip.rtp.Session] is the base class for all call leg handlers.
 
 ## Audio Handling
 

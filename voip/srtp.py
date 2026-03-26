@@ -11,8 +11,6 @@ Requires the `cryptography` package (included in any installation).
 [RFC 4568]: https://datatracker.ietf.org/doc/html/rfc4568
 """
 
-from __future__ import annotations
-
 import base64
 import dataclasses
 import hmac as _hmac_stdlib

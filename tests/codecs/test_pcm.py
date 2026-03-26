@@ -1,7 +1,5 @@
 """Tests for the PCMA and PCMU codecs (voip.codecs.pcma, voip.codecs.pcmu)."""
 
-from __future__ import annotations
-
 import pytest
 
 np = pytest.importorskip("numpy")

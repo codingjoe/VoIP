@@ -2,11 +2,11 @@
 
 import pytest
 from voip.sdp.messages import SessionDescription
-from voip.sip.messages import Message, Request, Response
-from voip.sip.types import CallerID
+from voip.sip.messages import Dialog, Message, Request, Response
+from voip.sip.types import CallerID, SipUri
 
 
-class TestSIPMessage:
+class TestMessage:
     def test_parse__request(self):
         """Parse a SIP request from bytes."""
         data = (
@@ -123,7 +123,7 @@ class TestSIPMessage:
         with pytest.raises(ValueError, match="Invalid SIP message"):
             Message.parse(b"TOOSHORT\r\n\r\n")
 
-    def test_str__returns_decoded_bytes(self):
+    def test___str____returns_decoded_bytes(self):
         """Return the string representation of a request as decoded bytes."""
         request = Request(
             method="REGISTER",
@@ -132,9 +132,52 @@ class TestSIPMessage:
         )
         assert str(request) == bytes(request).decode()
 
+    def test_branch__extracts_via_branch_parameter(self):
+        """Return the branch parameter from the top Via header."""
+        data = (
+            b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bKabc\r\n"
+            b"\r\n"
+        )
+        request = Message.parse(data)
+        assert request.branch == "z9hG4bKabc"
+
+    def test_remote_tag__with_tag(self):
+        """Return the To-header tag parameter."""
+        data = (
+            b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bKabc\r\n"
+            b"To: sip:bob@biloxi.com;tag=to-tag-1\r\n"
+            b"\r\n"
+        )
+        request = Message.parse(data)
+        assert request.remote_tag == "to-tag-1"
+
+    def test_local_tag__with_tag(self):
+        """Return the From-header tag parameter."""
+        data = (
+            b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bKabc\r\n"
+            b"From: sip:alice@atlanta.com;tag=from-tag-1\r\n"
+            b"\r\n"
+        )
+        request = Message.parse(data)
+        assert request.local_tag == "from-tag-1"
+
+    def test_sequence__returns_cseq_number(self):
+        """Return the integer sequence number from the CSeq header."""
+        data = (
+            b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bKabc\r\n"
+            b"CSeq: 42 INVITE\r\n"
+            b"\r\n"
+        )
+        request = Message.parse(data)
+        assert request.sequence == 42
+
 
 class TestRequest:
-    def test_request__bytes(self):
+    def test___bytes__(self):
         """Serialize a SIP request to bytes."""
         request = Request(
             method="INVITE",
@@ -147,7 +190,7 @@ class TestRequest:
             b"\r\n"
         )
 
-    def test_request__bytes__with_sdp_body(self):
+    def test___bytes____with_sdp_body(self):
         """Serialize a SIP request with an SDP body to bytes."""
         sdp = SessionDescription()
         request = Request(
@@ -159,9 +202,35 @@ class TestRequest:
         assert b"Content-Length:" in serialized
         assert b"v=0" in serialized
 
+    def test_branch__with_branch(self):
+        """Branch returns the branch parameter from the Via header."""
+        request = Request(
+            method="INVITE",
+            uri="sip:bob@biloxi.com",
+            headers={"Via": "SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bKabc123"},
+        )
+        assert request.branch == "z9hG4bKabc123"
+
+    def test_from_dialog__merges_dialog_headers(self):
+        """Merge the provided headers with the dialog's headers."""
+        dialog = Dialog(
+            uac=SipUri.parse("sips:alice@example.com"),
+            local_tag="local-tag",
+            remote_tag="remote-tag",
+        )
+        request = Request.from_dialog(
+            dialog=dialog,
+            headers={"Via": "SIP/2.0/TLS example.com;branch=z9hG4bK123"},
+            method="REGISTER",
+            uri="sips:example.com",
+        )
+        assert "From" in request.headers
+        assert "Call-ID" in request.headers
+        assert "Via" in request.headers
+
 
 class TestResponse:
-    def test_response__bytes(self):
+    def test___bytes__(self):
         """Serialize a SIP response to bytes."""
         response = Response(
             status_code=200,
@@ -174,7 +243,7 @@ class TestResponse:
             b"\r\n"
         )
 
-    def test_response__bytes__with_sdp_body(self):
+    def test___bytes____with_sdp_body(self):
         """Serialize a SIP response with an SDP body to bytes."""
         sdp = SessionDescription()
         response = Response(status_code=200, phrase="OK", body=sdp)
@@ -182,7 +251,7 @@ class TestResponse:
         assert b"Content-Length:" in serialized
         assert b"v=0" in serialized
 
-    def test_response__bytes__with_sdp_body__auto_content_length(self):
+    def test___bytes____with_sdp_body__auto_content_length(self):
         """Auto-calculate Content-Length when SDP body is present and header is not set."""
         sdp = SessionDescription()
         response = Response(status_code=200, phrase="OK", body=sdp)
@@ -190,3 +259,90 @@ class TestResponse:
         assert b"Content-Length:" in serialized
         parsed = Message.parse(serialized)
         assert parsed.body is None
+
+    def test_from_request__with_dialog_remote_tag(self):
+        """Include dialog remote_tag in To header when dialog has a remote_tag."""
+        data = (
+            b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bKabc\r\n"
+            b"From: sip:alice@atlanta.com;tag=from-tag-1\r\n"
+            b"To: sip:bob@biloxi.com\r\n"
+            b"Call-ID: test-call@atlanta.com\r\n"
+            b"CSeq: 1 INVITE\r\n"
+            b"\r\n"
+        )
+        request = Message.parse(data)
+        dialog = Dialog(
+            uac=SipUri.parse("sip:alice@atlanta.com"),
+            remote_tag="server-tag",
+        )
+        response = Response.from_request(
+            request, dialog=dialog, status_code=200, phrase="OK"
+        )
+        assert "server-tag" in str(response.headers["To"])
+
+    def test_from_request__without_dialog(self):
+        """Copy To header verbatim from the request when no dialog is provided."""
+        data = (
+            b"OPTIONS sip:bob@biloxi.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bKxyz\r\n"
+            b"From: sip:alice@atlanta.com;tag=ft1\r\n"
+            b"To: sip:bob@biloxi.com\r\n"
+            b"Call-ID: opts-call@atlanta.com\r\n"
+            b"CSeq: 1 OPTIONS\r\n"
+            b"\r\n"
+        )
+        request = Message.parse(data)
+        response = Response.from_request(request, status_code=200, phrase="OK")
+        assert response.headers["To"] == request.headers["To"]
+
+
+class TestDialog:
+    def test_from_header__contains_local_tag(self):
+        """from_header includes the local_tag parameter."""
+        dialog = Dialog(
+            uac=SipUri.parse("sips:alice@example.com"),
+            local_tag="my-local-tag",
+        )
+        assert "my-local-tag" in dialog.from_header
+
+    def test_to_header__without_remote_tag(self):
+        """to_header omits the tag parameter when remote_tag is None."""
+        dialog = Dialog(
+            uac=SipUri.parse("sip:bob@biloxi.com:5060"),
+            remote_tag=None,
+        )
+        assert ";tag=" not in dialog.to_header
+
+    def test_to_header__with_remote_tag(self):
+        """to_header includes the remote_tag parameter."""
+        dialog = Dialog(
+            uac=SipUri.parse("sip:bob@biloxi.com:5060"),
+            remote_tag="their-tag",
+        )
+        assert "their-tag" in dialog.to_header
+
+    def test_headers__returns_required_keys(self):
+        """Headers property returns From, To, and Call-ID keys."""
+        dialog = Dialog(uac=SipUri.parse("sips:alice@example.com"))
+        headers = dialog.headers
+        assert "From" in headers
+        assert "To" in headers
+        assert "Call-ID" in headers
+
+    def test_from_request__extracts_call_id_and_tags(self):
+        """from_request creates a Dialog with the correct call_id and tags."""
+        data = (
+            b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bKabc\r\n"
+            b"From: sip:alice@atlanta.com;tag=from-tag-99\r\n"
+            b"To: sip:bob@biloxi.com\r\n"
+            b"Call-ID: call-99@atlanta.com\r\n"
+            b"CSeq: 1 INVITE\r\n"
+            b"\r\n"
+        )
+        request = Message.parse(data)
+        dialog = Dialog.from_request(request)
+        assert dialog.call_id == "call-99@atlanta.com"
+        assert dialog.local_tag == "from-tag-99"
+        assert dialog.remote_tag is not None

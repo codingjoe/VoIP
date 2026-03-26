@@ -1,7 +1,5 @@
 """Tests for the RTPCodec base class (voip.codecs.base)."""
 
-from __future__ import annotations
-
 from unittest.mock import patch
 
 import pytest

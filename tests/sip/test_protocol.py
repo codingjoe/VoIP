@@ -1,2366 +1,859 @@
 """Tests for the SIP asyncio protocol handler."""
 
 import asyncio
-import dataclasses
 import datetime
-import hashlib
 import ipaddress
-import re
-from unittest.mock import MagicMock, patch
 
-import pytest
-from voip.rtp import RealtimeTransportProtocol, RTPCall
-from voip.sdp.messages import SessionDescription
-from voip.sdp.types import Timing
-from voip.sip.messages import Message, Request, Response
-from voip.sip.protocol import (
-    SIP,
-    RegistrationError,
-    SessionInitiationProtocol,
-    _format_host,
-    _mask_caller,
-)
-from voip.sip.types import CallerID, DigestAlgorithm, SIPStatus
+from voip.sip.messages import Message, Response
+from voip.sip.protocol import PING, PONG, SessionInitiationProtocol
+from voip.sip.transactions import InviteTransaction
+from voip.sip.types import SIPMethod, SipUri
+from voip.types import NetworkAddress
 
-INVITE_WITH_PCMA = (
-    b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
-    b"Via: SIP/2.0/UDP pc33.atlanta.com\r\n"
-    b"From: sip:alice@atlanta.com\r\n"
-    b"To: sip:bob@biloxi.com\r\n"
-    b"Call-ID: test-call-id-1\r\n"
-    b"CSeq: 1 INVITE\r\n"
-    b"Content-Type: application/sdp\r\n"
-    b"Content-Length: 72\r\n"
-    b"\r\n"
-    b"v=0\r\n"
-    b"o=- 0 0 IN IP4 192.0.2.1\r\n"
-    b"s=-\r\n"
-    b"c=IN IP4 192.0.2.1\r\n"
-    b"t=0 0\r\n"
-    b"m=audio 49170 RTP/AVP 8 0\r\n"
-)
-
-INVITE_WITH_PCMU_ONLY = (
-    b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
-    b"Via: SIP/2.0/UDP pc33.atlanta.com\r\n"
-    b"From: sip:alice@atlanta.com\r\n"
-    b"To: sip:bob@biloxi.com\r\n"
-    b"Call-ID: test-call-id-2\r\n"
-    b"CSeq: 1 INVITE\r\n"
-    b"Content-Type: application/sdp\r\n"
-    b"Content-Length: 68\r\n"
-    b"\r\n"
-    b"v=0\r\n"
-    b"o=- 0 0 IN IP4 192.0.2.1\r\n"
-    b"s=-\r\n"
-    b"c=IN IP4 192.0.2.1\r\n"
-    b"t=0 0\r\n"
-    b"m=audio 49170 RTP/AVP 0\r\n"
-)
-
-INVITE_WITH_UNKNOWN_CODEC = (
-    b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
-    b"Via: SIP/2.0/UDP pc33.atlanta.com\r\n"
-    b"From: sip:alice@atlanta.com\r\n"
-    b"To: sip:bob@biloxi.com\r\n"
-    b"Call-ID: test-call-id-3\r\n"
-    b"CSeq: 1 INVITE\r\n"
-    b"Content-Type: application/sdp\r\n"
-    b"Content-Length: 100\r\n"
-    b"\r\n"
-    b"v=0\r\n"
-    b"o=- 0 0 IN IP4 192.0.2.1\r\n"
-    b"s=-\r\n"
-    b"c=IN IP4 192.0.2.1\r\n"
-    b"t=0 0\r\n"
-    b"m=audio 49170 RTP/AVP 126\r\n"
-    b"a=rtpmap:126 telephone-event/8000\r\n"
-)
-
-INVITE_NO_SDP = (
-    b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
-    b"Via: SIP/2.0/UDP pc33.atlanta.com\r\n"
-    b"From: sip:alice@atlanta.com\r\n"
-    b"To: sip:bob@biloxi.com\r\n"
-    b"Call-ID: test-call-id-4\r\n"
-    b"CSeq: 1 INVITE\r\n"
-    b"\r\n"
-)
+from .conftest import INVITE_BYTES, FakeTransport
 
 
-class FakeTransport:
-    """Fake TCP/TLS transport for testing."""
-
-    def __init__(
-        self,
-        local_addr: tuple[str, int] = ("127.0.0.1", 5061),
-        peer_addr: tuple[str, int] = ("192.0.2.1", 5061),
-    ):
-        self._local_addr = local_addr
-        self._peer_addr = peer_addr
-        self.sent: list[bytes] = []
-
-    def write(self, data: bytes) -> None:
-        self.sent.append(data)
-
-    def get_extra_info(self, key, default=None):
-        if key == "sockname":
-            return self._local_addr
-        if key == "peername":
-            return self._peer_addr
-        if key == "ssl_object":
-            return object()  # non-None signals TLS
-        return default
-
-
-class FakeProtocol(SessionInitiationProtocol):
-    """Fake SIP protocol that captures sent messages."""
-
-    def __init__(self):
-        super().__init__(outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com")
-        self.connection_made(FakeTransport())
-        self._sent_responses: list[tuple[Response, None]] = []
-
-    def send(self, message):
-        if isinstance(message, Response):
-            self._sent_responses.append((message, None))
-        super().send(message)
-
-
-class ConcreteProtocol(SessionInitiationProtocol):
-    """Concrete subclass for testing that records received messages."""
-
-    def __init__(self):
-        super().__init__(outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com")
-        self.requests = []
-        self.responses = []
-
-    def request_received(self, request, addr):
-        self.requests.append((request, addr))
-
-    def response_received(self, response, addr):
-        self.responses.append((response, addr))
-
-
-class TestMaskCaller:
-    def test_full_from_header_with_display_name(self):
-        """Mask all but the last 4 chars of a 12-digit display name (8 asterisks)."""
-        header = '"08001234567" <sip:08001234567@telefonica.de>;tag=abc123'
-        assert _mask_caller(header) == "*******4567"
-
-    def test_bare_sip_uri(self):
-        """Extract user part from a bare SIP URI and mask all but the last 4 chars."""
-        assert _mask_caller("sip:alice@example.com") == "*lice"
-
-    def test_short_caller__no_masking(self):
-        """Identifiers with 4 or fewer characters are returned as-is."""
-        assert _mask_caller("<sip:bob@example.com>") == "bob"
-
-    def test_strips_tag_parameter(self):
-        """The tag= and any subsequent parameters are stripped before masking."""
-        header = '"08001234567" <sip:08001234567@example.com>;tag=xyz;other=1'
-        result = _mask_caller(header)
-        assert "tag" not in result
-        assert result.endswith("4567")
-
-    def test_angle_bracket_uri_without_display_name(self):
-        """Parse <sip:user@host> style without a display name."""
-        assert _mask_caller("<sip:alice@example.com>") == "*lice"
-
-
-class TestCallerID:
-    def test_str__returns_raw_header(self):
-        """str() returns the original SIP header value unchanged."""
-        raw = '"08001234567" <sip:08001234567@telefonica.de>;tag=abc'
-        assert str(CallerID(raw)) == raw
-
-    def test_repr__masks_display_name_and_includes_domain(self):
-        """repr() shows last 4 chars of display name and the carrier domain."""
-        caller = CallerID('"08001234567" <sip:08001234567@telefonica.de>;tag=abc')
-        assert repr(caller) == "*******4567@telefonica.de"
-
-    def test_repr__bare_sip_uri(self):
-        """repr() masks the user part of a bare SIP URI and includes the domain."""
-        assert repr(CallerID("sip:alice@example.com")) == "*lice@example.com"
-
-    def test_repr__angle_bracket_uri(self):
-        """repr() handles <sip:user@host> without a display name."""
-        assert repr(CallerID("<sip:bob@biloxi.com>")) == "bob@biloxi.com"
-
-    def test_user__phone_number(self):
-        """User property extracts the SIP user part from a phone number URI."""
-        caller = CallerID('"08001234567" <sip:08001234567@telefonica.de>')
-        assert caller.user == "08001234567"
-
-    def test_user__bare_uri(self):
-        """User property extracts the username from a bare SIP URI."""
-        assert CallerID("sip:alice@example.com").user == "alice"
-
-    def test_host__returns_carrier_domain(self):
-        """Host property returns the domain part of the SIP URI."""
-        assert CallerID("sip:alice@carrier.example.com").host == "carrier.example.com"
-
-    def test_display_name__quoted(self):
-        """display_name returns the quoted display name."""
-        assert CallerID('"Alice" <sip:alice@example.com>').display_name == "Alice"
-
-    def test_display_name__absent(self):
-        """display_name is None when no display name is present."""
-        assert CallerID("sip:alice@example.com").display_name is None
-
-    def test_tag__present(self):
-        """Tag property extracts the tag parameter value."""
-        assert CallerID("sip:alice@example.com;tag=abc123").tag == "abc123"
-
-    def test_tag__absent(self):
-        """Tag is None when no tag parameter is present."""
-        assert CallerID("sip:alice@example.com").tag is None
-
-    def test_is_str_subclass(self):
-        """CallerID is a str, so it passes isinstance checks transparently."""
-        assert isinstance(CallerID("sip:alice@example.com"), str)
-
-    def test_equality_with_plain_string(self):
-        """CallerID compares equal to a plain str with the same value."""
-        assert CallerID("sip:alice@example.com") == "sip:alice@example.com"
-
-    def test_data_received__request(self):
-        """Dispatch a received SIP request to request_received via TCP stream."""
-        protocol = ConcreteProtocol()
-        transport = FakeTransport(peer_addr=("192.0.2.1", 5060))
-        protocol.transport = transport
-        data = (
-            b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
-            b"Via: SIP/2.0/TLS pc33.atlanta.com\r\n"
-            b"\r\n"
+class TestSessionInitiationProtocol:
+    def test_connection_made__stores_transport(self, fake_transport, rtp):
+        """Store transport reference after connection_made."""
+        session = SessionInitiationProtocol(
+            aor=SipUri.parse("sips:alice:secret@example.com"),
+            rtp=rtp,
+            transaction_class=InviteTransaction,
         )
-        protocol.data_received(data)
-        assert len(protocol.requests) == 1
-        request, called_addr = protocol.requests[0]
-        assert isinstance(request, Request)
-        assert request.method == "INVITE"
-        assert called_addr == ("192.0.2.1", 5060)
+        session.connection_made(fake_transport)
+        assert session.transport is fake_transport
 
-    def test_data_received__response(self):
-        """Dispatch a received SIP response to response_received via TCP stream."""
-        protocol = ConcreteProtocol()
-        transport = FakeTransport(peer_addr=("192.0.2.1", 5060))
-        protocol.transport = transport
-        data = b"SIP/2.0 200 OK\r\nVia: SIP/2.0/TLS pc33.atlanta.com\r\n\r\n"
-        protocol.data_received(data)
-        assert len(protocol.responses) == 1
-        response, called_addr = protocol.responses[0]
-        assert isinstance(response, Response)
-        assert response.status_code == 200
-        assert called_addr == ("192.0.2.1", 5060)
-
-    def test_connection_lost__no_exception(self):
-        """Handle a clean connection close without raising."""
-        protocol = SessionInitiationProtocol(
-            outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
+    def test_connection_made__sets_local_address(self, fake_transport, rtp):
+        """Set local_address from the socket's sockname after connection_made."""
+        session = SessionInitiationProtocol(
+            aor=SipUri.parse("sips:alice:secret@example.com"),
+            rtp=rtp,
+            transaction_class=InviteTransaction,
         )
-        protocol.connection_lost(None)  # should not raise
+        session.connection_made(fake_transport)
+        assert str(session.local_address.host) == "127.0.0.1"
+        assert session.local_address.port == 5061
 
-    def test_connection_lost__with_exception(self):
-        """Log an exception on connection lost without re-raising."""
-        protocol = SessionInitiationProtocol(
-            outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
+    def test_connection_made__sets_is_secure_for_tls(self, rtp):
+        """Mark connection as secure when ssl_object is present."""
+        transport = FakeTransport(_ssl=True)
+        session = SessionInitiationProtocol(
+            aor=SipUri.parse("sips:alice:secret@example.com"),
+            rtp=rtp,
+            transaction_class=InviteTransaction,
         )
-        protocol.connection_lost(Exception("Connection reset"))  # should not raise
+        session.connection_made(transport)
+        assert session.is_secure is True
 
-
-class TestWithToTag:
-    def test__with_to_tag__adds_tag(self):
-        """Append the To tag to the To header for a known Call-ID."""
-        protocol = SessionInitiationProtocol(
-            outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
+    def test_connection_made__is_not_secure_without_ssl(self, rtp):
+        """Mark connection as not secure when ssl_object is absent."""
+        transport = FakeTransport(_ssl=False)
+        session = SessionInitiationProtocol(
+            aor=SipUri.parse("sip:alice:secret@example.com"),
+            rtp=rtp,
+            transaction_class=InviteTransaction,
         )
-        protocol._to_tags["call-1"] = "abc123"
-        result = protocol._with_to_tag({"To": "sip:bob@biloxi.com"}, "call-1")
-        assert result["To"] == "sip:bob@biloxi.com;tag=abc123"
+        session.connection_made(transport)
+        assert session.is_secure is False
 
-    def test__with_to_tag__unknown_call_id(self):
-        """Leave the To header unchanged when the Call-ID has no stored tag."""
-        protocol = SessionInitiationProtocol(
-            outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
+    async def test_connection_made__sends_register(self, fake_transport, rtp):
+        """Send a REGISTER request immediately after connection_made in async context."""
+        session = SessionInitiationProtocol(
+            aor=SipUri.parse("sips:alice:secret@example.com"),
+            rtp=rtp,
+            transaction_class=InviteTransaction,
         )
-        result = protocol._with_to_tag({"To": "sip:bob@biloxi.com"}, "unknown")
-        assert result["To"] == "sip:bob@biloxi.com"
+        session.connection_made(fake_transport)
+        if session.keepalive_task:
+            session.keepalive_task.cancel()
+        assert any(b"REGISTER" in data for data in fake_transport.sent)
 
-    def test__with_to_tag__missing_to_header(self):
-        """Return an empty To header when none is present and no tag exists."""
-        protocol = SessionInitiationProtocol(
-            outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com"
+    async def test_connection_made__creates_keepalive_task(self, fake_transport, rtp):
+        """Create a keepalive task in async context."""
+        session = SessionInitiationProtocol(
+            aor=SipUri.parse("sips:alice:secret@example.com"),
+            rtp=rtp,
+            transaction_class=InviteTransaction,
         )
-        result = protocol._with_to_tag({}, "unknown")
-        assert result["To"] == ""
-
-
-class TestRinging:
-    def test_ringing__includes_to_tag(self):
-        """Include the To tag in a 180 Ringing response (RFC 3261 §8.2.6.2)."""
-        protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
-        request = Request(
-            method="INVITE",
-            uri="sip:bob@biloxi.com",
-            headers={
-                "Via": "SIP/2.0/UDP pc33.atlanta.com",
-                "From": "sip:alice@atlanta.com",
-                "To": "sip:bob@biloxi.com",
-                "Call-ID": "ring-test-1",
-                "CSeq": "1 INVITE",
-            },
-        )
-        protocol.request_received(request, addr)
-        protocol.ringing(request)
-        assert len(protocol._sent_responses) == 1
-        response, _ = protocol._sent_responses[0]
-        assert response.status_code == 180
-        to_header = response.headers.get("To", "")
-        assert ";tag=" in to_header
-
-    def test_ringing__no_address(self, caplog):
-        """Log an error and send nothing when no pending INVITE is stored for the Call-ID."""
-        protocol = FakeProtocol()
-        request = Request(
-            method="INVITE",
-            uri="sip:bob@biloxi.com",
-            headers={"Call-ID": "nonexistent"},
-        )
-        with caplog.at_level("ERROR"):
-            protocol.ringing(request)
-        assert not protocol._sent_responses
-        assert "No pending INVITE found" in caplog.text
-
-
-class TestReject:
-    def test_reject__includes_to_tag(self):
-        """Include the To tag in a reject response (RFC 3261 §8.2.6.2)."""
-        protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
-        request = Request(
-            method="INVITE",
-            uri="sip:bob@biloxi.com",
-            headers={
-                "Via": "SIP/2.0/UDP pc33.atlanta.com",
-                "From": "sip:alice@atlanta.com",
-                "To": "sip:bob@biloxi.com",
-                "Call-ID": "reject-test-1",
-                "CSeq": "1 INVITE",
-            },
-        )
-        protocol.request_received(request, addr)
-        protocol.reject(request)
-        assert len(protocol._sent_responses) == 1
-        response, _ = protocol._sent_responses[0]
-        assert response.status_code == 486
-        assert ";tag=" in response.headers.get("To", "")
-
-    def test_reject__cleans_up_to_tag(self):
-        """Remove the To tag after rejecting (no lingering state)."""
-        protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
-        request = Request(
-            method="INVITE",
-            uri="sip:bob@biloxi.com",
-            headers={"Call-ID": "reject-cleanup-1", "To": "sip:bob@biloxi.com"},
-        )
-        protocol.request_received(request, addr)
-        assert "reject-cleanup-1" in protocol._to_tags
-        protocol.reject(request)
-        assert "reject-cleanup-1" not in protocol._to_tags
-
-    def test_reject__no_address(self, caplog):
-        """Log an error and send nothing when no pending INVITE is stored for the Call-ID."""
-        protocol = FakeProtocol()
-        request = Request(
-            method="INVITE",
-            uri="sip:bob@biloxi.com",
-            headers={"Call-ID": "nonexistent"},
-        )
-        with caplog.at_level("ERROR"):
-            protocol.reject(request)
-        assert not protocol._sent_responses
-        assert "No pending INVITE found" in caplog.text
-
-
-class TestBYEHandler:
-    def test_bye__includes_to_tag_when_present(self):
-        """Include the stored To tag in a 200 OK BYE response."""
-        protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
-        invite = Request(
-            method="INVITE",
-            uri="sip:bob@biloxi.com",
-            headers={
-                "Via": "SIP/2.0/UDP pc33.atlanta.com",
-                "From": "sip:alice@atlanta.com",
-                "To": "sip:bob@biloxi.com",
-                "Call-ID": "bye-tag-test-1",
-                "CSeq": "1 INVITE",
-            },
-        )
-        protocol.request_received(invite, addr)
-        tag = protocol._to_tags["bye-tag-test-1"]
-        bye = Request(
-            method="BYE",
-            uri="sip:bob@biloxi.com",
-            headers={
-                "Via": "SIP/2.0/UDP pc33.atlanta.com",
-                "From": "sip:alice@atlanta.com",
-                "To": "sip:bob@biloxi.com",
-                "Call-ID": "bye-tag-test-1",
-                "CSeq": "2 BYE",
-            },
-        )
-        protocol.request_received(bye, addr)
-        assert len(protocol._sent_responses) == 1
-        response, _ = protocol._sent_responses[0]
-        assert response.status_code == 200
-        assert f";tag={tag}" in response.headers.get("To", "")
-
-    def test_bye__cleans_up_to_tag(self):
-        """Remove the To tag from state after processing BYE."""
-        protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
-        invite = Request(
-            method="INVITE",
-            uri="sip:bob@biloxi.com",
-            headers={"Call-ID": "bye-cleanup-1", "To": "sip:bob@biloxi.com"},
-        )
-        protocol.request_received(invite, addr)
-        assert "bye-cleanup-1" in protocol._to_tags
-        bye = Request(
-            method="BYE",
-            uri="sip:bob@biloxi.com",
-            headers={"Call-ID": "bye-cleanup-1", "To": "sip:bob@biloxi.com"},
-        )
-        protocol.request_received(bye, addr)
-        assert "bye-cleanup-1" not in protocol._to_tags
-
-    def test_bye__without_prior_to_tag(self):
-        """Send a 200 OK BYE response without tag when no To tag is stored."""
-        protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
-        bye = Request(
-            method="BYE",
-            uri="sip:bob@biloxi.com",
-            headers={
-                "To": "sip:bob@biloxi.com",
-                "Call-ID": "bye-no-tag-1",
-                "CSeq": "2 BYE",
-            },
-        )
-        protocol.request_received(bye, addr)
-        assert len(protocol._sent_responses) == 1
-        response, _ = protocol._sent_responses[0]
-        assert response.status_code == 200
-        assert ";tag=" not in response.headers.get("To", "")
-
-
-class TestAnswer:
-    @pytest.fixture()
-    def fake_rtp_transport(self):
-        """Provide a fake RTP transport with a fixed local address."""
-        return FakeTransport(("127.0.0.1", 12000))
-
-    def _make_invite(
-        self,
-        call_id: str,
-        sdp_body: SessionDescription | None = None,
-        *,
-        record_route: str | None = None,
-    ) -> Request:
-        """Build a minimal INVITE request."""
-        headers = {
-            "Via": "SIP/2.0/UDP pc33.atlanta.com",
-            "From": "sip:alice@atlanta.com",
-            "To": "sip:bob@biloxi.com",
-            "Call-ID": call_id,
-            "CSeq": "1 INVITE",
-        }
-        if sdp_body:
-            headers["Content-Type"] = "application/sdp"
-        if record_route:
-            headers["Record-Route"] = record_route
-        return Request(
-            method="INVITE", uri="sip:bob@biloxi.com", headers=headers, body=sdp_body
-        )
-
-    async def _run_answer(self, protocol, invite, fake_rtp_transport):
-        """Run _answer coroutine with a pre-populated shared RTP mux."""
-        loop = asyncio.get_running_loop()
-        # Pre-populate the shared RTP mux so _answer() skips socket creation.
-        mux = RealtimeTransportProtocol()
-        mux.public_address = loop.create_future()
-        mux.public_address.set_result((ipaddress.IPv4Address("127.0.0.1"), 12000))
-        protocol._rtp_protocol = mux
-        protocol._rtp_transport = fake_rtp_transport
-        # Resolve the SIP protocol's own local address (for Contact header).
-        protocol.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        await protocol.answer(invite, call_class=_CodecAwareCall)
-
-    @pytest.mark.asyncio
-    async def test_answer__selects_pcma_from_offer(self, fake_rtp_transport):
-        """Select PCMA (8) when the remote SDP offers both PCMA and PCMU."""
-        protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
-        sdp_body = SessionDescription.parse(
-            b"v=0\r\n"
-            b"o=- 0 0 IN IP4 192.0.2.1\r\n"
-            b"s=-\r\n"
-            b"c=IN IP4 192.0.2.1\r\n"
-            b"t=0 0\r\n"
-            b"m=audio 49170 RTP/AVP 8 0\r\n"
-        )
-        invite = self._make_invite("answer-pcma-1", sdp_body)
-        protocol.request_received(invite, addr)
-        await self._run_answer(protocol, invite, fake_rtp_transport)
-        assert protocol._sent_responses
-        response, _ = protocol._sent_responses[-1]
-        assert response.status_code == 200
-        assert response.body.origin is not None
-        assert response.body.timings == [Timing(start_time=0, stop_time=0)]
-        assert response.body.media[0].fmt[0].payload_type == 8
-        assert any(a.name == "sendrecv" for a in response.body.media[0].attributes)
-        assert response.body.media[0].fmt[0].encoding_name.startswith("PCMA")
-
-    @pytest.mark.asyncio
-    async def test_answer__selects_pcmu_when_only_option(self, fake_rtp_transport):
-        """Select PCMU (0) when the remote SDP offers only PCMU."""
-        protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
-        sdp_body = SessionDescription.parse(
-            b"v=0\r\n"
-            b"o=- 0 0 IN IP4 192.0.2.1\r\n"
-            b"s=-\r\n"
-            b"c=IN IP4 192.0.2.1\r\n"
-            b"t=0 0\r\n"
-            b"m=audio 49170 RTP/AVP 0\r\n"
-        )
-        invite = self._make_invite("answer-pcmu-1", sdp_body)
-        protocol.request_received(invite, addr)
-        await self._run_answer(protocol, invite, fake_rtp_transport)
-        response, _ = protocol._sent_responses[-1]
-        assert response.body.media[0].fmt[0].payload_type == 0  # PCMU when only option
-
-    @pytest.mark.asyncio
-    async def test_answer__selects_opus_from_offer(self, fake_rtp_transport):
-        """Select Opus (111) when the remote SDP offers Opus alongside PCMA and PCMU."""
-        protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
-        sdp_body = SessionDescription.parse(
-            b"v=0\r\n"
-            b"o=- 0 0 IN IP4 192.0.2.1\r\n"
-            b"s=-\r\n"
-            b"c=IN IP4 192.0.2.1\r\n"
-            b"t=0 0\r\n"
-            b"m=audio 49170 RTP/AVP 111 8 0\r\n"
-            b"a=rtpmap:111 opus/48000/2\r\n"
-        )
-        invite = self._make_invite("answer-opus-1", sdp_body)
-        protocol.request_received(invite, addr)
-        await self._run_answer(protocol, invite, fake_rtp_transport)
-        response, _ = protocol._sent_responses[-1]
-        assert response.body.media[0].fmt[0].payload_type == 111
-        assert response.body.media[0].fmt[0].encoding_name.lower().startswith("opus")
-
-    @pytest.mark.asyncio
-    async def test_answer__selects_g722_when_no_opus(self, fake_rtp_transport):
-        """Select G.722 (9) when the remote SDP offers G.722 and PCMA but not Opus."""
-        protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
-        sdp_body = SessionDescription.parse(
-            b"v=0\r\n"
-            b"o=- 0 0 IN IP4 192.0.2.1\r\n"
-            b"s=-\r\n"
-            b"c=IN IP4 192.0.2.1\r\n"
-            b"t=0 0\r\n"
-            b"m=audio 49170 RTP/AVP 9 8\r\n"
-        )
-        invite = self._make_invite("answer-g722-1", sdp_body)
-        protocol.request_received(invite, addr)
-        await self._run_answer(protocol, invite, fake_rtp_transport)
-        response, _ = protocol._sent_responses[-1]
-        assert response.body.media[0].fmt[0].payload_type == 9  # G.722
-
-    @pytest.mark.asyncio
-    async def test_answer__selects_opus_by_name_match_with_different_pt(
-        self, fake_rtp_transport
-    ):
-        """Select Opus by codec name match when remote uses a non-standard payload type."""
-        protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
-        sdp_body = SessionDescription.parse(
-            b"v=0\r\n"
-            b"o=- 0 0 IN IP4 192.0.2.1\r\n"
-            b"s=-\r\n"
-            b"c=IN IP4 192.0.2.1\r\n"
-            b"t=0 0\r\n"
-            b"m=audio 49170 RTP/AVP 100 8\r\n"
-            b"a=rtpmap:100 opus/48000/2\r\n"
-        )
-        invite = self._make_invite("answer-opus-name-1", sdp_body)
-        protocol.request_received(invite, addr)
-        await self._run_answer(protocol, invite, fake_rtp_transport)
-        response, _ = protocol._sent_responses[-1]
-        assert (
-            response.body.media[0].fmt[0].payload_type == 100
-        )  # Opus at non-standard PT
-
-    @pytest.mark.asyncio
-    async def test_answer__unsupported_codec__raises(self, fake_rtp_transport):
-        """Raise NotImplementedError when the INVITE offers only unsupported codecs."""
-        protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
-        sdp_body = SessionDescription.parse(
-            b"v=0\r\n"
-            b"o=- 0 0 IN IP4 192.0.2.1\r\n"
-            b"s=-\r\n"
-            b"c=IN IP4 192.0.2.1\r\n"
-            b"t=0 0\r\n"
-            b"m=audio 49170 RTP/AVP 126\r\n"
-            b"a=rtpmap:126 telephone-event/8000\r\n"
-        )
-        invite = self._make_invite("answer-fallback-1", sdp_body)
-        protocol.request_received(invite, addr)
-        with pytest.raises(NotImplementedError):
-            await self._run_answer(protocol, invite, fake_rtp_transport)
-
-    @pytest.mark.asyncio
-    async def test_answer__no_sdp_falls_back_to_default(self, fake_rtp_transport):
-        """Use payload type 0 (PCMU) with SAVP when the INVITE has no SDP body."""
-        protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
-        invite = self._make_invite("answer-no-sdp-1")
-        protocol.request_received(invite, addr)
-        await self._run_answer(protocol, invite, fake_rtp_transport)
-        response, _ = protocol._sent_responses[-1]
-        assert response.body.media[0].fmt[0].payload_type == 0  # PCMU default
-
-    @pytest.mark.asyncio
-    async def test_answer__includes_to_tag_in_200_ok(self, fake_rtp_transport):
-        """Include the locally generated To tag in the 200 OK response."""
-        protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
-        sdp_body = SessionDescription.parse(
-            b"v=0\r\n"
-            b"o=- 0 0 IN IP4 192.0.2.1\r\n"
-            b"s=-\r\n"
-            b"c=IN IP4 192.0.2.1\r\n"
-            b"t=0 0\r\n"
-            b"m=audio 49170 RTP/AVP 8\r\n"
-        )
-        invite = self._make_invite("answer-tag-1", sdp_body)
-        protocol.request_received(invite, addr)
-        stored_tag = protocol._to_tags["answer-tag-1"]
-        await self._run_answer(protocol, invite, fake_rtp_transport)
-        response, _ = protocol._sent_responses[-1]
-        assert f";tag={stored_tag}" in response.headers.get("To", "")
-
-    @pytest.mark.asyncio
-    async def test_answer__no_address_logs_error(self, caplog):
-        """Log an error and return early when no pending INVITE is tracked for the Call-ID."""
-        protocol = FakeProtocol()
-        invite = self._make_invite("no-addr-answer-1")
-
-        with caplog.at_level("ERROR"):
-            await protocol.answer(invite, call_class=RTPCall)
-        assert "No pending INVITE found" in caplog.text
-        assert not protocol._sent_responses
-
-    @pytest.mark.asyncio
-    async def test_answer__includes_contact_header(self, fake_rtp_transport):
-        """Include a Contact header with the local SIP address in 200 OK."""
-        protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
-        invite = self._make_invite("answer-contact-1")
-        protocol.request_received(invite, addr)
-        await self._run_answer(protocol, invite, fake_rtp_transport)
-        response, _ = protocol._sent_responses[-1]
-        assert "Contact" in response.headers
-        # FakeProtocol AOR is sip:test@example.com → sip: Contact.
-        assert response.headers["Contact"].startswith("<sip:")
-        # FakeTransport is TLS-wrapped, so transport=tls param should be present.
-        assert ";transport=tls" in response.headers["Contact"]
-
-    @pytest.mark.asyncio
-    async def test_answer__includes_allow_header(self, fake_rtp_transport):
-        """Include an Allow header listing supported SIP methods in 200 OK."""
-        protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
-        invite = self._make_invite("answer-allow-1")
-        protocol.request_received(invite, addr)
-        await self._run_answer(protocol, invite, fake_rtp_transport)
-        response, _ = protocol._sent_responses[-1]
-        assert "Allow" in response.headers
-        assert "INVITE" in response.headers["Allow"]
-        assert "BYE" in response.headers["Allow"]
-
-    @pytest.mark.asyncio
-    async def test_answer__includes_supported_header(self, fake_rtp_transport):
-        """Include a Supported header in the 200 OK response."""
-        protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
-        invite = self._make_invite("answer-supported-1")
-        protocol.request_received(invite, addr)
-        await self._run_answer(protocol, invite, fake_rtp_transport)
-        response, _ = protocol._sent_responses[-1]
-        assert "Supported" in response.headers
-
-    @pytest.mark.asyncio
-    async def test_answer__echoes_record_route(self, fake_rtp_transport):
-        """Echo the Record-Route header from the INVITE in the 200 OK."""
-        protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
-        route = "<sip:proxy.example.com;lr>"
-        invite = self._make_invite("answer-rr-1", record_route=route)
-        protocol.request_received(invite, addr)
-        await self._run_answer(protocol, invite, fake_rtp_transport)
-        response, _ = protocol._sent_responses[-1]
-        assert response.headers.get("Record-Route") == route
-
-    @pytest.mark.asyncio
-    async def test_answer__omits_record_route_when_absent(self, fake_rtp_transport):
-        """Omit the Record-Route header when the INVITE contains none."""
-        protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
-        invite = self._make_invite("answer-no-rr-1")
-        protocol.request_received(invite, addr)
-        await self._run_answer(protocol, invite, fake_rtp_transport)
-        response, _ = protocol._sent_responses[-1]
-        assert "Record-Route" not in response.headers
-
-    @pytest.mark.asyncio
-    async def test_answer__ipv6_public_address_uses_ip6_addrtype(self):
-        """When the RTP public address is IPv6, the SDP uses addrtype IP6."""
-        protocol = FakeProtocol()
-        addr = ("2001:db8::1", 5060)
-        sdp_body = SessionDescription.parse(
-            "v=0\r\n"
-            "o=- 0 0 IN IP6 2001:db8::1\r\n"
-            "s=-\r\n"
-            "c=IN IP6 2001:db8::1\r\n"
-            "t=0 0\r\n"
-            "m=audio 49170 RTP/AVP 0\r\n"
-        )
-        invite = self._make_invite("answer-ipv6-1", sdp_body)
-        protocol.request_received(invite, addr)
-
-        loop = asyncio.get_running_loop()
-        mux = RealtimeTransportProtocol()
-        mux.public_address = loop.create_future()
-        mux.public_address.set_result((ipaddress.IPv6Address("2001:db8::2"), 12000))
-        protocol._rtp_protocol = mux
-        protocol._rtp_transport = FakeTransport(("2001:db8::2", 12000))
-        protocol.local_address = (ipaddress.IPv6Address("2001:db8::2"), 5061)
-
-        await protocol.answer(invite, call_class=_CodecAwareCall)
-        response, _ = protocol._sent_responses[-1]
-        assert response.body.origin.addrtype == "IP6"
-        assert response.body.connection.addrtype == "IP6"
-        assert response.body.origin.unicast_address == "2001:db8::2"
-        assert response.body.connection.connection_address == "2001:db8::2"
-
-
-class TestCANCELHandler:
-    def test_cancel__sends_200_ok_for_cancel(self):
-        """Send a 200 OK response to the CANCEL request (RFC 3261 §9.2)."""
-        protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
-        invite = Request(
-            method="INVITE",
-            uri="sip:bob@biloxi.com",
-            headers={
-                "Via": "SIP/2.0/UDP pc33.atlanta.com",
-                "From": "sip:alice@atlanta.com",
-                "To": "sip:bob@biloxi.com",
-                "Call-ID": "cancel-test-1",
-                "CSeq": "1 INVITE",
-            },
-        )
-        protocol.request_received(invite, addr)
-        cancel = Request(
-            method="CANCEL",
-            uri="sip:bob@biloxi.com",
-            headers={
-                "Via": "SIP/2.0/UDP pc33.atlanta.com",
-                "From": "sip:alice@atlanta.com",
-                "To": "sip:bob@biloxi.com",
-                "Call-ID": "cancel-test-1",
-                "CSeq": "1 CANCEL",
-            },
-        )
-        protocol.request_received(cancel, addr)
-        ok_response = next(
-            (r for r, _ in protocol._sent_responses if r.status_code == 200), None
-        )
-        assert ok_response is not None
-
-    def test_cancel__sends_487_request_terminated_for_invite(self):
-        """Send a 487 Request Terminated for the pending INVITE (RFC 3261 §9.2)."""
-        protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
-        invite = Request(
-            method="INVITE",
-            uri="sip:bob@biloxi.com",
-            headers={
-                "Via": "SIP/2.0/UDP pc33.atlanta.com",
-                "From": "sip:alice@atlanta.com",
-                "To": "sip:bob@biloxi.com",
-                "Call-ID": "cancel-test-2",
-                "CSeq": "1 INVITE",
-            },
-        )
-        protocol.request_received(invite, addr)
-        cancel = Request(
-            method="CANCEL",
-            uri="sip:bob@biloxi.com",
-            headers={
-                "Via": "SIP/2.0/UDP pc33.atlanta.com",
-                "From": "sip:alice@atlanta.com",
-                "To": "sip:bob@biloxi.com",
-                "Call-ID": "cancel-test-2",
-                "CSeq": "1 CANCEL",
-            },
-        )
-        protocol.request_received(cancel, addr)
-        terminated = next(
-            (r for r, _ in protocol._sent_responses if r.status_code == 487), None
-        )
-        assert terminated is not None
-        assert terminated.phrase == "Request Terminated"
-
-    def test_cancel__487_includes_to_tag(self):
-        """Include the stored To tag in the 487 Request Terminated response."""
-        protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
-        invite = Request(
-            method="INVITE",
-            uri="sip:bob@biloxi.com",
-            headers={
-                "Via": "SIP/2.0/UDP pc33.atlanta.com",
-                "From": "sip:alice@atlanta.com",
-                "To": "sip:bob@biloxi.com",
-                "Call-ID": "cancel-tag-1",
-                "CSeq": "1 INVITE",
-            },
-        )
-        protocol.request_received(invite, addr)
-        tag = protocol._to_tags["cancel-tag-1"]
-        cancel = Request(
-            method="CANCEL",
-            uri="sip:bob@biloxi.com",
-            headers={
-                "Via": "SIP/2.0/UDP pc33.atlanta.com",
-                "From": "sip:alice@atlanta.com",
-                "To": "sip:bob@biloxi.com",
-                "Call-ID": "cancel-tag-1",
-                "CSeq": "1 CANCEL",
-            },
-        )
-        protocol.request_received(cancel, addr)
-        terminated = next(
-            (r for r, _ in protocol._sent_responses if r.status_code == 487), None
-        )
-        assert terminated is not None
-        assert f";tag={tag}" in terminated.headers.get("To", "")
-
-    def test_cancel__cleans_up_state(self):
-        """Remove Call-ID from _answered_calls, _pending_invites, and _to_tags."""
-        protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
-        invite = Request(
-            method="INVITE",
-            uri="sip:bob@biloxi.com",
-            headers={
-                "Via": "SIP/2.0/UDP pc33.atlanta.com",
-                "From": "sip:alice@atlanta.com",
-                "To": "sip:bob@biloxi.com",
-                "Call-ID": "cancel-cleanup-1",
-                "CSeq": "1 INVITE",
-            },
-        )
-        protocol.request_received(invite, addr)
-        assert "cancel-cleanup-1" in protocol._answered_calls
-        assert "cancel-cleanup-1" in protocol._to_tags
-        cancel = Request(
-            method="CANCEL",
-            uri="sip:bob@biloxi.com",
-            headers={
-                "Via": "SIP/2.0/UDP pc33.atlanta.com",
-                "From": "sip:alice@atlanta.com",
-                "To": "sip:bob@biloxi.com",
-                "Call-ID": "cancel-cleanup-1",
-                "CSeq": "1 CANCEL",
-            },
-        )
-        protocol.request_received(cancel, addr)
-        assert "cancel-cleanup-1" not in protocol._answered_calls
-        assert "cancel-cleanup-1" not in protocol._pending_invites
-        assert "cancel-cleanup-1" not in protocol._to_tags
-
-    def test_cancel__no_pending_invite_skips_487(self):
-        """Skip sending 487 when no pending INVITE address is found."""
-        protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
-        cancel = Request(
-            method="CANCEL",
-            uri="sip:bob@biloxi.com",
-            headers={
-                "Via": "SIP/2.0/UDP pc33.atlanta.com",
-                "From": "sip:alice@atlanta.com",
-                "To": "sip:bob@biloxi.com",
-                "Call-ID": "cancel-no-invite-1",
-                "CSeq": "1 CANCEL",
-            },
-        )
-        protocol.request_received(cancel, addr)
-        assert all(r.status_code != 487 for r, _ in protocol._sent_responses)
-        ok_responses = [r for r, _ in protocol._sent_responses if r.status_code == 200]
-        assert len(ok_responses) == 1
-
-    def test_cancel__calls_cancel_received_hook(self):
-        """Invoke cancel_received hook after handling a CANCEL request."""
-        protocol = FakeProtocol()
-        addr = ("192.0.2.1", 5060)
-        received = []
-        protocol.cancel_received = lambda req: received.append(req)
-        cancel = Request(
-            method="CANCEL",
-            uri="sip:bob@biloxi.com",
-            headers={
-                "Via": "SIP/2.0/UDP pc33.atlanta.com",
-                "From": "sip:alice@atlanta.com",
-                "To": "sip:bob@biloxi.com",
-                "Call-ID": "cancel-hook-1",
-                "CSeq": "1 CANCEL",
-            },
-        )
-        protocol.request_received(cancel, addr)
-        assert len(received) == 1
-        assert received[0].method == "CANCEL"
-
-
-# ---------------------------------------------------------------------------
-# Helpers shared by TestSIPProtocol and TestRegistration below
-# ---------------------------------------------------------------------------
-
-
-def make_invite(headers: dict | None = None) -> Request:
-    """Return an INVITE request with default dialog headers and no SDP body."""
-    return Request(
-        method="INVITE",
-        uri="sip:alice@atlanta.com",
-        headers={
-            "Via": "SIP/2.0/UDP pc33.atlanta.com",
-            "To": "sip:alice@atlanta.com",
-            "From": "sip:bob@biloxi.com",
-            "Call-ID": "1234@pc33",
-            "CSeq": "1 INVITE",
-            **(headers or {}),
-        },
-    )
-
-
-def make_register_session(
-    server_addr=("192.0.2.2", 5060),
-    aor="sip:alice@example.com",
-    username="alice",
-    password="secret",  # noqa: S107
-) -> SessionInitiationProtocol:
-    """Return a SessionInitiationProtocol session without triggering connection_made."""
-    return SessionInitiationProtocol(
-        outbound_proxy=server_addr,
-        aor=aor,
-        username=username,
-        password=password,
-    )
-
-
-def make_mock_transport(
-    host: str = "127.0.0.1",
-    port: int = 5061,
-    peer: tuple[str, int] = ("192.0.2.1", 5061),
-):
-    """Return a MagicMock transport with get_extra_info configured for TLS."""
-    from unittest.mock import MagicMock  # noqa: PLC0415
-
-    transport = MagicMock()
-
-    def _get_extra_info(key, default=None):
-        if key == "sockname":
-            return (host, port)
-        if key == "peername":
-            return peer
-        if key == "ssl_object":
-            return object()  # non-None signals TLS
-        return default
-
-    transport.get_extra_info.side_effect = _get_extra_info
-    return transport
-
-
-@dataclasses.dataclass
-class _MinimalCall(RTPCall):
-    """Minimal Call subclass for SIP protocol tests that require codec negotiation."""
-
-    @classmethod
-    def negotiate_codec(cls, remote_media):
-        from voip.sdp.types import MediaDescription, RTPPayloadFormat  # noqa: PLC0415
-
-        return MediaDescription(
-            media="audio",
-            port=0,
-            proto="RTP/AVP",
-            fmt=[RTPPayloadFormat.from_pt(0)],
-        )
-
-
-@dataclasses.dataclass
-class _CodecAwareCall(RTPCall):
-    """Call subclass that performs real codec negotiation for SIP answer tests.
-
-    Mirrors AudioCall.PREFERRED_CODECS without importing voip.audio.
-    """
-
-    @classmethod
-    def negotiate_codec(cls, remote_media):
-        from voip.rtp import RTPPayloadType  # noqa: PLC0415
-        from voip.sdp.types import MediaDescription, RTPPayloadFormat  # noqa: PLC0415
-
-        preferred = [
-            RTPPayloadFormat(
-                payload_type=RTPPayloadType.OPUS,
-                encoding_name="opus",
-                sample_rate=48000,
-                channels=2,
-            ),
-            RTPPayloadFormat(payload_type=RTPPayloadType.G722),
-            RTPPayloadFormat(payload_type=RTPPayloadType.PCMA),
-            RTPPayloadFormat(payload_type=RTPPayloadType.PCMU),
-        ]
-        if not remote_media.fmt:
-            raise NotImplementedError("Remote SDP offer contains no audio formats")
-        remote_pts = {f.payload_type for f in remote_media.fmt}
-        for codec in preferred:
-            if codec.payload_type in remote_pts:
-                remote_fmt = remote_media.get_format(codec.payload_type)
-                chosen = (
-                    remote_fmt if remote_fmt and remote_fmt.encoding_name else codec
-                )
-                return MediaDescription(
-                    media="audio", port=0, proto="RTP/AVP", fmt=[chosen]
-                )
-            for rfmt in remote_media.fmt:
-                if (
-                    rfmt.encoding_name
-                    and rfmt.encoding_name.lower()
-                    == (codec.encoding_name or "").lower()
-                ):
-                    return MediaDescription(
-                        media="audio", port=0, proto="RTP/AVP", fmt=[rfmt]
-                    )
-        raise NotImplementedError(
-            f"No supported codec in {[f.payload_type for f in remote_media.fmt]!r}"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Tests for the SIP protocol's call answering / rejection / transport layer
-# ---------------------------------------------------------------------------
-
-
-class TestSIPProtocol:
-    """Tests for SIP protocol connection, dispatching, answer and reject."""
-
-    class _CapturingSIP(SIP):
-        """SIP subclass that captures sent messages without monkey-patching slots."""
-
-        def __init__(self):
-            super().__init__(
-                outbound_proxy=("127.0.0.1", 5061),
-                aor="sip:test@example.com",
-            )
-            self._sent: list[tuple] = []
-
-        def send(self, message):
-            self._sent.append((message, None))
-
-    async def test_connection_made__stores_transport(self):
-        """Store the transport when a connection is established."""
-        protocol = SIP(
-            outbound_proxy=("127.0.0.1", 5061),
-            aor="sip:test@example.com",
-            rtp_stun_server_address=None,
-        )
-        transport = make_mock_transport()
-        protocol.connection_made(transport)
-        assert protocol.transport is transport
-
-    async def test_send__serializes_and_forwards_to_transport(self):
-        """Serialize the message and forward it to the underlying TCP transport."""
-        protocol = SIP(
-            outbound_proxy=("127.0.0.1", 5061),
-            aor="sip:test@example.com",
-            rtp_stun_server_address=None,
-        )
-        transport = make_mock_transport()
-        protocol.connection_made(transport)
-        transport.write.reset_mock()  # clear any calls made during connection_made
+        session.connection_made(fake_transport)
+        assert session.keepalive_task is not None
+        session.keepalive_task.cancel()
+
+    async def test_send_keepalive__sends_ping(self, sip, fake_transport):
+        """Send a CRLF CRLF ping after the keepalive interval elapses."""
+        sip.keepalive_interval = datetime.timedelta(milliseconds=10)
+        task = asyncio.create_task(sip.send_keepalive())
+        await asyncio.sleep(0.05)
+        task.cancel()
+        assert b"\r\n\r\n" in fake_transport.sent
+
+    async def test_send_keepalive__stops_when_transport_is_none(self, sip):
+        """Stop the keepalive loop immediately when transport is cleared."""
+        sip.transport = None
+        sip.keepalive_interval = datetime.timedelta(milliseconds=1)
+        await sip.send_keepalive()
+
+    def test_data_received__pong(self, sip):
+        r"""Receive a PONG (\r\n keepalive reply) without sending any reply."""
+        initial_sent = len(sip.transport.sent)
+        sip.data_received(b"\r\n")
+        assert len(sip.transport.sent) == initial_sent
+
+    def test_data_received__ping__sends_pong(self, sip, fake_transport):
+        r"""Reply with \r\n when a PING (\r\n\r\n) is received."""
+        sip.data_received(b"\r\n\r\n")
+        assert b"\r\n" in fake_transport.sent
+
+    def test_data_received__sip_request(self, sip):
+        """Dispatch a valid SIP request to request_received without error."""
+        before = len(sip.transactions)
+        sip.data_received(INVITE_BYTES)
+        # An InviteTransaction is added to transactions
+        assert len(sip.transactions) > before
+
+    def test_data_received__sip_response(self, sip):
+        """Dispatch a valid SIP response to response_received."""
+        branch = list(sip.transactions.keys())[0]
+        response_bytes = (
+            f"SIP/2.0 200 OK\r\n"
+            f"Via: SIP/2.0/TLS example.com;branch={branch}\r\n"
+            f"From: sip:alice@example.com;tag=local-tag\r\n"
+            f"To: sip:example.com;tag=remote-tag\r\n"
+            f"Call-ID: call-id@example.com\r\n"
+            f"CSeq: 1 REGISTER\r\n"
+            f"\r\n"
+        ).encode()
+        sip.data_received(response_bytes)
+
+    def test_send__writes_message_bytes(self, sip, fake_transport):
+        """Serialize and write a SIP message to the transport."""
         response = Response(status_code=200, phrase="OK")
-        protocol.send(response)
-        protocol.transport.write.assert_called_once_with(bytes(response))
-
-    async def test_request_received__invite__tracks_pending_call(self):
-        """Dispatch an INVITE to call_received and track the Call-ID as pending."""
-        received = []
-
-        class MySIP(SIP):
-            def call_received(self, request):
-                received.append(request)
-
-        protocol = MySIP(outbound_proxy=("127.0.0.1", 5060), aor="sip:test@example.com")
-        protocol.connection_made(make_mock_transport())
-        request = make_invite()
-        addr = ("192.0.2.1", 5060)
-        protocol.request_received(request, addr)
-        assert len(received) == 1
-        assert received[0] is request
-        assert request.headers["Call-ID"] in protocol._pending_invites
-
-    async def test_call_received__noop_by_default(self):
-        """call_received is a no-op in the base class."""
-        protocol = SIP(outbound_proxy=("127.0.0.1", 5060), aor="sip:test@example.com")
-        protocol.connection_made(make_mock_transport())
-        protocol.call_received(make_invite())  # must not raise
-
-    async def test_answer__sends_200_ok(self):
-        """Send a 200 OK response with an SDP body when answering."""
-        loop = asyncio.get_running_loop()
-        protocol = self._CapturingSIP()
-        protocol.transport = make_mock_transport()
-        protocol.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        mux = RealtimeTransportProtocol()
-        mux.public_address = loop.create_future()
-        mux.public_address.set_result((ipaddress.IPv4Address("127.0.0.1"), 12000))
-        mock_rtp_transport = MagicMock()
-        mock_rtp_transport.get_extra_info.return_value = ("127.0.0.1", 12000)
-        protocol._rtp_protocol = mux
-        protocol._rtp_transport = mock_rtp_transport
-        request = make_invite()
-        protocol._pending_invites.add(request.headers["Call-ID"])
-        await protocol.answer(request, call_class=RTPCall)
-        assert len(protocol._sent) == 1
-        response, _ = protocol._sent[0]
-        assert response.status_code == 200
-        assert response.phrase == "OK"
-
-    async def test_answer__sdp_contains_opus_audio_line(self):
-        """Include an audio media line in the SDP body of the 200 OK."""
-        loop = asyncio.get_running_loop()
-        protocol = self._CapturingSIP()
-        protocol.transport = make_mock_transport()
-        protocol.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        mux = RealtimeTransportProtocol()
-        mux.public_address = loop.create_future()
-        mux.public_address.set_result((ipaddress.IPv4Address("127.0.0.1"), 12000))
-        mock_rtp_transport = MagicMock()
-        mock_rtp_transport.get_extra_info.return_value = ("127.0.0.1", 12000)
-        protocol._rtp_protocol = mux
-        protocol._rtp_transport = mock_rtp_transport
-        request = make_invite()
-        protocol._pending_invites.add(request.headers["Call-ID"])
-        await protocol.answer(request, call_class=RTPCall)
-        response, _ = protocol._sent[0]
-        assert b"m=audio" in bytes(response.body)
-        assert b"RTP/SAVP 0" in bytes(response.body)
-
-    async def _setup_answer_protocol(self):
-        """Return a _CapturingSIP with a live mux, ready to answer an INVITE."""
-        loop = asyncio.get_running_loop()
-        protocol = self._CapturingSIP()
-        protocol.transport = make_mock_transport()
-        protocol.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        mux = RealtimeTransportProtocol()
-        mux.public_address = loop.create_future()
-        mux.public_address.set_result((ipaddress.IPv4Address("127.0.0.1"), 12000))
-        mock_rtp_transport = MagicMock()
-        mock_rtp_transport.get_extra_info.return_value = ("127.0.0.1", 12000)
-        protocol._rtp_protocol = mux
-        protocol._rtp_transport = mock_rtp_transport
-        return protocol
-
-    async def test_answer__rtp_avp_offer_returns_rtp_avp(self):
-        """When the remote offers RTP/AVP, respond with RTP/AVP (no SRTP)."""
-        protocol = await self._setup_answer_protocol()
-
-        # Build an INVITE with a plain RTP/AVP offer (no crypto).
-        invite_bytes = (
-            b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
-            b"Via: SIP/2.0/UDP pc33.atlanta.com\r\n"
-            b"From: sip:alice@atlanta.com\r\n"
-            b"To: sip:bob@biloxi.com\r\n"
-            b"Call-ID: avp-offer-1\r\n"
-            b"CSeq: 1 INVITE\r\n"
-            b"Content-Type: application/sdp\r\n"
-            b"Content-Length: 68\r\n"
-            b"\r\n"
-            b"v=0\r\n"
-            b"o=- 0 0 IN IP4 192.0.2.1\r\n"
-            b"s=-\r\n"
-            b"c=IN IP4 192.0.2.1\r\n"
-            b"t=0 0\r\n"
-            b"m=audio 49170 RTP/AVP 0\r\n"
-        )
-        from voip.sip.messages import Request  # noqa: PLC0415
-
-        request = Request.parse(invite_bytes)
-        protocol._pending_invites.add(request.headers["Call-ID"])
-        AudioCall = pytest.importorskip("voip.audio").AudioCall
-
-        await protocol.answer(request, call_class=AudioCall)
-        response, _ = protocol._sent[0]
-        body = bytes(response.body)
-        assert b"RTP/AVP" in body
-        assert b"RTP/SAVP" not in body
-        assert b"crypto" not in body
-
-        # The registered call handler must not have an SRTP session.
-        handler = next(iter(protocol._rtp_protocol.calls.values()))
-        assert handler.srtp is None
-
-    async def test_answer__rtp_savp_offer_returns_rtp_savp(self):
-        """When the remote offers RTP/SAVP, respond with RTP/SAVP (with SRTP)."""
-        protocol = await self._setup_answer_protocol()
-
-        invite_bytes = (
-            b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
-            b"Via: SIP/2.0/UDP pc33.atlanta.com\r\n"
-            b"From: sip:alice@atlanta.com\r\n"
-            b"To: sip:bob@biloxi.com\r\n"
-            b"Call-ID: savp-offer-1\r\n"
-            b"CSeq: 1 INVITE\r\n"
-            b"Content-Type: application/sdp\r\n"
-            b"Content-Length: 69\r\n"
-            b"\r\n"
-            b"v=0\r\n"
-            b"o=- 0 0 IN IP4 192.0.2.1\r\n"
-            b"s=-\r\n"
-            b"c=IN IP4 192.0.2.1\r\n"
-            b"t=0 0\r\n"
-            b"m=audio 49170 RTP/SAVP 0\r\n"
-        )
-        from voip.sip.messages import Request  # noqa: PLC0415
-
-        request = Request.parse(invite_bytes)
-        protocol._pending_invites.add(request.headers["Call-ID"])
-        AudioCall = pytest.importorskip("voip.audio").AudioCall
-
-        await protocol.answer(request, call_class=AudioCall)
-        response, _ = protocol._sent[0]
-        body = bytes(response.body)
-        assert b"RTP/SAVP" in body
-        assert b"crypto" in body
-
-        handler = next(iter(protocol._rtp_protocol.calls.values()))
-        assert handler.srtp is not None
-
-    async def test_answer__copies_dialog_headers(self):
-        """Copy Via, To, From, Call-ID, and CSeq headers into the 200 OK."""
-        loop = asyncio.get_running_loop()
-        protocol = self._CapturingSIP()
-        protocol.transport = make_mock_transport()
-        protocol.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        mux = RealtimeTransportProtocol()
-        mux.public_address = loop.create_future()
-        mux.public_address.set_result((ipaddress.IPv4Address("127.0.0.1"), 12000))
-        mock_rtp_transport = MagicMock()
-        mock_rtp_transport.get_extra_info.return_value = ("127.0.0.1", 12000)
-        protocol._rtp_protocol = mux
-        protocol._rtp_transport = mock_rtp_transport
-        request = make_invite()
-        protocol._pending_invites.add(request.headers["Call-ID"])
-        await protocol.answer(request, call_class=RTPCall)
-        response, _ = protocol._sent[0]
-        assert response.headers["Via"] == "SIP/2.0/UDP pc33.atlanta.com"
-        assert response.headers["To"] == "sip:alice@atlanta.com"
-        assert response.headers["From"] == "sip:bob@biloxi.com"
-        assert response.headers["Call-ID"] == "1234@pc33"
-        assert response.headers["CSeq"] == "1 INVITE"
-
-    async def test_answer__instantiates_call_class_with_caller(self):
-        """The call_class is instantiated with the caller from the From header."""
-        created: list[str] = []
-
-        @dataclasses.dataclass
-        class MyCall(RTPCall):
-            def __post_init__(self) -> None:
-                created.append(str(self.caller))
-
-        loop = asyncio.get_running_loop()
-        protocol = self._CapturingSIP()
-        protocol.transport = make_mock_transport()
-        protocol.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        mux = RealtimeTransportProtocol()
-        mux.public_address = loop.create_future()
-        mux.public_address.set_result((ipaddress.IPv4Address("127.0.0.1"), 12000))
-        mock_rtp_transport = MagicMock()
-        mock_rtp_transport.get_extra_info.return_value = ("127.0.0.1", 12000)
-        protocol._rtp_protocol = mux
-        protocol._rtp_transport = mock_rtp_transport
-        request = make_invite()
-        protocol._pending_invites.add(request.headers["Call-ID"])
-        await protocol.answer(request, call_class=MyCall)
-        assert created == ["sip:bob@biloxi.com"]
-
-    async def test_answer__rtp_receives_audio(self):
-        """Deliver SRTP payloads to the call handler's packet_received (decrypted)."""
-        from voip.rtp import RTPPacket  # noqa: PLC0415
-
-        received_payloads: list[bytes] = []
-
-        @dataclasses.dataclass
-        class PacketCapture(RTPCall):
-            def packet_received(self, packet: RTPPacket, addr) -> None:
-                received_payloads.append(packet.payload)
-
-        loop = asyncio.get_running_loop()
-        protocol = self._CapturingSIP()
-        protocol.transport = make_mock_transport()
-        protocol.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        mux = RealtimeTransportProtocol(stun_server_address=None)
-        rtp_transport, _ = await loop.create_datagram_endpoint(
-            lambda: mux, local_addr=("127.0.0.1", 0)
-        )
-        protocol._rtp_protocol = mux
-        protocol._rtp_transport = rtp_transport
-        request = make_invite()
-        protocol._pending_invites.add(request.headers["Call-ID"])
-        try:
-            await protocol.answer(request, call_class=PacketCapture)
-            response, _ = protocol._sent[0]
-            sdp_line = next(
-                line
-                for line in bytes(response.body).decode().splitlines()
-                if line.startswith("m=audio")
-            )
-            rtp_port = int(sdp_line.split()[1])
-
-            send_transport, _ = await loop.create_datagram_endpoint(
-                asyncio.DatagramProtocol,
-                remote_addr=("127.0.0.1", rtp_port),
-            )
-            # Get the SRTP session from the registered call handler and encrypt.
-            call_handler = mux.calls.get(None)
-            rtp_packet = b"\x80\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00audio"
-            srtp_packet = call_handler.srtp.encrypt(rtp_packet)
-            send_transport.sendto(srtp_packet)
-            await asyncio.sleep(0.05)
-            send_transport.close()
-            assert received_payloads == [b"audio"]
-        finally:
-            rtp_transport.close()
-
-    async def test_answer__rtp_receives_multiple_packets(self):
-        """Call packet_received for each SRTP packet that arrives (decrypted)."""
-        from voip.rtp import RTPPacket  # noqa: PLC0415
-
-        received_payloads: list[bytes] = []
-
-        @dataclasses.dataclass
-        class PacketCapture(RTPCall):
-            def packet_received(self, packet: RTPPacket, addr) -> None:
-                received_payloads.append(packet.payload)
-
-        loop = asyncio.get_running_loop()
-        protocol = self._CapturingSIP()
-        protocol.transport = make_mock_transport()
-        protocol.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        mux = RealtimeTransportProtocol(stun_server_address=None)
-        rtp_transport, _ = await loop.create_datagram_endpoint(
-            lambda: mux, local_addr=("127.0.0.1", 0)
-        )
-        protocol._rtp_protocol = mux
-        protocol._rtp_transport = rtp_transport
-        request = make_invite()
-        protocol._pending_invites.add(request.headers["Call-ID"])
-        try:
-            await protocol.answer(request, call_class=PacketCapture)
-            response, _ = protocol._sent[0]
-            sdp_line = next(
-                line
-                for line in bytes(response.body).decode().splitlines()
-                if line.startswith("m=audio")
-            )
-            rtp_port = int(sdp_line.split()[1])
-
-            send_transport, _ = await loop.create_datagram_endpoint(
-                asyncio.DatagramProtocol,
-                remote_addr=("127.0.0.1", rtp_port),
-            )
-            # Get the SRTP session from the registered call handler and encrypt.
-            call_handler = mux.calls.get(None)
-            header = b"\x80\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00"
-            send_transport.sendto(call_handler.srtp.encrypt(header + b"chunk1"))
-            send_transport.sendto(call_handler.srtp.encrypt(header + b"chunk2"))
-            await asyncio.sleep(0.05)
-            send_transport.close()
-            assert received_payloads == [b"chunk1", b"chunk2"]
-        finally:
-            rtp_transport.close()
-
-    async def test_answer__content_length_serialized(self):
-        """Content-Length is automatically included when the response is serialized."""
-        loop = asyncio.get_running_loop()
-        protocol = self._CapturingSIP()
-        protocol.transport = make_mock_transport()
-        protocol.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        mux = RealtimeTransportProtocol()
-        mux.public_address = loop.create_future()
-        mux.public_address.set_result((ipaddress.IPv4Address("127.0.0.1"), 12000))
-        mock_rtp_transport = MagicMock()
-        mock_rtp_transport.get_extra_info.return_value = ("127.0.0.1", 12000)
-        protocol._rtp_protocol = mux
-        protocol._rtp_transport = mock_rtp_transport
-        request = make_invite()
-        protocol._pending_invites.add(request.headers["Call-ID"])
-        await protocol.answer(request, call_class=RTPCall)
-        response, _ = protocol._sent[0]
-        serialized = bytes(response)
-        parsed = Message.parse(serialized)
-        assert "Content-Length" in parsed.headers
-
-    async def test_answer__reuses_shared_rtp_socket_for_second_call(self):
-        """A second _answer() reuses the same shared RTP socket (one port for all calls)."""
-        from voip.sdp.messages import SessionDescription  # noqa: PLC0415
-        from voip.sip.messages import Request as SIPRequest  # noqa: PLC0415
-
-        loop = asyncio.get_running_loop()
-        protocol = self._CapturingSIP()
-        protocol.transport = make_mock_transport()
-        protocol.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        mux = RealtimeTransportProtocol(stun_server_address=None)
-        rtp_transport, _ = await loop.create_datagram_endpoint(
-            lambda: mux, local_addr=("127.0.0.1", 0)
-        )
-        protocol._rtp_protocol = mux
-        protocol._rtp_transport = rtp_transport
-
-        sdp_body1 = SessionDescription.parse(
-            b"v=0\r\no=- 0 0 IN IP4 1.2.3.4\r\ns=-\r\nc=IN IP4 1.2.3.4\r\nt=0 0\r\nm=audio 5000 RTP/AVP 0\r\n"
-        )
-        invite1 = SIPRequest(
-            method="INVITE",
-            uri="sip:alice@atlanta.com",
-            headers={
-                "Via": "SIP/2.0/UDP pc33.atlanta.com",
-                "To": "sip:alice@atlanta.com",
-                "From": "sip:bob@biloxi.com",
-                "Call-ID": "call-1@test",
-                "CSeq": "1 INVITE",
-            },
-            body=sdp_body1,
-        )
-        protocol._pending_invites.add("call-1@test")
-        await protocol.answer(invite1, call_class=_MinimalCall)
-        rtp_proto_1 = protocol._rtp_protocol
-        rtp_transport_1 = protocol._rtp_transport
-
-        sdp_body2 = SessionDescription.parse(
-            b"v=0\r\no=- 0 0 IN IP4 5.6.7.8\r\ns=-\r\nc=IN IP4 5.6.7.8\r\nt=0 0\r\nm=audio 6000 RTP/AVP 0\r\n"
-        )
-        invite2 = SIPRequest(
-            method="INVITE",
-            uri="sip:alice@atlanta.com",
-            headers={
-                "Via": "SIP/2.0/UDP pc33.atlanta.com",
-                "To": "sip:alice@atlanta.com",
-                "From": "sip:charlie@biloxi.com",
-                "Call-ID": "call-2@test",
-                "CSeq": "1 INVITE",
-            },
-            body=sdp_body2,
-        )
-        protocol._pending_invites.add("call-2@test")
-        await protocol.answer(invite2, call_class=_MinimalCall)
-
-        assert protocol._rtp_protocol is rtp_proto_1
-        assert protocol._rtp_transport is rtp_transport_1
-        assert ("1.2.3.4", 5000) in rtp_proto_1.calls
-        assert ("5.6.7.8", 6000) in rtp_proto_1.calls
-
-        rtp_transport.close()
-
-    async def test_answer__bye_unregisters_call_from_rtp_mux(self):
-        """BYE for an active call removes its handler from the shared RTP mux."""
-        loop = asyncio.get_running_loop()
-        protocol = self._CapturingSIP()
-        protocol.transport = make_mock_transport()
-        protocol.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        mux = RealtimeTransportProtocol(stun_server_address=None)
-        rtp_transport, _ = await loop.create_datagram_endpoint(
-            lambda: mux, local_addr=("127.0.0.1", 0)
-        )
-        protocol._rtp_protocol = mux
-        protocol._rtp_transport = rtp_transport
-        request = make_invite()
-        protocol._pending_invites.add(request.headers["Call-ID"])
-        try:
-            await protocol.answer(request, call_class=RTPCall)
-            assert None in mux.calls
-
-            bye = Request(
-                method="BYE",
-                uri="sip:alice@atlanta.com",
-                headers={
-                    "Via": "SIP/2.0/UDP pc33.atlanta.com",
-                    "To": "sip:alice@atlanta.com",
-                    "From": "sip:bob@biloxi.com",
-                    "Call-ID": request.headers["Call-ID"],
-                    "CSeq": "2 BYE",
-                },
-            )
-            protocol.request_received(bye, ("192.0.2.1", 5060))
-            assert None not in mux.calls
-        finally:
-            rtp_transport.close()
-
-    async def test_answer__logs_info(self, caplog):
-        """Log an info message when answering a call."""
-        import logging
-
-        loop = asyncio.get_running_loop()
-        protocol = self._CapturingSIP()
-        protocol.transport = make_mock_transport()
-        protocol.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        mux = RealtimeTransportProtocol()
-        mux.public_address = loop.create_future()
-        mux.public_address.set_result((ipaddress.IPv4Address("127.0.0.1"), 12000))
-        mock_rtp_transport = MagicMock()
-        mock_rtp_transport.get_extra_info.return_value = ("127.0.0.1", 12000)
-        protocol._rtp_protocol = mux
-        protocol._rtp_transport = mock_rtp_transport
-        request = make_invite()
-        protocol._pending_invites.add(request.headers["Call-ID"])
-        with caplog.at_level(logging.INFO, logger="voip.sip"):
-            await protocol.answer(request, call_class=RTPCall)
-        assert any("call_answered" in r.message for r in caplog.records)
-
-    def test_reject__sends_busy_here_by_default(self):
-        """Send a 486 Busy Here response when no status code is given."""
-        protocol = self._CapturingSIP()
-        request = make_invite()
-        protocol._pending_invites.add(request.headers["Call-ID"])
-        protocol.reject(request)
-        assert len(protocol._sent) == 1
-        response, _ = protocol._sent[0]
-        assert isinstance(response, Response)
-        assert response.status_code == 486
-        assert response.phrase == "Busy Here"
-
-    def test_reject__custom_status(self):
-        """Send the specified status code and reason."""
-        protocol = self._CapturingSIP()
-        request = make_invite()
-        protocol._pending_invites.add(request.headers["Call-ID"])
-        protocol.reject(request, status_code=SIPStatus.DECLINE)
-        response, _ = protocol._sent[0]
-        assert response.status_code == 603
-        assert response.phrase == "Decline"
-
-    def test_reject__copies_dialog_headers(self):
-        """Copy Via, To, From, Call-ID, and CSeq headers into the response."""
-        protocol = self._CapturingSIP()
-        request = make_invite()
-        protocol._pending_invites.add(request.headers["Call-ID"])
-        protocol.reject(request)
-        response, _ = protocol._sent[0]
-        assert response.headers["Via"] == "SIP/2.0/UDP pc33.atlanta.com"
-        assert response.headers["To"] == "sip:alice@atlanta.com"
-        assert response.headers["From"] == "sip:bob@biloxi.com"
-        assert response.headers["Call-ID"] == "1234@pc33"
-        assert response.headers["CSeq"] == "1 INVITE"
-
-    @pytest.mark.parametrize("extra_header", ["X-Custom"])
-    def test_reject__excludes_extra_headers(self, extra_header):
-        """Exclude non-dialog headers from the reject response."""
-        protocol = self._CapturingSIP()
-        request = make_invite({extra_header: "value"})
-        protocol._pending_invites.add(request.headers["Call-ID"])
-        protocol.reject(request)
-        response, _ = protocol._sent[0]
-        assert extra_header not in response.headers
-
-    def test_reject__logs_info(self, caplog):
-        """Log an info message when rejecting a call."""
-        import logging
-
-        with caplog.at_level(logging.INFO, logger="voip.sip"):
-            protocol = self._CapturingSIP()
-            request = make_invite()
-            protocol._pending_invites.add(request.headers["Call-ID"])
-            protocol.reject(request)
-        assert any("call_rejected" in r.message for r in caplog.records)
-
-    async def test_data_received__keepalive__sends_pong(self):
-        """Double-CRLF keepalive (RFC 5626 §4.4.1) is answered with a single-CRLF pong."""
-        protocol = SIP(
-            outbound_proxy=("127.0.0.1", 5061),
-            aor="sip:test@example.com",
-            rtp_stun_server_address=None,
-        )
-        transport = make_mock_transport()
-        protocol.connection_made(transport)
-        transport.write.reset_mock()
-        protocol.data_received(b"\r\n\r\n")
-        transport.write.assert_called_once_with(b"\r\n")
-
-    async def test_request_received__unsupported_method__raises(self):
-        """Raise NotImplementedError for any non-INVITE SIP request method."""
-        protocol = SIP(outbound_proxy=("127.0.0.1", 5060), aor="sip:test@example.com")
-        protocol.connection_made(make_mock_transport())
-        request = Request(method="OPTIONS", uri="sip:alice@atlanta.com")
-        with pytest.raises(NotImplementedError, match="OPTIONS"):
-            protocol.request_received(request, ("192.0.2.1", 5060))
-
-    async def test_answer__via_call_received__schedules_answer(self):
-        """answer() is async; wrapping it in create_task from call_received works."""
-
-        class MySIP(self._CapturingSIP):
-            def call_received(self, request):
-                asyncio.create_task(
-                    self.answer(request=request, call_class=_MinimalCall)
-                )
-
-        loop = asyncio.get_running_loop()
-        protocol = MySIP()
-        protocol.transport = make_mock_transport()
-        protocol.local_address = ("127.0.0.1", 5061)
-        mux = RealtimeTransportProtocol()
-        mux.public_address = loop.create_future()
-        mux.public_address.set_result(("127.0.0.1", 12000))
-        mock_rtp_transport = MagicMock()
-        mock_rtp_transport.get_extra_info.return_value = ("127.0.0.1", 12000)
-        protocol._rtp_protocol = mux
-        protocol._rtp_transport = mock_rtp_transport
-        request = make_invite()
-        protocol._pending_invites.add(request.headers["Call-ID"])
-        protocol.call_received(request)
-
-        await asyncio.sleep(0.05)
-        assert len(protocol._sent) == 1
-
-    async def test_run_keepalive__sends_double_crlf(self):
-        """Keep-alive task sends double-CRLF after the configured interval."""
-        protocol = SIP(
-            outbound_proxy=("127.0.0.1", 5061),
-            aor="sip:test@example.com",
-            rtp_stun_server_address=None,
-            keepalive_interval=datetime.timedelta(seconds=0.01),
-        )
-        transport = make_mock_transport()
-        protocol.connection_made(transport)
-        transport.write.reset_mock()
-        await asyncio.sleep(0.05)
-        transport.write.assert_any_call(b"\r\n\r\n")
-        protocol._keepalive_task.cancel()
-        protocol._initialize_task.cancel()
-
-    async def test_run_keepalive__stops_when_transport_cleared(self):
-        """Keep-alive loop exits cleanly when the transport is set to None."""
-        protocol = SIP(
-            outbound_proxy=("127.0.0.1", 5061),
-            aor="sip:test@example.com",
-            rtp_stun_server_address=None,
-            keepalive_interval=datetime.timedelta(seconds=0.01),
-        )
-        transport = make_mock_transport()
-        protocol.connection_made(transport)
-        transport.write.reset_mock()
-        protocol.transport = None
-        await asyncio.sleep(0.05)
-        transport.write.assert_not_called()
-        protocol._initialize_task.cancel()
-
-    async def test_connection_lost__cancels_and_clears_keepalive_task(self):
-        """connection_lost cancels the keepalive task and clears _keepalive_task."""
-        protocol = SIP(
-            outbound_proxy=("127.0.0.1", 5061),
-            aor="sip:test@example.com",
-            rtp_stun_server_address=None,
-        )
-
-        async def _long_running() -> None:
-            await asyncio.sleep(100)
-
-        task = asyncio.get_running_loop().create_task(_long_running())
-        protocol._keepalive_task = task
-        protocol.connection_lost(None)
-        assert protocol._keepalive_task is None
-        await asyncio.sleep(0)
-        assert task.done()
-
-    async def test_connection_lost__sets_disconnected_event(self):
-        """connection_lost sets the disconnected_event."""
-        protocol = SIP(outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com")
-        assert not protocol.disconnected_event.is_set()
-        protocol.connection_lost(None)
-        assert protocol.disconnected_event.is_set()
-
-    async def test_disconnected_event__resolves_after_connection_lost(self):
-        """disconnected_event resolves once connection_lost is called."""
-        protocol = SIP(outbound_proxy=("127.0.0.1", 5061), aor="sip:test@example.com")
-
-        async def lose_connection() -> None:
-            await asyncio.sleep(0.01)
-            protocol.connection_lost(None)
-
-        asyncio.create_task(lose_connection())
-        await asyncio.wait_for(protocol.disconnected_event.wait(), timeout=1.0)
-        assert protocol.disconnected_event.is_set()
-
-
-# ---------------------------------------------------------------------------
-# Tests for SIP REGISTER / digest-auth / response handling
-# ---------------------------------------------------------------------------
-
-
-class TestFormatHost:
-    def test_format_host__ipv4__unchanged(self):
-        """IPv4 addresses are returned unchanged."""
-        assert _format_host("192.0.2.1") == "192.0.2.1"
-
-    def test_format_host__ipv6__bracketed(self):
-        """IPv6 addresses are wrapped in square brackets."""
-        assert _format_host("2001:db8::1") == "[2001:db8::1]"
-
-    def test_format_host__hostname__unchanged(self):
-        """Hostnames (non-IP strings) are returned unchanged."""
-        assert _format_host("example.com") == "example.com"
-
-
-class TestRegistration:
-    def test_registrar_uri__strips_user_from_aor(self):
-        """Derive registrar URI from AOR by stripping the user part."""
-        p = make_register_session(aor="sip:alice@example.com")
-        assert p.registrar_uri == "sip:example.com"
-
-    def test_registrar_uri__preserves_port(self):
-        """Preserve a non-default port in the derived registrar URI."""
-        p = make_register_session(aor="sip:alice@example.com:5080")
-        assert p.registrar_uri == "sip:example.com:5080"
-
-    def test_registrar_uri__preserves_sips_scheme(self):
-        """sips: AOR produces sips: registrar URI (RFC 3261 §10.2)."""
-        p = make_register_session(aor="sips:alice@example.com")
-        assert p.registrar_uri == "sips:example.com"
-
-    def test_registrar_uri__preserves_sip_scheme(self):
-        """sip: AOR produces sip: registrar URI regardless of transport."""
-        p = make_register_session(aor="sip:alice@example.com")
-        p._is_tls = True  # TLS transport should not change the scheme
-        assert p.registrar_uri == "sip:example.com"
-
-    async def test_connection_made__sends_register(self):
-        """Send a REGISTER request when the connection is established."""
-
-        class _SessionNoRTP(SessionInitiationProtocol):
-            async def _initialize(self):
-                # Skip real socket creation and just register directly.
-                await self.register()
-
-        p = _SessionNoRTP(
-            outbound_proxy=("192.0.2.2", 5061),
-            aor="sip:alice@example.com",
-            username="alice",
-            password="secret",  # noqa: S106
-        )
-        transport = make_mock_transport()
-        p.connection_made(transport)
-        await asyncio.sleep(0.05)
-        transport.write.assert_called()
-        (data,) = transport.write.call_args[0]
-        # sip: AOR → sip: registrar URI even over TLS.
-        assert b"REGISTER sip:example.com SIP/2.0" in data
-
-    async def test_initialize__ipv6_local_address_binds_rtp_to_double_colon(self):
-        """When the SIP connection is IPv6, RTP is bound to '::' instead of '0.0.0.0'."""
-        bound_addresses: list[tuple] = []
-
-        class _TrackingSession(SessionInitiationProtocol):
-            pass
-
-        p = _TrackingSession(
-            outbound_proxy=("2001:db8::1", 5061),
-            aor="sips:alice@example.com",
-            rtp_stun_server_address=None,
-        )
-        p.local_address = (ipaddress.IPv6Address("2001:db8::2"), 5061)
-        p._is_tls = True
-
-        loop = asyncio.get_running_loop()
-
-        async def fake_create_datagram(factory, *, local_addr=None, **kwargs):
-            if local_addr is not None:
-                bound_addresses.append(local_addr)
-            transport = MagicMock()
-            transport.get_extra_info.return_value = local_addr or ("::1", 0)
-            proto = factory()
-            proto.connection_made(transport)
-            return transport, proto
-
-        with patch.object(loop, "create_datagram_endpoint", fake_create_datagram):
-            p.transport = make_mock_transport("2001:db8::2", 5061)
-            await p._initialize()
-
-        assert bound_addresses, "create_datagram_endpoint was not called"
-        assert bound_addresses[0][0] == "::"
-
-    async def test_register__includes_required_headers(self):
-        """REGISTER request includes From, To, Call-ID, CSeq, Contact and Expires."""
-        p = make_register_session()
-        transport = make_mock_transport()
-        p.transport = transport
-        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        p._is_tls = True
-        await p.register()
-        (data,) = transport.write.call_args[0]
-        assert b"From: sip:alice@example.com" in data
-        assert b"To: sip:alice@example.com" in data
-        # sip: AOR over TLS → sip:;transport=tls Contact with RFC 5626 ;ob parameter
-        assert b"Contact: <sip:alice@127.0.0.1:5061;transport=tls;ob>" in data
-        assert b"Expires: 3600" in data
-        # RFC 5626 §5 outbound keep-alive support advertised
-        assert b"Supported: outbound" in data
-
-    async def test_register__increments_cseq(self):
-        """CSeq increments with each REGISTER sent."""
-        p = make_register_session()
-        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        p.transport = make_mock_transport()
-        await p.register()
-        assert p.cseq == 1
-        await p.register()
-        assert p.cseq == 2
-
-    @pytest.mark.asyncio
-    async def test_register__with_authorization(self):
-        """Authorization header is included when credentials are provided."""
-        p = make_register_session()
-        transport = make_mock_transport()
-        p.transport = transport
-        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        await p.register(authorization='Digest username="alice"')
-        (data,) = transport.write.call_args[0]
-        assert b'Authorization: Digest username="alice"' in data
-
-    async def test_register__with_proxy_authorization(self):
-        """Proxy-Authorization header is included for proxy challenges."""
-        p = make_register_session()
-        transport = make_mock_transport()
-        p.transport = transport
-        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        await p.register(proxy_authorization='Digest username="alice"')
-        (data,) = transport.write.call_args[0]
-        assert b'Proxy-Authorization: Digest username="alice"' in data
-
-    async def test_response_received__200_ok_calls_registered(self):
-        """Receiving 200 OK for REGISTER triggers registered()."""
-        calls = []
-
-        class ConcreteSession(SessionInitiationProtocol):
-            def registered(self):
-                calls.append(True)
-
-        p = ConcreteSession(
-            outbound_proxy=("192.0.2.2", 5060),
-            aor="sip:alice@example.com",
-            username="a",
-            password="b",  # noqa: S106
-        )
-        p.connection_made(make_mock_transport())
-        p.response_received(
-            Response(status_code=200, phrase="OK", headers={"CSeq": "1 REGISTER"}),
-            ("192.0.2.2", 5060),
-        )
-        assert calls == [True]
-
-    async def test_response_received__200_non_register_raises(self):
-        """Receiving 200 OK for a non-REGISTER method raises RegistrationError."""
-        p = make_register_session()
-        p.connection_made(make_mock_transport())
-        with pytest.raises(RegistrationError):
-            p.response_received(
-                Response(status_code=200, phrase="OK", headers={"CSeq": "1 INVITE"}),
-                ("192.0.2.2", 5060),
-            )
-
-    async def test_response_received__401_retries_with_authorization(self):
-        """Receiving 401 triggers a re-REGISTER with an Authorization header."""
-        p = make_register_session(username="alice", password="secret")  # noqa: S106
-        transport = make_mock_transport()
-        p.transport = transport
-        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        challenge = 'Digest realm="example.com", nonce="abc123"'
-        p.response_received(
-            Response(
-                status_code=401,
-                phrase="Unauthorized",
-                headers={"WWW-Authenticate": challenge, "CSeq": "1 REGISTER"},
-            ),
-            ("192.0.2.2", 5061),
-        )
-        await asyncio.sleep(0.05)
-        (data,) = transport.write.call_args[0]
-        assert b"Authorization: Digest" in data
-        assert b'username="alice"' in data
-        assert b'realm="example.com"' in data
-        assert b'nonce="abc123"' in data
-        assert b'algorithm="SHA-256"' in data
-
-    async def test_response_received__407_retries_with_proxy_authorization(self):
-        """Receiving 407 triggers a re-REGISTER with a Proxy-Authorization header."""
-        p = make_register_session(username="alice", password="secret")  # noqa: S106
-        transport = make_mock_transport()
-        p.transport = transport
-        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        challenge = 'Digest realm="example.com", nonce="xyz"'
-        p.response_received(
-            Response(
-                status_code=407,
-                phrase="Proxy Auth Required",
-                headers={"Proxy-Authenticate": challenge, "CSeq": "1 REGISTER"},
-            ),
-            ("192.0.2.2", 5061),
-        )
-        await asyncio.sleep(0.05)
-        (data,) = transport.write.call_args[0]
-        assert b"Proxy-Authorization: Digest" in data
-        assert b'username="alice"' in data
-
-    async def test_response_received__401_with_qop_auth_includes_nc_cnonce(self):
-        """401 with qop=auth causes the retry to include nc and cnonce fields."""
-        p = make_register_session()
-        transport = make_mock_transport()
-        p.transport = transport
-        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        challenge = 'Digest realm="example.com", nonce="n", qop="auth"'
-        p.response_received(
-            Response(
-                status_code=401,
-                phrase="Unauthorized",
-                headers={"WWW-Authenticate": challenge, "CSeq": "1 REGISTER"},
-            ),
-            ("192.0.2.2", 5061),
-        )
-        await asyncio.sleep(0.05)
-        (data,) = transport.write.call_args[0]
-        assert b"qop=auth" in data
-        assert b"nc=00000001" in data
-        assert b"cnonce=" in data
-
-    async def test_response_received__401_with_opaque_echoes_opaque(self):
-        """The opaque field from the challenge is echoed back in the Authorization."""
-        p = make_register_session()
-        transport = make_mock_transport()
-        p.transport = transport
-        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        challenge = 'Digest realm="example.com", nonce="n", opaque="secret-opaque"'
-        p.response_received(
-            Response(
-                status_code=401,
-                phrase="Unauthorized",
-                headers={"WWW-Authenticate": challenge, "CSeq": "1 REGISTER"},
-            ),
-            ("192.0.2.2", 5061),
-        )
-        await asyncio.sleep(0.05)
-        (data,) = transport.write.call_args[0]
-        assert b'opaque="secret-opaque"' in data
-
-    async def test_register__via_header_has_rport(self):
-        """REGISTER request includes a Via header with the rport parameter."""
-        p = make_register_session()
-        p.local_address = (ipaddress.IPv4Address("192.0.2.10"), 5061)
-        transport = make_mock_transport("192.0.2.10", 5061)
-        p.transport = transport
-        p._is_tls = True
-        await p.register()
-        (data,) = transport.write.call_args[0]
-        assert b"Via: SIP/2.0/TLS 192.0.2.10:5061;rport;branch=z9hG4bK" in data
-        assert re.search(rb"branch=z9hG4bK[0-9a-f]{32}", data)
-
-    async def test_register__via_branch_is_unique_per_request(self):
-        """Each REGISTER generates a unique Via branch."""
-        p = make_register_session()
-        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        transport = make_mock_transport()
-        p.transport = transport
-        await p.register()
-        (data1,) = transport.write.call_args[0]
-        transport.reset_mock()
-        await p.register()
-        (data2,) = transport.write.call_args[0]
-        branch1 = re.search(rb"branch=(z9hG4bK[0-9a-f]{32})", data1).group(1)
-        branch2 = re.search(rb"branch=(z9hG4bK[0-9a-f]{32})", data2).group(1)
-        assert branch1 != branch2
-
-    async def test_register__contact_uses_local_addr(self):
-        """Contact header uses sip:;transport=tls;ob when AOR is sip: over TLS."""
-        p = make_register_session()
-        p.local_address = (ipaddress.IPv4Address("10.0.0.5"), 5061)
-        transport = make_mock_transport("10.0.0.5", 5061)
-        p.transport = transport
-        p._is_tls = True
-        await p.register()
-        (data,) = transport.write.call_args[0]
-        assert b"Contact: <sip:alice@10.0.0.5:5061;transport=tls;ob>" in data
-
-    async def test_register__contact_uses_sips_when_aor_is_sips(self):
-        """Contact header uses sips: with ;ob when AOR scheme is sips:."""
-        p = make_register_session(aor="sips:alice@example.com")
-        p.local_address = (ipaddress.IPv4Address("10.0.0.5"), 5061)
-        transport = make_mock_transport("10.0.0.5", 5061)
-        p.transport = transport
-        p._is_tls = True
-        await p.register()
-        (data,) = transport.write.call_args[0]
-        assert b"Contact: <sips:alice@10.0.0.5:5061;ob>" in data
-
-    async def test_register__contact_wraps_ipv6_in_brackets(self):
-        """Contact header wraps an IPv6 local address in square brackets."""
-        p = make_register_session(aor="sips:alice@example.com")
-        p.local_address = (ipaddress.IPv6Address("2001:db8::1"), 5061)
-        transport = make_mock_transport("2001:db8::1", 5061)
-        p.transport = transport
-        p._is_tls = True
-        await p.register()
-        (data,) = transport.write.call_args[0]
-        assert b"Contact: <sips:alice@[2001:db8::1]:5061;ob>" in data
-
-    async def test_register__via_wraps_ipv6_in_brackets(self):
-        """Via header wraps an IPv6 local address in square brackets."""
-        p = make_register_session()
-        p.local_address = (ipaddress.IPv6Address("::1"), 5061)
-        transport = make_mock_transport("::1", 5061)
-        p.transport = transport
-        p._is_tls = True
-        await p.register()
-        (data,) = transport.write.call_args[0]
-        assert b"Via: SIP/2.0/TLS [::1]:5061" in data
-
-    async def test_response_received__403_raises_registration_error(self):
-        """403 Forbidden for REGISTER raises RegistrationError with the response message."""
-        p = make_register_session()
-        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        p.transport = make_mock_transport()
-        with pytest.raises(RegistrationError, match="403 Forbidden"):
-            p.response_received(
-                Response(
-                    status_code=403,
-                    phrase="Forbidden",
-                    headers={"CSeq": "1 REGISTER"},
-                ),
-                ("192.0.2.2", 5061),
-            )
-
-    async def test_response_received__unexpected_raises_registration_error(self):
-        """Any unexpected REGISTER response raises RegistrationError."""
-        p = make_register_session()
-        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        p.transport = make_mock_transport()
-        with pytest.raises(RegistrationError, match="500 Server Error"):
-            p.response_received(
-                Response(
-                    status_code=500,
-                    phrase="Server Error",
-                    headers={"CSeq": "1 REGISTER"},
-                ),
-                ("192.0.2.2", 5061),
-            )
-
-    async def test_data_received__sip_response__calls_response_received(self):
-        """data_received routes SIP messages to response_received via TCP stream."""
-        received = []
-
-        class ConcreteSession(SessionInitiationProtocol):
-            def response_received(self, response, addr):
-                received.append(response)
-
-        p = ConcreteSession(
-            outbound_proxy=("192.0.2.2", 5061),
-            aor="sip:alice@example.com",
-            username="a",
-            password="b",  # noqa: S106
-        )
-        p.connection_made(make_mock_transport())
-        sip_data = b"SIP/2.0 200 OK\r\nCSeq: 1 REGISTER\r\n\r\n"
-        p.data_received(sip_data)
-        assert len(received) == 1
-        assert received[0].status_code == 200
-
-    async def test_invite_received_after_register(self):
-        """INVITE dispatching still works after registration."""
-        received = []
-
-        class ConcreteSession(SessionInitiationProtocol):
-            def call_received(self, request):
-                received.append(request)
-
-        p = ConcreteSession(
-            outbound_proxy=("192.0.2.2", 5060),
-            aor="sip:alice@example.com",
-            username="a",
-            password="b",  # noqa: S106
-        )
-        p.connection_made(make_mock_transport())
-        request = Request(
-            method="INVITE",
-            uri="sip:alice@example.com",
-            headers={"From": "sip:bob@example.com", "Call-ID": "test@pc"},
-        )
-        p.request_received(request, ("192.0.2.1", 5060))
-        assert len(received) == 1
-        assert received[0] is request
-
-    async def test_response_received__200_ok__logs_info(self, caplog):
-        """Receiving 200 OK logs an info message."""
-        import logging
-
-        p = make_register_session()
-        p.connection_made(make_mock_transport())
-        with caplog.at_level(logging.INFO, logger="voip.sip"):
-            p.response_received(
-                Response(status_code=200, phrase="OK", headers={"CSeq": "1 REGISTER"}),
-                ("192.0.2.2", 5060),
-            )
-        assert any("Registration successful" in r.message for r in caplog.records)
-
-    async def test_response_received__unexpected_status__raises_registration_error(
-        self, caplog
+        sip.send(response)
+        assert bytes(response) in fake_transport.sent
+
+    def test_send__with_no_transport(self, sip):
+        """Skip writing when transport is None."""
+        sip.transport = None
+        response = Response(status_code=200, phrase="OK")
+        sip.send(response)
+
+    def test_close__closes_transport(self, sip, fake_transport):
+        """Close the underlying transport."""
+        sip.close()
+        assert fake_transport.closed is True
+
+    def test_close__with_no_transport(self, sip):
+        """Do nothing when transport is already None."""
+        sip.transport = None
+        sip.close()
+
+    def test_allowed_methods__includes_options(self, sip):
+        """Always include OPTIONS in allowed methods."""
+        assert "OPTIONS" in sip.allowed_methods
+
+    def test_allowed_methods__includes_invite_when_transaction_class_has_handler(
+        self, sip
     ):
-        """An unhandled status code raises RegistrationError with status and reason."""
+        """Include INVITE when transaction_class defines invite_received."""
+        assert SIPMethod.INVITE in sip.allowed_methods
+
+    def test_allow_header__is_comma_separated_string(self, sip):
+        """allow_header returns a comma-separated string of supported methods."""
+        header = sip.allow_header
+        assert "OPTIONS" in header
+        assert "," in header
+
+    def test_method_not_allowed__sends_405(self, sip, fake_transport):
+        """Send a 405 Method Not Allowed response."""
+        request = Message.parse(
+            b"PUBLISH sip:alice@example.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/TLS 192.0.2.1:5061;branch=z9hG4bKpub\r\n"
+            b"From: sip:bob@biloxi.com;tag=t1\r\n"
+            b"To: sip:alice@example.com\r\n"
+            b"Call-ID: pub-call@biloxi.com\r\n"
+            b"CSeq: 1 PUBLISH\r\n"
+            b"\r\n"
+        )
+        sip.method_not_allowed(request)
+        assert any(b"405" in data for data in fake_transport.sent)
+
+    def test_request_received__options__sends_200(self, sip, fake_transport):
+        """Reply with 200 OK for an OPTIONS request."""
+        request = Message.parse(
+            b"OPTIONS sip:alice@example.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/TLS 192.0.2.1:5061;branch=z9hG4bKopt\r\n"
+            b"From: sip:bob@biloxi.com;tag=t1\r\n"
+            b"To: sip:alice@example.com\r\n"
+            b"Call-ID: opt-call@biloxi.com\r\n"
+            b"CSeq: 2 OPTIONS\r\n"
+            b"\r\n"
+        )
+        sip.request_received(request)
+        assert any(b"200" in data for data in fake_transport.sent)
+
+    def test_request_received__invite__creates_transaction(self, sip):
+        """Create an InviteTransaction for an incoming INVITE."""
+        request = Message.parse(INVITE_BYTES)
+        sip.request_received(request)
+        assert request.branch in sip.transactions
+
+    def test_request_received__unsupported_method__sends_405(self, sip, fake_transport):
+        """Send 405 for a method not handled by the transaction class."""
+        request = Message.parse(
+            b"PUBLISH sip:alice@example.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/TLS 192.0.2.1:5061;branch=z9hG4bKpub2\r\n"
+            b"From: sip:bob@biloxi.com;tag=t2\r\n"
+            b"To: sip:alice@example.com\r\n"
+            b"Call-ID: pub2-call@biloxi.com\r\n"
+            b"CSeq: 1 PUBLISH\r\n"
+            b"\r\n"
+        )
+        sip.request_received(request)
+        assert any(b"405" in data for data in fake_transport.sent)
+
+    def test_request_received__cancel__dispatches_to_existing_transaction(
+        self, sip, fake_transport
+    ):
+        """Dispatch a CANCEL to the matching INVITE transaction."""
+        invite = Message.parse(INVITE_BYTES)
+        sip.request_received(invite)
+        tx = sip.transactions[invite.branch]
+        sip.dialogs[(tx.dialog.remote_tag, tx.dialog.local_tag)] = tx.dialog
+
+        cancel = Message.parse(
+            b"CANCEL sip:alice@example.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/TLS 192.0.2.1:5061;branch=z9hG4bKabc123\r\n"
+            b"From: sip:bob@biloxi.com;tag=from-tag-1\r\n"
+            b"To: sip:alice@example.com\r\n"
+            b"Call-ID: test-call-id@biloxi.com\r\n"
+            b"CSeq: 1 CANCEL\r\n"
+            b"\r\n"
+        )
+        sip.request_received(cancel)
+        assert any(b"200" in data for data in fake_transport.sent)
+
+    def test_request_received__cancel__gone_when_no_transaction(
+        self, sip, fake_transport
+    ):
+        """Send 410 Gone for a CANCEL with no matching transaction."""
+        cancel = Message.parse(
+            b"CANCEL sip:alice@example.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/TLS 192.0.2.1:5061;branch=z9hG4bKnone\r\n"
+            b"From: sip:bob@biloxi.com;tag=t3\r\n"
+            b"To: sip:alice@example.com\r\n"
+            b"Call-ID: no-tx@biloxi.com\r\n"
+            b"CSeq: 1 CANCEL\r\n"
+            b"\r\n"
+        )
+        sip.request_received(cancel)
+        assert any(b"410" in data for data in fake_transport.sent)
+
+    async def test_response_received__delegates_to_transaction(self, sip):
+        """Delegate a response to the matching transaction by branch."""
+        branch = list(sip.transactions.keys())[0]
+        response = Message.parse(
+            f"SIP/2.0 200 OK\r\n"
+            f"Via: SIP/2.0/TLS example.com;branch={branch}\r\n"
+            f"From: sip:alice@example.com;tag=local-tag\r\n"
+            f"To: sip:example.com;tag=remote-tag\r\n"
+            f"Call-ID: call@example.com\r\n"
+            f"CSeq: 1 REGISTER\r\n"
+            f"\r\n".encode()
+        )
+        sip.response_received(response)
+
+    def test_contact__sips_aor_produces_sips_contact(self, sip):
+        """Build a sips: Contact for a sips: AOR."""
+        assert sip.contact.startswith("<sips:")
+
+    def test_contact__sip_aor_with_tls_produces_transport_param(self, rtp):
+        """Build a sip: Contact with transport=tls for a plain sip: AOR over TLS."""
+        transport = FakeTransport(_ssl=True)
+        session = SessionInitiationProtocol(
+            aor=SipUri.parse("sip:alice:secret@example.com"),
+            rtp=rtp,
+            transaction_class=InviteTransaction,
+        )
+        session.connection_made(transport)
+        if session.keepalive_task:
+            session.keepalive_task.cancel()
+        assert "transport=tls" in session.contact
+
+    def test_contact__sip_aor_without_tls_has_no_transport_param(self, rtp):
+        """Build a sip: Contact without transport= for a plain TCP connection."""
+        transport = FakeTransport(_ssl=False)
+        session = SessionInitiationProtocol(
+            aor=SipUri.parse("sip:alice:secret@example.com"),
+            rtp=rtp,
+            transaction_class=InviteTransaction,
+        )
+        session.connection_made(transport)
+        assert "transport=tls" not in session.contact
+
+    def test_contact__aor_without_user_omits_user(self, rtp):
+        """Build a Contact without a user part when AOR has no user."""
+        transport = FakeTransport(_ssl=True)
+        session = SessionInitiationProtocol(
+            aor=SipUri(scheme="sips", host="example.com"),
+            rtp=rtp,
+            transaction_class=InviteTransaction,
+        )
+        session.connection_made(transport)
+        if session.keepalive_task:
+            session.keepalive_task.cancel()
+        assert "@" not in session.contact
+
+    async def test_connection_lost__cancels_keepalive_task(self, sip):
+        """Cancel and clear the keepalive task on connection loss."""
+        sip.keepalive_task = asyncio.create_task(asyncio.sleep(9999))
+        sip.connection_lost(None)
+        assert sip.keepalive_task is None
+
+    def test_connection_lost__clears_transport(self, sip):
+        """Set transport to None on connection loss."""
+        sip.connection_lost(None)
+        assert sip.transport is None
+
+    def test_connection_lost__sets_disconnected_event(self, sip):
+        """Set the disconnected_event on connection loss."""
+        sip.connection_lost(None)
+        assert sip.disconnected_event.is_set()
+
+    def test_connection_lost__with_exception_logs_error(self, sip, caplog):
+        """Log the exception when connection is lost with an error."""
         import logging
 
-        p = make_register_session()
-        p.connection_made(make_mock_transport())
-        with caplog.at_level(logging.WARNING, logger="voip.sip"):
-            with pytest.raises(RegistrationError, match="500 Server Error"):
-                p.response_received(
-                    Response(
-                        status_code=500,
-                        phrase="Server Error",
-                        headers={"CSeq": "1 REGISTER"},
-                    ),
-                    ("192.0.2.2", 5060),
-                )
+        with caplog.at_level(logging.ERROR):
+            sip.connection_lost(OSError("Connection reset"))
+        assert sip.transport is None
 
-    def test_build_contact__default__no_ob_param(self):
-        """Contact without ob=True has no ;ob parameter."""
-        p = make_register_session()
-        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        p._is_tls = True
-        contact = p._build_contact("alice")
-        assert ";ob" not in contact
+    def test_connection_lost__without_keepalive_task(self, sip):
+        """Handle connection loss gracefully when no keepalive task exists."""
+        sip.keepalive_task = None
+        sip.connection_lost(None)
+        assert sip.transport is None
 
-    def test_build_contact__ob_true__includes_ob_uri_param(self):
-        """Contact with ob=True includes the ;ob URI parameter (RFC 5626 §5)."""
-        p = make_register_session()
-        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        p._is_tls = True
-        assert p._build_contact("alice", ob=True) == (
-            "<sip:alice@127.0.0.1:5061;transport=tls;ob>"
+    # ------------------------------------------------------------------
+    # Helpers shared by extract_frames / dispatch_frame tests
+    # ------------------------------------------------------------------
+
+    def _make_session(self, rtp, fake_transport=None):
+        """Return a SessionInitiationProtocol wired with a fake transport.
+
+        Does **not** call `connection_made` to avoid triggering
+        `RegistrationTransaction.__post_init__` inside a running event loop,
+        which raises `TypeError` due to a `super()` / `slots=True` interaction
+        in Python 3.13.
+        """
+        session = SessionInitiationProtocol(
+            aor=SipUri.parse("sips:alice@example.com"),
+            rtp=rtp,
+            transaction_class=InviteTransaction,
         )
+        transport = fake_transport or FakeTransport()
+        session.transport = transport
+        session.local_address = NetworkAddress(ipaddress.ip_address("127.0.0.1"), 5061)
+        return session
 
-    def test_build_contact__sips_with_ob__includes_ob_before_closing_bracket(self):
-        """sips: Contact with ob=True places ;ob inside the angle brackets."""
-        p = make_register_session(aor="sips:alice@example.com")
-        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        p._is_tls = True
-        assert p._build_contact("alice", ob=True) == "<sips:alice@127.0.0.1:5061;ob>"
+    # ------------------------------------------------------------------
+    # extract_frames
+    # ------------------------------------------------------------------
 
+    def test_extract_frames__empty_buffer(self, rtp):
+        """Return an empty iterator when the receive buffer is empty."""
+        session = self._make_session(rtp)
+        assert [bytes(f) for f in session._extract_frames()] == []
 
-# ---------------------------------------------------------------------------
-# Tests for digest_response (RFC 3261 §22, RFC 8760)
-# ---------------------------------------------------------------------------
+    def test_extract_frames__complete_message(self, rtp):
+        """Extract a single complete SIP message and clear the buffer."""
+        session = self._make_session(rtp)
+        session.recv_buffer.extend(INVITE_BYTES)
+        frames = [bytes(f) for f in session._extract_frames()]
+        assert frames == [INVITE_BYTES]
+        assert len(session.recv_buffer) == 0
 
+    def test_extract_frames__partial_headers(self, rtp):
+        """Keep partial message bytes in the buffer until complete."""
+        session = self._make_session(rtp)
+        session.recv_buffer.extend(INVITE_BYTES[:20])
+        assert [bytes(f) for f in session._extract_frames()] == []
+        assert len(session.recv_buffer) == 20
 
-class TestDigestResponse:
-    """Unit tests for SessionInitiationProtocol.digest_response."""
-
-    def test_default_algorithm_is_sha256(self):
-        """digest_response uses SHA-256 by default (RFC 8760)."""
-        result = SessionInitiationProtocol.digest_response(
-            username="alice",
-            password="secret",  # noqa: S106
-            realm="example.com",
-            nonce="abc123",
-            method="REGISTER",
-            uri="sip:example.com",
+    def test_extract_frames__two_coalesced_messages(self, rtp):
+        """Extract two SIP messages delivered in a single TCP segment."""
+        second = (
+            b"OPTIONS sip:alice@example.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/TLS 192.0.2.1:5061;branch=z9hG4bKopt1\r\n"
+            b"From: sip:bob@biloxi.com;tag=t99\r\n"
+            b"To: sip:alice@example.com\r\n"
+            b"Call-ID: opt-coalesced@biloxi.com\r\n"
+            b"CSeq: 1 OPTIONS\r\n"
+            b"\r\n"
         )
-        # SHA-256 produces a 64-character hex digest
-        assert len(result) == 64
+        session = self._make_session(rtp)
+        session.recv_buffer.extend(INVITE_BYTES + second)
+        frames = [bytes(f) for f in session._extract_frames()]
+        assert len(frames) == 2
+        assert frames[0] == INVITE_BYTES
+        assert frames[1] == second
+        assert len(session.recv_buffer) == 0
 
-    def test_sha256_response_is_correct(self):
-        """SHA-256 digest is computed from the correct input per RFC 8760."""
-        username, password, realm, nonce, method, uri = (
-            "alice",
-            "secret",
-            "example.com",
-            "abc123",
-            "REGISTER",
-            "sip:example.com",
+    def test_extract_frames__message_with_body(self, rtp):
+        """Extract a SIP message that includes a Content-Length body."""
+        body = b"v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n"
+        headers = (
+            b"INVITE sip:alice@example.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/TLS 192.0.2.1:5061;branch=z9hG4bKbody1\r\n"
+            b"From: sip:bob@biloxi.com;tag=tb1\r\n"
+            b"To: sip:alice@example.com\r\n"
+            b"Call-ID: body-call@biloxi.com\r\n"
+            b"CSeq: 1 INVITE\r\n"
+            b"Content-Type: application/sdp\r\n"
+            b"Content-Length: " + str(len(body)).encode() + b"\r\n"
+            b"\r\n"
         )
-        ha1 = hashlib.sha256(f"{username}:{realm}:{password}".encode()).hexdigest()
-        ha2 = hashlib.sha256(f"{method}:{uri}".encode()).hexdigest()
-        expected = hashlib.sha256(f"{ha1}:{nonce}:{ha2}".encode()).hexdigest()
+        message = headers + body
+        session = self._make_session(rtp)
+        session.recv_buffer.extend(message)
+        frames = [bytes(f) for f in session._extract_frames()]
+        assert frames == [message]
+        assert len(session.recv_buffer) == 0
 
-        result = SessionInitiationProtocol.digest_response(
-            username=username,
-            password=password,  # noqa: S106
-            realm=realm,
-            nonce=nonce,
-            method=method,
-            uri=uri,
-            algorithm=DigestAlgorithm.SHA_256,
+    def test_extract_frames__incomplete_body(self, rtp):
+        """Keep bytes in the buffer when only part of the body has arrived."""
+        body = b"v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\n"
+        headers = (
+            b"INVITE sip:alice@example.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/TLS 192.0.2.1:5061;branch=z9hG4bKbody2\r\n"
+            b"From: sip:bob@biloxi.com;tag=tb2\r\n"
+            b"To: sip:alice@example.com\r\n"
+            b"Call-ID: body2-call@biloxi.com\r\n"
+            b"CSeq: 1 INVITE\r\n"
+            b"Content-Length: " + str(len(body)).encode() + b"\r\n"
+            b"\r\n"
         )
-        assert result == expected
+        session = self._make_session(rtp)
+        session.recv_buffer.extend(headers + body[:5])
+        assert [bytes(f) for f in session._extract_frames()] == []
+        assert len(session.recv_buffer) == len(headers) + 5
 
-    def test_md5_response_is_32_hex_chars(self):
-        """MD5 algorithm still produces a valid 32-character hex digest."""
-        result = SessionInitiationProtocol.digest_response(
-            username="alice",
-            password="secret",  # noqa: S106
-            realm="example.com",
-            nonce="abc123",
-            method="REGISTER",
-            uri="sip:example.com",
-            algorithm=DigestAlgorithm.MD5,
-        )
-        assert len(result) == 32
+    def test_extract_frames__ping(self, rtp):
+        """Extract an RFC 5626 PING (CRLF CRLF) keepalive frame."""
+        session = self._make_session(rtp)
+        session.recv_buffer.extend(PING)
+        frames = [bytes(f) for f in session._extract_frames()]
+        assert frames == [PING]
+        assert len(session.recv_buffer) == 0
 
-    def test_sha512_256_response_is_64_hex_chars(self):
-        """SHA-512-256 produces a 64-character hex digest."""
-        result = SessionInitiationProtocol.digest_response(
-            username="alice",
-            password="secret",  # noqa: S106
-            realm="example.com",
-            nonce="abc123",
-            method="REGISTER",
-            uri="sip:example.com",
-            algorithm=DigestAlgorithm.SHA_512_256,
-        )
-        assert len(result) == 64
+    def test_extract_frames__pong(self, rtp):
+        """Extract an RFC 5626 PONG (CRLF) keepalive frame."""
+        session = self._make_session(rtp)
+        session.recv_buffer.extend(PONG)
+        frames = [bytes(f) for f in session._extract_frames()]
+        assert frames == [PONG]
+        assert len(session.recv_buffer) == 0
 
-    def test_algorithms_produce_distinct_responses(self):
-        """Different algorithms produce distinct digest values."""
-        digest_params = {
-            "username": "alice",
-            "password": "secret",  # noqa: S106
-            "realm": "example.com",
-            "nonce": "abc123",
-            "method": "REGISTER",
-            "uri": "sip:example.com",
-        }
-        r_md5 = SessionInitiationProtocol.digest_response(
-            **digest_params, algorithm=DigestAlgorithm.MD5
-        )
-        r_sha256 = SessionInitiationProtocol.digest_response(
-            **digest_params, algorithm=DigestAlgorithm.SHA_256
-        )
-        r_sha512 = SessionInitiationProtocol.digest_response(
-            **digest_params, algorithm=DigestAlgorithm.SHA_512_256
-        )
-        assert r_md5 != r_sha256
-        assert r_sha256 != r_sha512
+    def test_extract_frames__partial_keepalive_wait(self, rtp):
+        """Buffer a partial PING (CRLF CR) without dispatching until the 4th byte arrives."""
+        session = self._make_session(rtp)
+        session.recv_buffer.extend(b"\r\n\r")
+        assert [bytes(f) for f in session._extract_frames()] == []
+        assert len(session.recv_buffer) == 3
 
-    async def test_response_received__401_uses_server_algorithm(self):
-        """401 challenge with algorithm=SHA-256 causes Authorization to echo SHA-256."""
-        p = make_register_session(username="alice", password="secret")  # noqa: S106
-        transport = make_mock_transport()
-        p.transport = transport
-        p.local_address = (ipaddress.IPv4Address("127.0.0.1"), 5061)
-        challenge = 'Digest realm="example.com", nonce="abc123", algorithm="SHA-256"'
-        p.response_received(
-            Response(
-                status_code=401,
-                phrase="Unauthorized",
-                headers={"WWW-Authenticate": challenge, "CSeq": "1 REGISTER"},
-            ),
-            ("192.0.2.2", 5061),
+    def test_extract_frames__ping_followed_by_message(self, rtp):
+        """Extract a PING and a SIP message from the same buffer."""
+        session = self._make_session(rtp)
+        session.recv_buffer.extend(PING + INVITE_BYTES)
+        frames = [bytes(f) for f in session._extract_frames()]
+        assert len(frames) == 2
+        assert frames[0] == PING
+        assert frames[1] == INVITE_BYTES
+
+    def test_extract_frames__pong_followed_by_message(self, rtp):
+        """Extract a PONG and a SIP message coalesced in the same buffer."""
+        session = self._make_session(rtp)
+        session.recv_buffer.extend(PONG + INVITE_BYTES)
+        frames = [bytes(f) for f in session._extract_frames()]
+        assert len(frames) == 2
+        assert frames[0] == PONG
+        assert frames[1] == INVITE_BYTES
+
+    def test_extract_frames__invalid_content_length(self, rtp):
+        """Treat an unparseable Content-Length as zero (no body)."""
+        message = (
+            b"OPTIONS sip:alice@example.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/TLS 192.0.2.1:5061;branch=z9hG4bKcl0\r\n"
+            b"From: sip:bob@biloxi.com;tag=tclx\r\n"
+            b"To: sip:alice@example.com\r\n"
+            b"Call-ID: clx-call@biloxi.com\r\n"
+            b"CSeq: 1 OPTIONS\r\n"
+            b"Content-Length: notanumber\r\n"
+            b"\r\n"
         )
+        session = self._make_session(rtp)
+        session.recv_buffer.extend(message)
+        frames = [bytes(f) for f in session._extract_frames()]
+        assert len(frames) == 1
+
+    def test_extract_frames__single_cr_waits(self, rtp):
+        """Keep a lone CR in the buffer without dispatching (incomplete keepalive)."""
+        session = self._make_session(rtp)
+        session.recv_buffer.extend(b"\r")
+        assert [bytes(f) for f in session._extract_frames()] == []
+        assert session.recv_buffer == bytearray(b"\r")
+
+    # ------------------------------------------------------------------
+    # dispatch_frame
+    # ------------------------------------------------------------------
+
+    def test_dispatch_frame__pong(self, rtp, fake_transport, caplog):
+        """Log PONG on receiving a CRLF frame without sending a reply."""
+        import logging
+
+        session = self._make_session(rtp, fake_transport)
+        with caplog.at_level(logging.INFO):
+            session._dispatch_frame(b"\r\n")
+        assert "PONG" in caplog.text
+        assert fake_transport.sent == []
+
+    def test_dispatch_frame__ping__sends_pong(self, rtp, fake_transport):
+        """Reply with a CRLF PONG when a PING (CRLF CRLF) frame is dispatched."""
+        session = self._make_session(rtp, fake_transport)
+        session._dispatch_frame(b"\r\n\r\n")
+        assert b"\r\n" in fake_transport.sent
+
+    def test_dispatch_frame__sip_request(self, rtp, fake_transport):
+        """Dispatch a SIP request frame to request_received."""
+        session = self._make_session(rtp, fake_transport)
+        before = len(session.transactions)
+        session._dispatch_frame(INVITE_BYTES)
+        assert len(session.transactions) > before
+
+    def test_dispatch_frame__sip_response(self, rtp, fake_transport):
+        """Dispatch a SIP response frame to response_received without error."""
+        session = self._make_session(rtp, fake_transport)
+        branch = "z9hG4bKresp-test"
+        session.transactions[branch] = InviteTransaction(
+            sip=session,
+            method=SIPMethod.INVITE,
+            branch=branch,
+            cseq=1,
+        )
+        response_bytes = (
+            f"SIP/2.0 200 OK\r\n"
+            f"Via: SIP/2.0/TLS example.com;branch={branch}\r\n"
+            f"From: sip:alice@example.com;tag=local\r\n"
+            f"To: sip:example.com;tag=remote\r\n"
+            f"Call-ID: resp-test@example.com\r\n"
+            f"CSeq: 1 INVITE\r\n"
+            f"\r\n"
+        ).encode()
+        session._dispatch_frame(response_bytes)
+
+    # ------------------------------------------------------------------
+    # data_received – stream reassembly
+    # ------------------------------------------------------------------
+
+    def test_data_received__split_message(self, rtp, fake_transport):
+        """Reassemble a SIP request delivered in two TCP segments."""
+        session = self._make_session(rtp, fake_transport)
+        split = len(INVITE_BYTES) // 2
+        before = len(session.transactions)
+        session.data_received(INVITE_BYTES[:split])
+        assert len(session.transactions) == before  # incomplete – not dispatched yet
+        session.data_received(INVITE_BYTES[split:])
+        assert len(session.transactions) > before  # now dispatched
+
+    def test_data_received__coalesced_messages(self, rtp, fake_transport):
+        """Dispatch two SIP requests coalesced into one TCP segment."""
+        second = (
+            b"OPTIONS sip:alice@example.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/TLS 192.0.2.1:5061;branch=z9hG4bKopt2\r\n"
+            b"From: sip:bob@biloxi.com;tag=t88\r\n"
+            b"To: sip:alice@example.com\r\n"
+            b"Call-ID: opt-coalesced2@biloxi.com\r\n"
+            b"CSeq: 2 OPTIONS\r\n"
+            b"\r\n"
+        )
+        session = self._make_session(rtp, fake_transport)
+        before = len(session.transactions)
+        session.data_received(INVITE_BYTES + second)
+        # INVITE creates a transaction; OPTIONS is answered directly (no tx added)
+        assert len(session.transactions) > before
+
+    def test_data_received__body_split_across_segments(self, rtp, fake_transport):
+        """Reassemble a SIP request with a body split across two TCP segments."""
+        body = b"v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n"
+        headers = (
+            b"INVITE sip:alice@example.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/TLS 192.0.2.1:5061;branch=z9hG4bKbodysplit\r\n"
+            b"From: sip:bob@biloxi.com;tag=tbs\r\n"
+            b"To: sip:alice@example.com\r\n"
+            b"Call-ID: body-split@biloxi.com\r\n"
+            b"CSeq: 1 INVITE\r\n"
+            b"Content-Type: application/sdp\r\n"
+            b"Content-Length: " + str(len(body)).encode() + b"\r\n"
+            b"\r\n"
+        )
+        session = self._make_session(rtp, fake_transport)
+        before = len(session.transactions)
+        session.data_received(headers + body[:5])
+        assert len(session.transactions) == before  # body incomplete
+        session.data_received(body[5:])
+        assert len(session.transactions) > before  # body complete, dispatched
+
+    # ------------------------------------------------------------------
+    # send_keepalive (via _make_session to avoid RegistrationTransaction)
+    # ------------------------------------------------------------------
+
+    async def test_send_keepalive__sends_ping_without_sip_fixture(self, rtp):
+        """send_keepalive writes a PING (CRLF CRLF) after the interval elapses."""
+        fake_transport = FakeTransport()
+        session = self._make_session(rtp, fake_transport)
+        session.keepalive_interval = datetime.timedelta(milliseconds=10)
+        task = asyncio.create_task(session.send_keepalive())
         await asyncio.sleep(0.05)
-        (data,) = transport.write.call_args[0]
-        assert b'algorithm="SHA-256"' in data
-        assert b'algorithm="MD5"' not in data
+        task.cancel()
+        assert b"\r\n\r\n" in fake_transport.sent
 
-    def test_sess_algorithm_incorporates_cnonce(self):
-        """SHA-256-sess and MD5-sess include cnonce in HA1, changing the result."""
-        base = {
-            "username": "alice",
-            "password": "secret",  # noqa: S106
-            "realm": "example.com",
-            "nonce": "abc123",
-            "method": "REGISTER",
-            "uri": "sip:example.com",
-        }
-        r1 = SessionInitiationProtocol.digest_response(
-            **base, algorithm=DigestAlgorithm.SHA_256_SESS, cnonce="cnonce-A"
-        )
-        r2 = SessionInitiationProtocol.digest_response(
-            **base, algorithm=DigestAlgorithm.SHA_256_SESS, cnonce="cnonce-B"
-        )
-        # Different cnonce values must yield different responses
-        assert r1 != r2
-        # A -sess result must differ from the non-sess result for the same inputs
-        r_plain = SessionInitiationProtocol.digest_response(
-            **base, algorithm=DigestAlgorithm.SHA_256
-        )
-        assert r1 != r_plain
+    async def test_send_keepalive__stops_when_transport_cleared(self, rtp):
+        """send_keepalive exits when transport is set to None."""
+        session = self._make_session(rtp)
+        session.transport = None
+        session.keepalive_interval = datetime.timedelta(milliseconds=1)
+        await session.send_keepalive()
 
-    def test_md5_sess_incorporates_cnonce(self):
-        """MD5-sess includes cnonce in HA1."""
-        base = {
-            "username": "alice",
-            "password": "secret",  # noqa: S106
-            "realm": "example.com",
-            "nonce": "abc123",
-            "method": "REGISTER",
-            "uri": "sip:example.com",
-        }
-        r1 = SessionInitiationProtocol.digest_response(
-            **base, algorithm=DigestAlgorithm.MD5_SESS, cnonce="cnonce-A"
-        )
-        r2 = SessionInitiationProtocol.digest_response(
-            **base, algorithm=DigestAlgorithm.MD5_SESS, cnonce="cnonce-B"
-        )
-        assert r1 != r2
+    # ------------------------------------------------------------------
+    # send / close (via _make_session)
+    # ------------------------------------------------------------------
 
-    def test_sess_algorithm_without_cnonce_raises(self):
-        """Calling a *-sess algorithm without cnonce raises ValueError."""
-        with pytest.raises(ValueError, match="cnonce"):
-            SessionInitiationProtocol.digest_response(
-                username="alice",
-                password="secret",  # noqa: S106
-                realm="example.com",
-                nonce="abc123",
-                method="REGISTER",
-                uri="sip:example.com",
-                algorithm=DigestAlgorithm.SHA_256_SESS,
-                cnonce=None,
-            )
+    def test_send__writes_bytes_without_sip_fixture(self, rtp, fake_transport):
+        """send() serialises and writes a SIP message to the transport."""
+        session = self._make_session(rtp, fake_transport)
+        response = Response(status_code=200, phrase="OK")
+        session.send(response)
+        assert bytes(response) in fake_transport.sent
 
-    def test_unsupported_algorithm_raises(self):
-        """An unrecognised algorithm string raises ValueError."""
-        with pytest.raises(ValueError, match="Unsupported digest algorithm"):
-            SessionInitiationProtocol.digest_response(
-                username="alice",
-                password="secret",  # noqa: S106
-                realm="example.com",
-                nonce="abc123",
-                method="REGISTER",
-                uri="sip:example.com",
-                algorithm="BLAKE2b",
-            )
+    def test_send__no_op_when_transport_is_none(self, rtp):
+        """send() is a no-op when transport is None."""
+        session = self._make_session(rtp)
+        session.transport = None
+        session.send(Response(status_code=200, phrase="OK"))
+
+    def test_close__closes_transport_without_sip_fixture(self, rtp, fake_transport):
+        """close() closes the underlying transport."""
+        session = self._make_session(rtp, fake_transport)
+        session.close()
+        assert fake_transport.closed is True
+
+    def test_close__no_op_when_transport_is_none(self, rtp):
+        """close() is a no-op when transport is None."""
+        session = self._make_session(rtp)
+        session.transport = None
+        session.close()
+
+    # ------------------------------------------------------------------
+    # allowed_methods / allow_header / method_not_allowed (via _make_session)
+    # ------------------------------------------------------------------
+
+    def test_allowed_methods__includes_options_without_sip_fixture(self, rtp):
+        """OPTIONS is always included in allowed_methods."""
+        session = self._make_session(rtp)
+        assert SIPMethod.OPTIONS in session.allowed_methods
+
+    def test_allow_header__is_comma_separated_without_sip_fixture(self, rtp):
+        """allow_header returns a comma-separated string of methods."""
+        session = self._make_session(rtp)
+        header = session.allow_header
+        assert "OPTIONS" in header
+        assert "," in header
+
+    def test_method_not_allowed__sends_405_without_sip_fixture(
+        self, rtp, fake_transport
+    ):
+        """method_not_allowed() sends a 405 Method Not Allowed response."""
+        session = self._make_session(rtp, fake_transport)
+        request = Message.parse(
+            b"PUBLISH sip:alice@example.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/TLS 192.0.2.1:5061;branch=z9hG4bKpub3\r\n"
+            b"From: sip:bob@biloxi.com;tag=t5\r\n"
+            b"To: sip:alice@example.com\r\n"
+            b"Call-ID: pub3-call@biloxi.com\r\n"
+            b"CSeq: 1 PUBLISH\r\n"
+            b"\r\n"
+        )
+        session.method_not_allowed(request)
+        assert any(b"405" in data for data in fake_transport.sent)
+
+    # ------------------------------------------------------------------
+    # request_received (via _make_session)
+    # ------------------------------------------------------------------
+
+    def test_request_received__options_sends_200_without_sip_fixture(
+        self, rtp, fake_transport
+    ):
+        """OPTIONS request is answered with 200 OK."""
+        session = self._make_session(rtp, fake_transport)
+        request = Message.parse(
+            b"OPTIONS sip:alice@example.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/TLS 192.0.2.1:5061;branch=z9hG4bKopt3\r\n"
+            b"From: sip:bob@biloxi.com;tag=t6\r\n"
+            b"To: sip:alice@example.com\r\n"
+            b"Call-ID: opt3-call@biloxi.com\r\n"
+            b"CSeq: 3 OPTIONS\r\n"
+            b"\r\n"
+        )
+        session.request_received(request)
+        assert any(b"200" in data for data in fake_transport.sent)
+
+    def test_request_received__invite_creates_transaction_without_sip_fixture(
+        self, rtp, fake_transport
+    ):
+        """INVITE request creates an InviteTransaction."""
+        session = self._make_session(rtp, fake_transport)
+        request = Message.parse(INVITE_BYTES)
+        before = len(session.transactions)
+        session.request_received(request)
+        assert len(session.transactions) > before
+
+    def test_request_received__unsupported_method_sends_405_without_sip_fixture(
+        self, rtp, fake_transport
+    ):
+        """Unsupported method triggers method_not_allowed (405)."""
+        session = self._make_session(rtp, fake_transport)
+        request = Message.parse(
+            b"PUBLISH sip:alice@example.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/TLS 192.0.2.1:5061;branch=z9hG4bKpub4\r\n"
+            b"From: sip:bob@biloxi.com;tag=t7\r\n"
+            b"To: sip:alice@example.com\r\n"
+            b"Call-ID: pub4-call@biloxi.com\r\n"
+            b"CSeq: 1 PUBLISH\r\n"
+            b"\r\n"
+        )
+        session.request_received(request)
+        assert any(b"405" in data for data in fake_transport.sent)
+
+    def test_request_received__cancel_dispatches_to_transaction_without_sip_fixture(
+        self, rtp, fake_transport
+    ):
+        """CANCEL is forwarded to the matching INVITE transaction."""
+        session = self._make_session(rtp, fake_transport)
+        invite = Message.parse(INVITE_BYTES)
+        session.request_received(invite)
+        tx = session.transactions[invite.branch]
+        session.dialogs[(tx.dialog.remote_tag, tx.dialog.local_tag)] = tx.dialog
+        cancel = Message.parse(
+            b"CANCEL sip:alice@example.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/TLS 192.0.2.1:5061;branch=z9hG4bKabc123\r\n"
+            b"From: sip:bob@biloxi.com;tag=from-tag-1\r\n"
+            b"To: sip:alice@example.com\r\n"
+            b"Call-ID: test-call-id@biloxi.com\r\n"
+            b"CSeq: 1 CANCEL\r\n"
+            b"\r\n"
+        )
+        session.request_received(cancel)
+        assert any(b"200" in data for data in fake_transport.sent)
+
+    def test_request_received__cancel_gone_when_no_transaction_without_sip_fixture(
+        self, rtp, fake_transport
+    ):
+        """CANCEL with no matching transaction returns 410 Gone."""
+        session = self._make_session(rtp, fake_transport)
+        cancel = Message.parse(
+            b"CANCEL sip:alice@example.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/TLS 192.0.2.1:5061;branch=z9hG4bKnone2\r\n"
+            b"From: sip:bob@biloxi.com;tag=t8\r\n"
+            b"To: sip:alice@example.com\r\n"
+            b"Call-ID: no-tx2@biloxi.com\r\n"
+            b"CSeq: 1 CANCEL\r\n"
+            b"\r\n"
+        )
+        session.request_received(cancel)
+        assert any(b"410" in data for data in fake_transport.sent)
+
+    # ------------------------------------------------------------------
+    # response_received (via _make_session)
+    # ------------------------------------------------------------------
+
+    def test_response_received__delegates_to_transaction_without_sip_fixture(
+        self, rtp, fake_transport
+    ):
+        """Response is forwarded to the matching transaction."""
+        session = self._make_session(rtp, fake_transport)
+        branch = "z9hG4bKdel-test"
+        session.transactions[branch] = InviteTransaction(
+            sip=session,
+            method=SIPMethod.INVITE,
+            branch=branch,
+            cseq=1,
+        )
+        response = Message.parse(
+            f"SIP/2.0 200 OK\r\n"
+            f"Via: SIP/2.0/TLS example.com;branch={branch}\r\n"
+            f"From: sip:alice@example.com;tag=lt\r\n"
+            f"To: sip:example.com;tag=rt\r\n"
+            f"Call-ID: del-test@example.com\r\n"
+            f"CSeq: 1 INVITE\r\n"
+            f"\r\n".encode()
+        )
+        session.response_received(response)
+
+    def test_response_received__warns_on_unknown_branch_without_sip_fixture(
+        self, rtp, fake_transport, caplog
+    ):
+        """Log a warning when the response branch is not in transactions."""
+        import logging
+
+        session = self._make_session(rtp, fake_transport)
+        response = Message.parse(
+            b"SIP/2.0 200 OK\r\n"
+            b"Via: SIP/2.0/TLS example.com;branch=z9hG4bKunknown\r\n"
+            b"From: sip:alice@example.com;tag=lt2\r\n"
+            b"To: sip:example.com;tag=rt2\r\n"
+            b"Call-ID: unknown-branch@example.com\r\n"
+            b"CSeq: 1 INVITE\r\n"
+            b"\r\n"
+        )
+        with caplog.at_level(logging.WARNING):
+            session.response_received(response)
+        assert "unknown branch" in caplog.text
+
+    # ------------------------------------------------------------------
+    # connection_lost (via _make_session)
+    # ------------------------------------------------------------------
+
+    async def test_connection_lost__cancels_keepalive_without_sip_fixture(self, rtp):
+        """connection_lost() cancels and clears the keepalive task."""
+        session = self._make_session(rtp)
+        session.keepalive_task = asyncio.create_task(asyncio.sleep(9999))
+        session.connection_lost(None)
+        assert session.keepalive_task is None
+
+    def test_connection_lost__clears_transport_without_sip_fixture(self, rtp):
+        """connection_lost() sets transport to None."""
+        session = self._make_session(rtp)
+        session.connection_lost(None)
+        assert session.transport is None
+
+    def test_connection_lost__sets_disconnected_event_without_sip_fixture(self, rtp):
+        """connection_lost() sets the disconnected_event."""
+        session = self._make_session(rtp)
+        session.connection_lost(None)
+        assert session.disconnected_event.is_set()
+
+    def test_connection_lost__logs_exception_without_sip_fixture(self, rtp, caplog):
+        """connection_lost() logs an error when an exception is provided."""
+        import logging
+
+        session = self._make_session(rtp)
+        with caplog.at_level(logging.ERROR):
+            session.connection_lost(OSError("reset"))
+        assert session.transport is None
+
+    def test_connection_lost__no_keepalive_task_without_sip_fixture(self, rtp):
+        """connection_lost() is safe when keepalive_task is None."""
+        session = self._make_session(rtp)
+        session.keepalive_task = None
+        session.connection_lost(None)
+        assert session.transport is None

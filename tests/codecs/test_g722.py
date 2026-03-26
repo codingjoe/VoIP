@@ -1,7 +1,5 @@
 """Tests for the G.722 codec (voip.codecs.g722)."""
 
-from __future__ import annotations
-
 from unittest.mock import patch
 
 import pytest

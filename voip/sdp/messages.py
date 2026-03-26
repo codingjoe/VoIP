@@ -1,7 +1,5 @@
 """SDP message parsing and serialization as defined by RFC 4566."""
 
-from __future__ import annotations
-
 import dataclasses
 from collections.abc import Generator
 
@@ -44,7 +42,7 @@ FIELD_MAP: tuple[Field, ...] = (
 FIELD_BY_LETTER: dict[str, Field] = {field.letter: field for field in FIELD_MAP}
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(slots=True)
 class SessionDescription(ByteSerializableObject):
     """Session Description Protocol message [RFC 4566].
 

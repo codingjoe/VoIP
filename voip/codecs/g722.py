@@ -11,8 +11,6 @@ RTP packets.
 Requires the ``hd-audio`` extra: ``pip install voip[hd-audio]``.
 """
 
-from __future__ import annotations
-
 import dataclasses
 import typing
 from collections.abc import Iterator

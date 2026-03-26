@@ -7,8 +7,6 @@ Ollama-powered response loop and Pocket TTS voice synthesis.
 Requires the ``ai`` extra: ``pip install voip[ai]``.
 """
 
-from __future__ import annotations
-
 import asyncio
 import dataclasses
 import datetime

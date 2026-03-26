@@ -4,12 +4,9 @@ Real-time Transport Protocol (RTP) implementation of [RFC 3550].
 [RFC 3550]: https://datatracker.ietf.org/doc/html/rfc3550#section-5
 """
 
-from __future__ import annotations
-
 import asyncio
 import dataclasses
 import enum
-import ipaddress
 import json
 import logging
 import struct
@@ -19,13 +16,13 @@ from typing import TYPE_CHECKING
 from voip.sdp.types import MediaDescription
 from voip.srtp import SRTPSession
 from voip.stun import STUNProtocol
-from voip.types import ByteSerializableObject
+from voip.types import ByteSerializableObject, NetworkAddress
 
 if TYPE_CHECKING:
     from voip.sip.protocol import SessionInitiationProtocol
     from voip.sip.types import CallerID
 
-__all__ = ["RTP", "RTPCall", "RTPPacket", "RTPPayloadType", "RealtimeTransportProtocol"]
+__all__ = ["RTP", "Session", "RTPPacket", "RTPPayloadType", "RealtimeTransportProtocol"]
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +41,7 @@ class RTPPayloadType(enum.IntEnum):
     OPUS = 111  # RFC 7587 (dynamic)
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True, slots=True)
 class RTPPacket(ByteSerializableObject):
     """
     RTP data packet [RFC 3550 §5.1].
@@ -90,7 +87,7 @@ class RTPPacket(ByteSerializableObject):
 
 
 @dataclasses.dataclass
-class RTPCall:
+class Session:
     """One call leg managed by the RTP multiplexer.
 
     Associates a SIP dialog with the `RealtimeTransportProtocol` media
@@ -117,7 +114,7 @@ class RTPCall:
     caller: CallerID
     srtp: SRTPSession | None = None
 
-    def packet_received(self, packet: RTPPacket, addr: tuple[str, int]) -> None:
+    def packet_received(self, packet: RTPPacket, addr: NetworkAddress) -> None:
         """Handle a parsed RTP packet. Override in subclasses to process media.
 
         Args:
@@ -125,7 +122,7 @@ class RTPCall:
             addr: Remote ``(host, port)`` the packet arrived from.
         """
 
-    def send_packet(self, packet: RTPPacket, addr: tuple[str, int]) -> None:
+    def send_packet(self, packet: RTPPacket, addr: NetworkAddress) -> None:
         """Serialize *packet* and send it via the shared RTP socket.
 
         Encrypts the packet with the call's SRTP session when one is set.
@@ -187,24 +184,22 @@ class RealtimeTransportProtocol(STUNProtocol):
     """
 
     rtp_header_size: typing.ClassVar[int] = 12
-    calls: dict[tuple[str, int] | None, RTPCall] = dataclasses.field(
+    calls: dict[tuple[str, int] | None, Session] = dataclasses.field(
         init=False, default_factory=dict
     )
-    public_address: asyncio.Future[
-        tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int]
-    ] = dataclasses.field(init=False, default_factory=asyncio.Future)
+    public_address: NetworkAddress | None = dataclasses.field(init=False, default=None)
 
     def stun_connection_made(
         self,
         transport: asyncio.DatagramTransport,
-        addr: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int],
+        addr: NetworkAddress,
     ) -> None:
-        self.public_address.set_result(addr)
+        self.public_address = addr
 
     def register_call(
         self,
-        addr: tuple[str, int] | None,
-        handler: RTPCall,
+        addr: NetworkAddress | None,
+        handler: Session,
     ) -> None:
         """Register *handler* for RTP traffic arriving from *addr*.
 
@@ -231,7 +226,7 @@ class RealtimeTransportProtocol(STUNProtocol):
         )
         self.calls[addr] = handler
 
-    def unregister_call(self, addr: tuple[str, int] | None) -> None:
+    def unregister_call(self, addr: NetworkAddress | None) -> None:
         """Remove the handler registered for *addr*.
 
         Args:
@@ -250,7 +245,7 @@ class RealtimeTransportProtocol(STUNProtocol):
             )
             self.calls.pop(addr)
 
-    def packet_received(self, data: bytes, addr: tuple[str, int]) -> None:
+    def packet_received(self, data: bytes, addr: NetworkAddress) -> None:
         """Route an incoming SRTP datagram to the matching per-call handler.
 
         Looks up *addr* in the call registry.  Falls back to the wildcard

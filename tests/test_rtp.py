@@ -1,7 +1,5 @@
 """Tests for the RTP protocol implementation (RFC 3550)."""
 
-from __future__ import annotations
-
 import asyncio
 import dataclasses
 import ipaddress
@@ -9,7 +7,7 @@ import struct
 from unittest.mock import MagicMock
 
 import pytest
-from voip.rtp import RTP, RealtimeTransportProtocol, RTPCall, RTPPacket, RTPPayloadType
+from voip.rtp import RTP, RealtimeTransportProtocol, RTPPacket, RTPPayloadType, Session
 from voip.sdp.types import MediaDescription, RTPPayloadFormat
 from voip.sip.types import CallerID
 
@@ -21,7 +19,7 @@ def make_media() -> MediaDescription:
     )
 
 
-def make_call(**kwargs) -> RTPCall:
+def make_call(**kwargs) -> Session:
     """Create an RTPCall with mock rtp/sip for unit testing."""
     defaults: dict = {
         "rtp": MagicMock(spec=RealtimeTransportProtocol),
@@ -30,7 +28,7 @@ def make_call(**kwargs) -> RTPCall:
         "caller": CallerID(""),
     }
     defaults.update(kwargs)
-    return RTPCall(**defaults)
+    return Session(**defaults)
 
 
 def make_rtp_packet(
@@ -158,7 +156,7 @@ class TestRealtimeTransportProtocol:
         """Non-STUN datagrams from registered addr are forwarded to the handler."""
         routed: list[RTPPacket] = []
 
-        class RecordCall(RTPCall):
+        class RecordCall(Session):
             def packet_received(self, packet: RTPPacket, addr):
                 routed.append(packet)
 
@@ -185,7 +183,7 @@ class TestRealtimeTransportProtocol:
         """Malformed RTP datagrams (too short) are discarded without crashing."""
         routed: list[RTPPacket] = []
 
-        class RecordCall(RTPCall):
+        class RecordCall(Session):
             def packet_received(self, packet: RTPPacket, addr):
                 routed.append(packet)
 
@@ -202,7 +200,7 @@ class TestRealtimeTransportProtocol:
         """A STUN packet (first byte < 4) must not reach any Call handler."""
         routed: list[RTPPacket] = []
 
-        class RecordCall(RTPCall):
+        class RecordCall(Session):
             def packet_received(self, packet: RTPPacket, addr):
                 routed.append(packet)
 
@@ -256,12 +254,22 @@ class TestRealtimeTransportProtocol:
         )
         server_addr = server_t.get_extra_info("sockname")
 
-        proto = RealtimeTransportProtocol(stun_server_address=server_addr)
+        done: asyncio.Future[
+            tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int]
+        ] = loop.create_future()
+
+        class TrackingRTP(RealtimeTransportProtocol):
+            def stun_connection_made(self, transport, addr):
+                super().stun_connection_made(transport, addr)
+                if not done.done():
+                    done.set_result(addr)
+
+        proto = TrackingRTP(stun_server_address=server_addr)
         rtp_t, _ = await loop.create_datagram_endpoint(
             lambda: proto, local_addr=("127.0.0.1", 0)
         )
         try:
-            result = await proto.public_address
+            result = await asyncio.wait_for(done, 2.0)
             assert result == (ipaddress.IPv4Address("203.0.113.5"), 54321)
             assert len(received_requests) == 1
         finally:
@@ -274,11 +282,11 @@ class TestRealtimeTransportProtocol:
         received_wildcard: list[RTPPacket] = []
         received_call: list[RTPPacket] = []
 
-        class WildcardCall(RTPCall):
+        class WildcardCall(Session):
             def packet_received(self, packet: RTPPacket, addr):
                 received_wildcard.append(packet)
 
-        class SpecificCall(RTPCall):
+        class SpecificCall(Session):
             def packet_received(self, packet: RTPPacket, addr):
                 received_call.append(packet)
 
@@ -304,7 +312,7 @@ class TestRealtimeTransportProtocol:
         """Packets from an unknown addr reach the None-key wildcard handler."""
         received: list[RTPPacket] = []
 
-        class WildcardCall(RTPCall):
+        class WildcardCall(Session):
             def packet_received(self, packet: RTPPacket, addr):
                 received.append(packet)
 
@@ -324,7 +332,7 @@ class TestRealtimeTransportProtocol:
         """After unregister_call, packets from that addr are no longer routed to handler."""
         received: list[RTPPacket] = []
 
-        class RecordCall(RTPCall):
+        class RecordCall(Session):
             def packet_received(self, packet: RTPPacket, addr):
                 received.append(packet)
 
@@ -345,7 +353,7 @@ class TestRealtimeTransportProtocol:
         import logging  # noqa: PLC0415
 
         mux = RealtimeTransportProtocol()
-        handler = RTPCall(
+        handler = Session(
             rtp=mux, sip=MagicMock(), media=make_media(), caller=CallerID("")
         )
         with caplog.at_level(logging.INFO, logger="voip.rtp"):
@@ -358,7 +366,7 @@ class TestRealtimeTransportProtocol:
         import logging  # noqa: PLC0415
 
         mux = RealtimeTransportProtocol()
-        handler = RTPCall(
+        handler = Session(
             rtp=mux, sip=MagicMock(), media=make_media(), caller=CallerID("")
         )
         addr = ("1.2.3.4", 5004)
@@ -372,7 +380,7 @@ class TestRealtimeTransportProtocol:
         """packet_received forwards the datagram to the registered handler."""
         received: list[tuple[RTPPacket, tuple]] = []
 
-        class CapturingCall(RTPCall):
+        class CapturingCall(Session):
             def packet_received(self, packet: RTPPacket, addr):
                 received.append((packet, addr))
 
@@ -414,7 +422,7 @@ class TestSRTPIntegration:
         received: list[RTPPacket] = []
 
         @dataclasses.dataclass
-        class SRTPCapture(RTPCall):
+        class SRTPCapture(Session):
             def packet_received(self, packet: RTPPacket, addr) -> None:
                 received.append(packet)
 
@@ -446,7 +454,7 @@ class TestSRTPIntegration:
         received: list[RTPPacket] = []
 
         @dataclasses.dataclass
-        class SRTPCapture(RTPCall):
+        class SRTPCapture(Session):
             def packet_received(self, packet: RTPPacket, addr) -> None:
                 received.append(packet)
 
@@ -471,7 +479,7 @@ class TestSRTPIntegration:
         assert any("authentication failed" in r.message for r in caplog.records)
 
 
-class TestRTPCall:
+class TestSession:
     def test_caller__defaults_to_empty_string(self):
         """Caller defaults to an empty CallerID when not provided."""
         call = make_call()
@@ -491,7 +499,7 @@ class TestRTPCall:
         """Rtp and sip back-references are stored on the instance."""
         mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
         mock_sip = MagicMock()
-        call = RTPCall(
+        call = Session(
             rtp=mock_rtp, sip=mock_sip, media=make_media(), caller=CallerID("")
         )
         assert call.rtp is mock_rtp
@@ -531,7 +539,7 @@ class TestRTPCall:
     def test_negotiate_codec__raises_not_implemented(self):
         """negotiate_codec raises NotImplementedError in the base class."""
         with pytest.raises(NotImplementedError):
-            RTPCall.negotiate_codec(MagicMock())
+            Session.negotiate_codec(MagicMock())
 
     async def test_hang_up__raises_not_implemented(self):
         """hang_up raises NotImplementedError in the base class."""

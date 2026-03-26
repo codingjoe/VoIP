@@ -9,12 +9,9 @@ AI-powered subclasses (Whisper transcription, Ollama agent) live in
 [`voip.ai`][voip.ai] and require the ``ai`` extra.
 """
 
-from __future__ import annotations
-
 import asyncio
 import dataclasses
 import datetime
-import json
 import logging
 import secrets
 from collections.abc import Iterator
@@ -26,7 +23,7 @@ import pytest
 import voip.codecs as codecs
 from voip.codecs import RTPCodec
 from voip.codecs.base import PayloadDecoder
-from voip.rtp import RTPCall, RTPPacket
+from voip.rtp import RTPPacket, Session
 from voip.sdp.types import MediaDescription
 
 __all__ = ["AudioCall", "EchoCall", "VoiceActivityCall"]
@@ -45,7 +42,7 @@ def generate_ssrc() -> int:
 
 
 @dataclasses.dataclass(slots=True, kw_only=True)
-class AudioCall(RTPCall):
+class AudioCall(Session):
     """
     RTP call handler for audio calls supporting Opus, G.722, PCMA, and PCMU.
 
@@ -92,23 +89,6 @@ class AudioCall(RTPCall):
         self.codec = codecs.get(fmt.encoding_name)
         self.payload_decoder = self.codec.create_decoder(
             self.sampling_rate_hz, input_rate_hz=self.sample_rate
-        )
-        logger.info(
-            json.dumps(
-                {
-                    "event": "call_started",
-                    "caller": repr(self.caller),
-                    "codec": fmt.encoding_name,
-                    "sample_rate": fmt.sample_rate or 0,
-                    "channels": fmt.channels,
-                    "payload_type": fmt.payload_type,
-                }
-            ),
-            extra={
-                "caller": repr(self.caller),
-                "codec": fmt.encoding_name,
-                "payload_type": fmt.payload_type,
-            },
         )
 
     @property

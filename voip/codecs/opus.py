@@ -9,8 +9,6 @@ Requires the ``pyav`` extra: ``pip install voip[pyav]``.
 [Ogg]: https://wiki.xiph.org/Ogg
 """
 
-from __future__ import annotations
-
 import os
 import struct
 from typing import ClassVar

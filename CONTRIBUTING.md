@@ -13,10 +13,13 @@ To run the tests, use the following command:
 uv run pytest
 ```
 
+Avoid mocking in your tests and instead use real dependencies to ensure that your tests are as close to real-world scenarios as possible.
+You may only mock transports to avoid network IO or to mimic network counterparts.
+
 Before your first commit, ensure that the pre-commit hooks are installed by running:
 
 ```bash
-uv pre-commit install
+uvx prek install
 ```
 
 ## Testing with Extra Dependencies

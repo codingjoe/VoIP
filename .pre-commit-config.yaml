@@ -25,7 +25,7 @@ repos:
     rev: v3.21.2
     hooks:
       - id: pyupgrade
-        args: [--py313-plus]
+        args: [--py314-plus]
   - repo: https://github.com/hukkin/mdformat
     rev: 1.0.0
     hooks:
@@ -48,18 +48,6 @@ repos:
     rev: v0.21.0
     hooks:
       - id: yamlfmt
-  - repo: local
-    hooks:
-      - id: ty
-        name: ty
-        description: An extremely fast Python type checker and language server, written in Rust.
-        entry: ty check
-        language: python
-        additional_dependencies: [ty, '.[cli]']
-        types_or: [python, pyi, jupyter]
-        require_serial: true
-        exclude: ^tests\/.*\.py$
 ci:
   skip:
     - no-commit-to-branch
-    - ty

@@ -1,7 +1,5 @@
 """Tests for audio call handler and codec utilities."""
 
-from __future__ import annotations
-
 import asyncio
 import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -118,22 +116,6 @@ class TestAudioCall:
     def test_init__default_payload_type_without_media(self):
         """Default payload_type is 8 (PCMA) when using the default test media."""
         assert make_audio_call().payload_type == 8
-
-    def test_init__logs_codec_info(self, caplog):
-        """Log codec name, sample rate and payload type at INFO level on init."""
-        import logging  # noqa: PLC0415
-
-        media = MediaDescription(
-            media="audio",
-            port=49170,
-            proto="RTP/AVP",
-            fmt=[
-                RTPPayloadFormat(payload_type=8, encoding_name="PCMA", sample_rate=8000)
-            ],
-        )
-        with caplog.at_level(logging.INFO, logger="voip.audio"):
-            make_audio_call(media=media)
-        assert any("PCMA" in r.message and "8000" in r.message for r in caplog.records)
 
     @pytest.mark.asyncio
     async def test_packet_received__dispatches_audio_for_non_empty_payload(self):
