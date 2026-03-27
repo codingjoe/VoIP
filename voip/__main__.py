@@ -439,9 +439,7 @@ def call(ctx, target: str):
                 method=SIPMethod.INVITE,
                 cseq=1,
             )
-            asyncio.create_task(
-                tx.make_call(self.outbound_target, call_class=EchoCall)
-            )
+            asyncio.create_task(tx.make_call(self.outbound_target, call_class=EchoCall))
 
     async def run():
         _, rtp_protocol = await _connect_rtp(

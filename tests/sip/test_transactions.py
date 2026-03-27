@@ -431,9 +431,7 @@ class TestRegistrationTransaction:
             transaction_class=InviteTransaction,
         )
         session.transport = transport
-        session.local_address = NetworkAddress(
-            ipaddress.ip_address("127.0.0.1"), 5061
-        )
+        session.local_address = NetworkAddress(ipaddress.ip_address("127.0.0.1"), 5061)
         session.is_secure = True
         tx = RegistrationTransaction(sip=session, method=SIPMethod.REGISTER)
         session.transactions[tx.branch] = tx
@@ -448,8 +446,6 @@ class TestRegistrationTransaction:
         )
         tx.response_received(response)
         assert registered_calls == [True]
-
-
 
 
 class TestInviteTransaction:
