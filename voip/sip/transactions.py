@@ -11,6 +11,7 @@ import secrets
 import typing
 import uuid
 
+import voip
 from voip.rtp import Session
 from voip.sdp.messages import SessionDescription
 from voip.sdp.types import (
@@ -614,9 +615,7 @@ class InviteTransaction(Transaction):
                 sess_version=session_id,
                 nettype="IN",
                 addrtype=(
-                    "IP6"
-                    if isinstance(rtp_public[0], ipaddress.IPv6Address)
-                    else "IP4"
+                    "IP6" if isinstance(rtp_public[0], ipaddress.IPv6Address) else "IP4"
                 ),
                 unicast_address=str(rtp_public[0]),
             ),
@@ -624,9 +623,7 @@ class InviteTransaction(Transaction):
             connection=ConnectionData(
                 nettype="IN",
                 addrtype=(
-                    "IP6"
-                    if isinstance(rtp_public[0], ipaddress.IPv6Address)
-                    else "IP4"
+                    "IP6" if isinstance(rtp_public[0], ipaddress.IPv6Address) else "IP4"
                 ),
                 connection_address=str(rtp_public[0]),
             ),
@@ -644,12 +641,15 @@ class InviteTransaction(Transaction):
             method=SIPMethod.INVITE,
             uri=target_uri,
             headers={
+                "Max-Forwards": "70",
                 **self.headers,
                 "From": dialog.from_header,
                 "To": str(target_uri),
-                "Call-ID": dialog.call_id,
                 "Contact": self.sip.contact,
-                "Max-Forwards": "70",
+                "Call-ID": dialog.call_id,
+                "Route": f"<sip:{str(rtp_public[0])}:5060;transport=tcp;lr>",
+                "Allow": self.sip.allow_header,
+                "User-Agent": f"python/voip/{voip.__version__}",
                 "Content-Type": "application/sdp",
             },
             body=sdp_offer,
@@ -673,9 +673,7 @@ class InviteTransaction(Transaction):
                 pass
             case 2:
                 try:
-                    asyncio.get_running_loop().create_task(
-                        self._accept_call(response)
-                    )
+                    asyncio.get_running_loop().create_task(self._accept_call(response))
                 except RuntimeError:
                     logger.debug(
                         "response_received called outside of an async context; "
@@ -733,9 +731,7 @@ class InviteTransaction(Transaction):
             )
             if remote_audio is not None and remote_audio.port != 0:
                 media_connection = remote_audio.connection
-                session_connection = (
-                    response.body.connection if response.body else None
-                )
+                session_connection = response.body.connection if response.body else None
                 connection = media_connection or session_connection
                 remote_ip = (
                     connection.connection_address
@@ -770,9 +766,7 @@ class InviteTransaction(Transaction):
         ack_branch = f"{Transaction.branch_prefix}-{uuid.uuid4()}"
         contact = response.headers.get("Contact")
         ack_uri = (
-            contact.strip("<>").split(";")[0]
-            if contact
-            else str(self.request.uri)
+            contact.strip("<>").split(";")[0] if contact else str(self.request.uri)
         )
         self.sip.send(
             Request(

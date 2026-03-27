@@ -69,10 +69,6 @@ class SessionInitiationProtocol(asyncio.Protocol):
     [RFC 3261]: https://datatracker.ietf.org/doc/html/rfc3261
     [RFC 3261 §22]: https://datatracker.ietf.org/doc/html/rfc3261#section-22
 
-    Attributes:
-        VIA_BRANCH_PREFIX:
-            RFC 3261 §8.1.1.7 Via branch magic cookie (indicates RFC 3261 compliance).
-
     Args:
         aor: SIP Address of Record (AOR) to register with the carrier, e.g.
         rtp: Shared RTP mux for call media.  When provided, call handlers can register
@@ -82,8 +78,6 @@ class SessionInitiationProtocol(asyncio.Protocol):
         keepalive_interval: Keep-alive ping interval. Should be between 30 and 90 seconds.
 
     """
-
-    VIA_BRANCH_PREFIX: typing.ClassVar[str] = "z9hG4bK"
 
     aor: types.SipUri
     rtp: RealtimeTransportProtocol
@@ -339,7 +333,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
         ob_uri_param = ";ob"
         if self.aor.scheme == "sips":
             return f"<sips:{address}{ob_uri_param}>"
-        tls_param = ";transport=tls" if self.is_secure else ""
+        tls_param = ";transport=tls" if self.is_secure else ";transport=tcp"
         return f"<sip:{address}{tls_param}{ob_uri_param}>"
 
     def connection_lost(self, exc: Exception | None) -> None:
