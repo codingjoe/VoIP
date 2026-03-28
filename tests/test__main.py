@@ -364,7 +364,13 @@ class TestEchoDialCommand:
         _run_dial_command(
             fake_connect_rtp,
             fake_connect_sip_once,
-            ["sip", "sips:alice:secret@example.com", "echo", "--dial", "sip:bob@biloxi.com"],
+            [
+                "sip",
+                "sips:alice:secret@example.com",
+                "echo",
+                "--dial",
+                "sip:bob@biloxi.com",
+            ],
         )
 
         assert any(b"INVITE" in data for data in sent_data)
@@ -417,7 +423,13 @@ class TestEchoDialCommand:
         _run_dial_command(
             fake_connect_rtp,
             fake_connect_sip_once,
-            ["sip", "sips:alice:secret@example.com", "echo", "--dial", "sip:bob@biloxi.com"],
+            [
+                "sip",
+                "sips:alice:secret@example.com",
+                "echo",
+                "--dial",
+                "sip:bob@biloxi.com",
+            ],
         )
 
         assert transport.closed

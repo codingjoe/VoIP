@@ -641,4 +641,3 @@ class TestSayCall:
         call.on_audio_sent()
 
         sip_mock.close.assert_called_once()
-

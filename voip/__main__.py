@@ -486,7 +486,9 @@ def transcribe(ctx, stt_model, dial: str | None):
     help="Dial TARGET (a SIP URI) instead of waiting for an inbound call.",
 )
 @click.pass_context
-def agent(ctx, stt_model, llm_model, voice, system_prompt, initial_prompt, dial: str | None):
+def agent(
+    ctx, stt_model, llm_model, voice, system_prompt, initial_prompt, dial: str | None
+):
     """Register with a SIP carrier and handle calls with an AI voice agent.
 
     Without ``--dial``, waits for inbound calls.

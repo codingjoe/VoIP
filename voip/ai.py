@@ -251,7 +251,9 @@ class SayCall(AudioCall):
     async def _say(self) -> None:
         audio = self.tts_model.generate_audio(self._voice_state, self.text)
         await self.send_audio(
-            self.resample(audio.numpy(), self.tts_model.sample_rate, self.codec.sample_rate_hz)
+            self.resample(
+                audio.numpy(), self.tts_model.sample_rate, self.codec.sample_rate_hz
+            )
         )
 
     def on_audio_sent(self) -> None:
