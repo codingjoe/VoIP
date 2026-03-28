@@ -476,7 +476,7 @@ def transcribe(ctx, stt_model, dial: str | None):
     envvar="LLM_INITIAL_PROMPT",
     help=(
         "Initial message the agent says when the call connects.  "
-        "Useful with --dial to start the conversation proactively."
+        "Works for both inbound and outbound calls."
     ),
 )
 @click.option(
@@ -493,7 +493,8 @@ def agent(
 
     Without ``--dial``, waits for inbound calls.
     With ``--dial TARGET``, registers and immediately dials TARGET.
-    Use ``--initial-prompt`` with ``--dial`` to start the conversation.
+    Use ``--initial-prompt`` to have the agent speak first on connect
+    (works for both inbound and outbound calls).
     """
     from faster_whisper import WhisperModel
 
@@ -537,6 +538,7 @@ def agent(
                 llm_model=llm_model,
                 voice=voice,
                 system_prompt=system_prompt,
+                initial_prompt=initial_prompt,
             )
 
     async def run():

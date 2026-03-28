@@ -917,10 +917,33 @@ class TestInviteTransaction:
         tx.answer(call_class=CallFixture)
         assert any(b"200" in data for data in transport.sent)
 
+    async def test_accept_call__record_route_adds_route_header(self):
+        """_accept_call includes a Route header in the ACK when Record-Route is present."""
+        import ipaddress
 
-# ---------------------------------------------------------------------------
-# RegistrationError
-# ---------------------------------------------------------------------------
+        from voip.types import NetworkAddress
+
+        transport = FakeTransport()
+        rtp = RealtimeTransportProtocol()
+        rtp.public_address = NetworkAddress(ipaddress.ip_address("192.0.2.1"), 5004)
+        sip = create_sip_session(fake_transport=transport, rtp=rtp)
+        tx = InviteTransaction(sip=sip, method=SIPMethod.INVITE, cseq=1)
+        await tx.make_call("sip:bob@biloxi.com", call_class=CallFixture)
+        ok_response = Message.parse(
+            f"SIP/2.0 200 OK\r\n"
+            f"Via: SIP/2.0/TLS example.com;branch={tx.branch}\r\n"
+            f"From: sip:alice@example.com;tag=our-tag\r\n"
+            f"To: sip:bob@biloxi.com;tag=callee-tag\r\n"
+            f"Call-ID: rr-call@example.com\r\n"
+            f"CSeq: 1 INVITE\r\n"
+            f"Contact: <sip:bob@192.0.2.2>\r\n"
+            f"Record-Route: <sip:proxy.example.com;lr>\r\n"
+            f"\r\n".encode()
+        )
+        await tx._accept_call(ok_response)
+        sent_data = b"".join(transport.sent)
+        assert b"ACK" in sent_data
+        assert b"Route" in sent_data
 
 
 class TestRegistrationError:

@@ -765,24 +765,28 @@ class InviteTransaction(Transaction):
 
         ack_branch = f"{Transaction.branch_prefix}-{uuid.uuid4()}"
         contact = response.headers.get("Contact")
-        ack_uri = contact.strip("<>").split(";")[0]
+        ack_uri = (
+            contact.strip("<>").split(";")[0] if contact else str(self.request.uri)
+        )
+        ack_headers: dict[str, object] = {
+            "Via": (
+                f"SIP/2.0/{self.sip.aor.transport}"
+                f" {self.sip.rtp.public_address};rport;branch={ack_branch};alias"
+            ),
+            "Max-Forwards": "70",
+            "From": response.headers["From"],
+            "To": response.headers["To"],
+            "Call-ID": self.dialog.call_id,
+            "CSeq": f"{self.cseq} {SIPMethod.ACK}",
+            "Content-Length": 0,
+        }
+        if record_route := response.headers.get("Record-Route"):
+            ack_headers["Route"] = record_route
         self.sip.send(
             Request(
                 method=SIPMethod.ACK,
                 uri=ack_uri,
-                headers={
-                    "Via": (
-                        f"SIP/2.0/{self.sip.aor.transport}"
-                        f" {self.sip.rtp.public_address};rport;branch={ack_branch};alias"
-                    ),
-                    "Max-Forwards": "70",
-                    "From": response.headers["From"],
-                    "To": response.headers["To"],
-                    "Call-ID": self.dialog.call_id,
-                    "CSeq": f"{self.cseq} {SIPMethod.ACK}",
-                    "Route": response.headers["Record-Route"],
-                    "Content-Length": 0,
-                },
+                headers=ack_headers,
             )
         )
         self.sip.transactions.pop(self.branch, None)
