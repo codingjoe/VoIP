@@ -19,14 +19,14 @@ import ollama
 from faster_whisper import WhisperModel
 from pocket_tts import TTSModel
 
-from voip.audio import VoiceActivityCall
+from voip.audio import AudioCall, VoiceActivityCall
 
 if typing.TYPE_CHECKING:
     import pathlib
 
     import torch
 
-__all__ = ["TranscribeCall", "AgentCall"]
+__all__ = ["AgentCall", "SayCall", "TranscribeCall"]
 
 logger = logging.getLogger(__name__)
 
@@ -96,10 +96,86 @@ class TranscribeCall(VoiceActivityCall):
         """
 
 
-@dataclasses.dataclass(kw_only=True, slots=True)
-class AgentCall(TranscribeCall):
+@dataclasses.dataclass(kw_only=True)
+class TTSMixin:
+    """Mixin that adds Pocket TTS voice synthesis to a call.
+
+    Provides shared `tts_model`, `voice`, and `voice_state` fields along with
+    the [`send_speech`][voip.ai.TTSMixin.send_speech] method used by both
+    [`SayCall`][voip.ai.SayCall] and [`AgentCall`][voip.ai.AgentCall].
+
+    Args:
+        tts_model: Pre-loaded Pocket TTS model. A new default model is loaded when omitted.
+        voice: Voice name or conditioning audio accepted by Pocket TTS.
     """
-    Respond to caller voice inputs with voice responses.
+
+    tts_model: TTSModel = dataclasses.field(
+        default_factory=lambda: TTSModel.load_model()
+    )
+    voice: pathlib.Path | str | torch.Tensor = dataclasses.field(default="marius")
+
+    _voice_state: dict[str, dict[str, torch.Tensor]] = dataclasses.field(
+        init=False, repr=False
+    )
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self._voice_state = self.tts_model.get_state_for_audio_prompt(self.voice)
+
+    async def send_speech(self, text: str) -> None:
+        """Synthesise `text` and transmit it as outbound RTP audio.
+
+        Args:
+            text: The message to synthesise and send.
+        """
+        await self.send_audio(
+            self.resample(
+                self.tts_model.generate_audio(self._voice_state, text).numpy(),
+                self.tts_model.sample_rate,
+                self.codec.sample_rate_hz,
+            )
+        )
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class SayCall(TTSMixin, AudioCall):
+    """Dial a number, say a message using TTS, and hang up.
+
+    Synthesises `text` with Pocket TTS immediately after the call is
+    established, sends the audio as outbound RTP, then closes the SIP
+    session once the last packet has been dispatched.
+
+    Example:
+        ```python
+        class MySession(SessionInitiationProtocol):
+            def on_registered(self) -> None:
+                tx = InviteTransaction(sip=self, method=SIPMethod.INVITE, cseq=1)
+                asyncio.create_task(
+                    tx.make_call("sip:bob@biloxi.com", call_class=SayCall, text="Hello!")
+                )
+        ```
+
+    Args:
+        text: The message to synthesise and transmit.
+        tts_model: Pre-loaded Pocket TTS model.  A new default model is
+            loaded when omitted.
+        voice: Voice name or conditioning audio accepted by Pocket TTS.
+    """
+
+    text: str
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        asyncio.create_task(self.send_speech(self.text))
+
+    def on_audio_sent(self) -> None:
+        """Close the SIP session after the audio has been fully dispatched."""
+        self.sip.close()
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class AgentCall(TTSMixin, TranscribeCall):
+    """Respond to caller voice inputs with voice responses.
 
     Uses Ollama to generate responses to transcribed
     text and Pocket TTS to synthesize voice replies.
@@ -109,6 +185,7 @@ class AgentCall(TranscribeCall):
         llm_model: Ollama model to use for text generation.
         tts_model: Pocket TTS model to use for voice synthesis.
         voice: Voice to use for synthesis.
+        salutation: Opening message sent as soon as the call is established.
         audio_interrupt_duration: Time you have to talk over the agent to interrupt the outbound audio.
     """
 
@@ -118,14 +195,10 @@ class AgentCall(TranscribeCall):
         " YOU MUST NEVER USE NON-VERBAL CHARACTERS IN YOUR RESPONSES!"
     )
     llm_model: str = dataclasses.field(default="ministral-3")
-    tts_model: TTSModel = dataclasses.field(
-        default_factory=lambda: TTSModel.load_model()
-    )
     voice: pathlib.Path | str | torch.Tensor = dataclasses.field(default="azelma")
+    salutation: str = dataclasses.field(default="Hi.")
     audio_interrupt_duration: datetime.timedelta = datetime.timedelta(seconds=0.75)
-    _voice_state: dict[str, dict[str, torch.Tensor]] = dataclasses.field(
-        init=False, repr=False
-    )
+
     _messages: list[dict] = dataclasses.field(init=False, repr=False)
     _response_task: asyncio.Task | None = dataclasses.field(
         init=False, repr=False, default=None
@@ -148,14 +221,15 @@ class AgentCall(TranscribeCall):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.tts_model = self.tts_model or TTSModel.load_model()
-        self._voice_state = self.tts_model.get_state_for_audio_prompt(self.voice)
         self._messages = [
             {
                 "role": "system",
                 "content": self.system_prompt,
             }
         ]
+        if self.salutation:
+            self._messages.append({"role": "assistant", "content": self.salutation})
+            asyncio.create_task(self.send_speech(self.salutation))
 
     def transcription_received(self, text: str) -> None:
         self.cancel_outbound_audio()
@@ -169,22 +243,10 @@ class AgentCall(TranscribeCall):
             model=self.llm_model,
             messages=self._messages,
         )
-        # clean non-ascii characters from the response for TTS processing
         if reply := self.emoji_pattern.sub("", response.message.content or ""):
             self._messages.append({"role": "assistant", "content": reply})
             logger.debug("Agent reply: %r", reply)
             await self.send_speech(reply)
-
-    async def send_speech(self, text: str) -> None:
-        audio = self.tts_model.generate_audio(
-            self._voice_state,
-            text,
-        )
-        await self.send_audio(
-            self.resample(
-                audio.numpy(), self.tts_model.sample_rate, self.codec.sample_rate_hz
-            )
-        )
 
     def on_audio_speech(self) -> None:
         loop = asyncio.get_event_loop()
@@ -197,9 +259,6 @@ class AgentCall(TranscribeCall):
 
     def on_audio_silence(self) -> None:
         super().on_audio_silence()
-        try:
+        if self._cancel_audio_handle is not None:
             self._cancel_audio_handle.cancel()
-        except AttributeError:
-            pass
-        else:
             self._cancel_audio_handle = None

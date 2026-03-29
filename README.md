@@ -30,10 +30,24 @@ uvx 'voip[cli]' sip sips:alice:********@sip.example.com transcribe
 
 A simple echo server can be started with:
 
-````console
 ```console
 uvx 'voip[cli]' sip sips:alice:********@sip.example.com echo
-````
+```
+
+Each command supports an optional `--dial TARGET` flag to initiate an
+outbound call instead of waiting for an inbound one:
+
+```console
+uvx 'voip[cli]' sip sips:alice:********@sip.example.com echo --dial sip:+15551234567@sip.example.com
+uvx 'voip[cli]' sip sips:alice:********@sip.example.com transcribe --dial sip:+15551234567@sip.example.com
+uvx 'voip[cli]' sip sips:alice:********@sip.example.com agent --dial sip:+15551234567@sip.example.com --initial-prompt "Hello, how can I help you?"
+```
+
+To dial a number, say a message, and hang up automatically:
+
+```console
+uvx 'voip[cli]' sip sips:alice:********@sip.example.com say sip:+15551234567@sip.example.com "Your package has arrived."
+```
 
 You can also talk to a local agent (needs [Ollama]):
 

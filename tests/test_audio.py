@@ -466,6 +466,49 @@ class TestSendRTPAudio:
 
         assert first_handle.cancelled()
 
+    async def test_on_audio_sent__called_when_all_packets_dispatched(self):
+        """on_audio_sent is invoked once all packets from send_audio are dispatched."""
+        call = make_audio_call(media=PCMU_MEDIA)
+        remote_addr = ("10.0.0.1", 5004)
+        call.rtp.calls = {remote_addr: call}
+        received: list[bool] = []
+
+        original_on_audio_sent = call.on_audio_sent
+
+        def capturing_on_audio_sent():
+            received.append(True)
+            original_on_audio_sent()
+
+        call.on_audio_sent = capturing_on_audio_sent
+
+        with patch.object(call, "send_packet"):
+            await call.send_audio(np.zeros(160, dtype=np.float32))
+
+        # The second _dispatch_next_packet fires after rpt_packet_duration (20 ms)
+        await asyncio.sleep(0.1)
+
+        assert received == [True]
+
+    async def test_on_audio_sent__not_called_while_packets_remain(self):
+        """on_audio_sent is not called until the last packet is dispatched."""
+        call = make_audio_call(media=PCMU_MEDIA)
+        remote_addr = ("10.0.0.1", 5004)
+        call.rtp.calls = {remote_addr: call}
+        received: list[bool] = []
+
+        def capturing_on_audio_sent():
+            received.append(True)
+
+        call.on_audio_sent = capturing_on_audio_sent
+
+        with patch.object(call, "send_packet"):
+            # Two 160-sample chunks → two packets, second is deferred
+            await call.send_audio(np.zeros(320, dtype=np.float32))
+
+        # outbound_handle is still pending — on_audio_sent must not have fired yet
+        assert call.outbound_handle is not None
+        assert received == []
+
 
 def make_echo_call(**kwargs) -> EchoCall:
     """Create an EchoCall with mock rtp/sip for unit testing."""

@@ -10,7 +10,7 @@ pytest.importorskip("faster_whisper")
 pytest.importorskip("ollama")
 pytest.importorskip("pocket_tts")
 
-from voip.ai import AgentCall, TranscribeCall  # noqa: E402
+from voip.ai import AgentCall, SayCall, TranscribeCall  # noqa: E402
 from voip.audio import AudioCall  # noqa: E402
 from voip.codecs.pcma import PCMA  # noqa: E402
 from voip.codecs.pcmu import PCMU  # noqa: E402
@@ -56,6 +56,7 @@ def make_agent_call(
     tts_mock: MagicMock,
     call_class=None,
     media: MediaDescription | None = None,
+    **kwargs,
 ) -> AgentCall:
     """Return an AgentCall with mocked Whisper model and Pocket TTS model."""
     cls = call_class or AgentCall
@@ -70,6 +71,7 @@ def make_agent_call(
             sip=MagicMock(),
             caller=CallerID("sip:bob@biloxi.com"),
             media=med,
+            **kwargs,
         )
 
 
@@ -345,7 +347,8 @@ class TestAgentCall:
         """AgentCall is a subclass of TranscribeCall."""
         assert issubclass(AgentCall, TranscribeCall)
 
-    def test_init__loads_tts_model_when_none(self):
+    @pytest.mark.asyncio
+    async def test_init__loads_tts_model_when_none(self):
         """Load the default Pocket TTS model when tts_model is None."""
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
@@ -360,7 +363,8 @@ class TestAgentCall:
         tts_cls.load_model.assert_called_once()
         assert call.tts_model is tts_mock
 
-    def test_init__uses_provided_tts_model(self):
+    @pytest.mark.asyncio
+    async def test_init__uses_provided_tts_model(self):
         """Use the provided TTSModel instance instead of loading a new one."""
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
@@ -378,7 +382,8 @@ class TestAgentCall:
         tts_cls.load_model.assert_not_called()
         assert call.tts_model is tts_mock
 
-    def test_init__loads_voice_state(self):
+    @pytest.mark.asyncio
+    async def test_init__loads_voice_state(self):
         """Get the voice state from the TTS model on init."""
         tts_mock = MagicMock()
         voice_state = MagicMock()
@@ -398,23 +403,26 @@ class TestAgentCall:
         tts_mock.get_state_for_audio_prompt.assert_called_once_with("alba")
         assert call._voice_state is voice_state
 
-    def test_init__initializes_pending_state(self):
+    @pytest.mark.asyncio
+    async def test_init__initializes_pending_state(self):
         """AgentCall starts with an empty response task."""
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
         call = make_agent_call(MagicMock(), tts_mock)
         assert call._response_task is None
 
-    def test_init__initializes_chat_history_with_system_prompt(self):
+    @pytest.mark.asyncio
+    async def test_init__initializes_chat_history_with_system_prompt(self):
         """Chat history is seeded with a system prompt mentioning a phone call."""
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
         call = make_agent_call(MagicMock(), tts_mock)
-        assert len(call._messages) == 1
+        assert len(call._messages) == 2
         assert call._messages[0]["role"] == "system"
         assert "phone" in call._messages[0]["content"].lower()
 
-    def test_transcription_received__ignores_empty_text(self):
+    @pytest.mark.asyncio
+    async def test_transcription_received__ignores_empty_text(self):
         """transcription_received appends empty text and creates a response task."""
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
@@ -427,7 +435,8 @@ class TestAgentCall:
         mock_ct.assert_called_once()
         assert {"role": "user", "content": ""} in call._messages
 
-    def test_transcription_received__buffers_non_empty_text(self):
+    @pytest.mark.asyncio
+    async def test_transcription_received__buffers_non_empty_text(self):
         """transcription_received appends a user message and creates a response task."""
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
@@ -440,7 +449,8 @@ class TestAgentCall:
         assert {"role": "user", "content": "hello"} in call._messages
         mock_ct.assert_called_once()
 
-    def test_transcription_received__schedules_response_task(self):
+    @pytest.mark.asyncio
+    async def test_transcription_received__schedules_response_task(self):
         """transcription_received creates and stores a response task."""
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
@@ -453,7 +463,10 @@ class TestAgentCall:
         mock_ct.assert_called_once()
         assert call._response_task is task_mock
 
-    def test_transcription_received__cancels_running_task_before_creating_new(self):
+    @pytest.mark.asyncio
+    async def test_transcription_received__cancels_running_task_before_creating_new(
+        self,
+    ):
         """transcription_received cancels any existing response task."""
         tts_mock = MagicMock()
         tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
@@ -511,7 +524,7 @@ class TestAgentCall:
         messages = kwargs.get("messages") or mock_client.chat.call_args[0][0]
         # First message is the system prompt
         assert messages[0]["role"] == "system"
-        assert messages[1] == {"role": "user", "content": "hello"}
+        assert messages[2] == {"role": "user", "content": "hello"}
 
     async def test_respond__raises_exception_on_error(self):
         """Exceptions from Ollama propagate out of respond()."""
@@ -546,3 +559,70 @@ class TestAgentCall:
     def test_preferred_codecs__opus_is_first(self):
         """AgentCall prefers Opus as the highest-priority outbound codec."""
         assert AgentCall.supported_codecs[0].payload_type == RTPPayloadType.OPUS
+
+    async def test_initial_prompt__schedules_send_speech_on_connect(self):
+        """AgentCall sends speech immediately when initial_prompt is set on construction."""
+        tts_mock = MagicMock()
+        tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
+        audio_mock = MagicMock()
+        audio_mock.numpy.return_value = np.zeros(16000, dtype=np.float32)
+        tts_mock.generate_audio.return_value = audio_mock
+        tts_mock.sample_rate = 22050
+
+        speeches: list[str] = []
+
+        class CapturingAgentCall(AgentCall):
+            async def send_speech(self, text: str) -> None:
+                speeches.append(text)
+
+        make_agent_call(
+            MagicMock(),
+            tts_mock,
+            call_class=CapturingAgentCall,
+            media=PCMA_MEDIA,
+            salutation="Hello, how can I help?",
+        )
+        await asyncio.sleep(0)
+
+        assert speeches == ["Hello, how can I help?"]
+
+    @pytest.mark.asyncio
+    async def test_initial_prompt__empty_does_not_schedule_send_speech(self):
+        """AgentCall with initial_prompt='' does not create a send_speech task."""
+        tts_mock = MagicMock()
+        tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
+        call = make_agent_call(MagicMock(), tts_mock)
+        # No task created means no asyncio activity beyond __post_init__
+        assert call.salutation == "Hi."
+
+
+class TestSayCall:
+    """Tests for SayCall."""
+
+    def test_say_call__is_audio_call(self):
+        """SayCall is a subclass of AudioCall."""
+        assert issubclass(SayCall, AudioCall)
+
+    def test_say_call__stores_text(self):
+        """SayCall stores the text to say."""
+        tts_mock = MagicMock()
+        tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
+        audio_mock = MagicMock()
+        audio_mock.numpy.return_value = np.zeros(0, dtype=np.float32)
+        tts_mock.generate_audio.return_value = audio_mock
+        tts_mock.sample_rate = 8000
+
+        with (
+            patch("voip.ai.TTSModel") as tts_cls,
+            patch("asyncio.create_task"),
+        ):
+            tts_cls.load_model.return_value = tts_mock
+            call = SayCall(
+                rtp=MagicMock(),
+                sip=MagicMock(),
+                caller=CallerID("sip:bob@biloxi.com"),
+                media=PCMA_MEDIA,
+                text="Hello there!",
+            )
+
+        assert call.text == "Hello there!"

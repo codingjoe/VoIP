@@ -24,7 +24,7 @@ import voip.codecs as codecs
 from voip.codecs import RTPCodec
 from voip.codecs.base import PayloadDecoder
 from voip.rtp import RTPPacket, Session
-from voip.sdp.types import MediaDescription
+from voip.sdp.types import MediaDescription, RTPPayloadFormat
 
 __all__ = ["AudioCall", "EchoCall", "VoiceActivityCall"]
 
@@ -41,7 +41,7 @@ def generate_ssrc() -> int:
     return secrets.randbits(32)
 
 
-@dataclasses.dataclass(slots=True, kw_only=True)
+@dataclasses.dataclass(kw_only=True)
 class AudioCall(Session):
     """
     RTP call handler for audio calls supporting Opus, G.722, PCMA, and PCMU.
@@ -141,6 +141,19 @@ class AudioCall(Session):
             f"Supported: {[c.encoding_name for c in cls.supported_codecs]!r}"
         )
 
+    @classmethod
+    def sdp_formats(cls) -> list[RTPPayloadFormat]:
+        """Return all supported payload formats for outbound SDP offers.
+
+        Lists all codecs in `supported_codecs` priority order so the remote
+        can select the best available codec.
+
+        Returns:
+            List of [`RTPPayloadFormat`][voip.sdp.types.RTPPayloadFormat]
+            objects for every codec in `supported_codecs`.
+        """
+        return [codec.to_payload_format() for codec in cls.supported_codecs]
+
     def packet_received(self, packet: RTPPacket, addr: tuple[str, int]) -> None:
         if packet.payload:
             asyncio.create_task(self.emit_audio(packet))
@@ -193,6 +206,16 @@ class AudioCall(Session):
         else:
             self.outbound_handle = None
 
+    def on_audio_sent(self) -> None:
+        """Handle completion of an outbound audio stream.
+
+        Called once the last RTP packet of an outbound stream has been
+        dispatched (i.e. `outbound_handle` transitions to ``None``).
+        The base implementation is a no-op.  Override in subclasses to
+        trigger post-audio actions, for example hanging up after
+        [`SayCall`][voip.ai.SayCall] finishes speaking.
+        """
+
     def _dispatch_next_packet(
         self,
         packets: Iterator[bytes],
@@ -203,6 +226,7 @@ class AudioCall(Session):
             payload = next(packets)
         except StopIteration:
             self.outbound_handle = None
+            self.on_audio_sent()
         else:
             self.send_packet(self.next_rtp_packet(payload), remote_addr)
             duration_seconds = self.rpt_packet_duration.total_seconds()

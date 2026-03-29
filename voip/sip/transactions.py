@@ -1,5 +1,6 @@
 """SIP transaction layer (RFC 3261 §17)."""
 
+import asyncio
 import dataclasses
 import datetime
 import hashlib
@@ -10,6 +11,7 @@ import secrets
 import typing
 import uuid
 
+import voip
 from voip.rtp import Session
 from voip.sdp.messages import SessionDescription
 from voip.sdp.types import (
@@ -24,7 +26,7 @@ from voip.srtp import SRTPSession
 
 from ..types import NetworkAddress
 from . import messages, types
-from .messages import Dialog, Request, Response
+from .messages import Dialog, Request, Response, SIPHeaderDict
 from .types import (
     CallerID,
     DigestAlgorithm,
@@ -168,6 +170,7 @@ class RegistrationTransaction(Transaction):
         match response.status_code:
             case SIPStatus.OK:
                 logger.info("Registration successful")
+                self.sip.on_registered()
                 return
             case SIPStatus.UNAUTHORIZED | SIPStatus.PROXY_AUTHENTICATION_REQUIRED:
                 logger.debug(
@@ -179,7 +182,7 @@ class RegistrationTransaction(Transaction):
                 )
                 challenge_key = "Proxy-Authenticate" if is_proxy else "WWW-Authenticate"
                 params = self.parse_auth_challenge(
-                    response.headers.get(challenge_key, "")
+                    response.headers[challenge_key] or ""
                 )
                 realm = params.get("realm", "")
                 nonce = params.get("nonce", "")
@@ -341,6 +344,13 @@ class InviteTransaction(Transaction):
 
     [RFC 3261 §17.2]: https://datatracker.ietf.org/doc/html/rfc3261#section-17.2
     """
+
+    pending_call_class: type[Session] | None = dataclasses.field(
+        default=None, repr=False
+    )
+    pending_call_kwargs: dict[str, typing.Any] = dataclasses.field(
+        default_factory=dict, repr=False
+    )
 
     def invite_received(self, request: Request) -> None:
         """Handle the incoming call.
@@ -575,13 +585,210 @@ class InviteTransaction(Transaction):
     ) -> Request:
         """Initiate an outgoing call to `target`.
 
+        Builds an SDP offer using `call_class.sdp_formats`, sends an INVITE,
+        and registers this transaction to handle the response. When the callee
+        answers (200 OK), `_accept_call` completes the setup, sends the ACK,
+        and registers the RTP call handler.
+
         Args:
-            target: SIP URI of the callee (e.g. ``"sip:bob@example.com"``).
+            target: SIP URI of the callee (e.g. ``"sip:+15551234567@carrier.com"``).
             call_class: Session implementation that will be initialized for the call.
             **call_kwargs: Additional keyword arguments forwarded to the
                 call class constructor.
 
-        Raises:
-            NotImplementedError: Not yet implemented.
+        Returns:
+            The INVITE [`Request`][voip.sip.messages.Request] that was sent.
         """
-        raise NotImplementedError("make_call is not yet implemented")
+        self.pending_call_class = call_class
+        self.pending_call_kwargs = call_kwargs
+
+        target_uri = types.SipUri.parse(target)
+        dialog = Dialog(uac=self.sip.aor)
+        self.dialog = dialog
+
+        rtp_public = self.sip.rtp.public_address
+        session_id = str(secrets.randbelow(2**32) + 1)
+        sdp_offer = SessionDescription(
+            origin=Origin(
+                username="-",
+                sess_id=session_id,
+                sess_version=session_id,
+                nettype="IN",
+                addrtype=(
+                    "IP6" if isinstance(rtp_public[0], ipaddress.IPv6Address) else "IP4"
+                ),
+                unicast_address=str(rtp_public[0]),
+            ),
+            timings=[Timing(start_time=0, stop_time=0)],
+            connection=ConnectionData(
+                nettype="IN",
+                addrtype=(
+                    "IP6" if isinstance(rtp_public[0], ipaddress.IPv6Address) else "IP4"
+                ),
+                connection_address=str(rtp_public[0]),
+            ),
+            media=[
+                MediaDescription(
+                    media="audio",
+                    port=rtp_public[1],
+                    proto="RTP/AVP",
+                    fmt=call_class.sdp_formats(),
+                    attributes=[Attribute(name="sendrecv")],
+                )
+            ],
+        )
+        self.request = Request(
+            method=SIPMethod.INVITE,
+            uri=target_uri,
+            headers={
+                "Max-Forwards": "70",
+                **self.headers,
+                "From": dialog.from_header,
+                "To": str(target_uri),
+                "Contact": self.sip.contact,
+                "Call-ID": dialog.call_id,
+                "Route": f"<sip:{str(rtp_public[0])}:5060;transport=tcp;lr>",
+                "Allow": self.sip.allow_header,
+                "User-Agent": f"python/voip/{voip.__version__}",
+                "Content-Type": "application/sdp",
+            },
+            body=sdp_offer,
+        )
+        self.sip.transactions[self.branch] = self
+        self.sip.send(self.request)
+        return self.request
+
+    def response_received(self, response: Response) -> None:
+        """Handle responses to an outbound INVITE.
+
+        Dispatches provisional (1xx), successful (2xx), and failure (4xx–6xx)
+        responses.  On 200 OK the call setup is completed asynchronously via
+        `_accept_call`.
+
+        Args:
+            response: The parsed SIP response.
+        """
+        match response.status_code // 100:
+            case 1:
+                pass
+            case 2:
+                try:
+                    asyncio.get_running_loop().create_task(self._accept_call(response))
+                except RuntimeError:
+                    logger.debug(
+                        "response_received called outside of an async context; "
+                        "200 OK will not be processed"
+                    )
+            case _:
+                self.sip.transactions.pop(self.branch, None)
+                logger.warning(
+                    "Outbound call failed: %s %s",
+                    response.status_code,
+                    response.phrase,
+                )
+
+    async def _accept_call(self, response: Response) -> None:
+        """Complete call setup after a 200 OK is received.
+
+        Negotiates the codec from the remote SDP answer, creates the call
+        handler, registers it with the RTP mux, updates the dialog, and
+        sends the ACK.
+
+        Args:
+            response: The 200 OK SIP response containing the remote SDP answer.
+        """
+        peer = (
+            self.sip.transport.get_extra_info("peername")
+            if self.sip.transport
+            else None
+        )
+        remote_audio = next(
+            (
+                m
+                for m in (response.body.media if response.body else [])
+                if m.media == "audio"
+            ),
+            None,
+        )
+        if remote_audio is not None and self.pending_call_class is not None:
+            negotiated_media = self.pending_call_class.negotiate_codec(remote_audio)
+        else:
+            negotiated_media = MediaDescription(
+                media="audio",
+                port=0,
+                proto="RTP/AVP",
+                fmt=[RTPPayloadFormat.from_pt(0)],
+            )
+
+        if self.pending_call_class is not None:
+            call_handler = self.pending_call_class(
+                rtp=self.sip.rtp,
+                sip=self.sip,
+                caller=CallerID(str(self.sip.aor)),
+                media=negotiated_media,
+                srtp=None,
+                **self.pending_call_kwargs,
+            )
+            if remote_audio is not None and remote_audio.port != 0:
+                media_connection = remote_audio.connection
+                session_connection = response.body.connection if response.body else None
+                connection = media_connection or session_connection
+                remote_ip = (
+                    connection.connection_address
+                    if connection is not None
+                    else peer[0]
+                    if peer
+                    else None
+                )
+                remote_rtp_address: NetworkAddress | None = (
+                    NetworkAddress(remote_ip, remote_audio.port)
+                    if remote_ip is not None
+                    else None
+                )
+            else:
+                remote_rtp_address = None
+            self.sip.rtp.register_call(remote_rtp_address, call_handler)
+            if remote_rtp_address is not None:
+                self.sip.rtp.send(b"\x00", remote_rtp_address)
+
+        # Update the dialog with remote tag from 200 OK then store it.
+        # The To-tag in the 200 OK is the callee's tag (remote).  The From-tag
+        # is our original local tag, which must become dialog.remote_tag so
+        # that subsequent in-dialog BYE lookups (keyed by
+        # (request.remote_tag, request.local_tag) = (our_tag, callee_tag))
+        # resolve correctly via `sip.dialogs[(dialog.remote_tag, dialog.local_tag)]`.
+        our_tag = response.local_tag
+        callee_tag = response.remote_tag
+        self.dialog.remote_tag = our_tag
+        self.dialog.local_tag = callee_tag
+        self.sip.dialogs[(our_tag, callee_tag)] = self.dialog
+
+        ack_branch = f"{Transaction.branch_prefix}-{uuid.uuid4()}"
+        contact = response.headers.get("Contact")
+        ack_uri = (
+            contact.strip("<>").split(";")[0] if contact else str(self.request.uri)
+        )
+        ack_headers: SIPHeaderDict = SIPHeaderDict(
+            {
+                "Via": (
+                    f"SIP/2.0/{self.sip.aor.transport}"
+                    f" {self.sip.rtp.public_address};rport;branch={ack_branch};alias"
+                ),
+                "Max-Forwards": "70",
+                "From": response.headers["From"],
+                "To": response.headers["To"],
+                "Call-ID": self.dialog.call_id,
+                "CSeq": f"{self.cseq} {SIPMethod.ACK}",
+                "Content-Length": 0,
+            }
+        )
+        for record_route in response.headers.getlist("Record-Route"):
+            ack_headers.add("Route", record_route)
+        self.sip.send(
+            Request(
+                method=SIPMethod.ACK,
+                uri=ack_uri,
+                headers=ack_headers,
+            )
+        )
+        self.sip.transactions.pop(self.branch, None)

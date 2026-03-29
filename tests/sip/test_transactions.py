@@ -406,10 +406,46 @@ class TestRegistrationTransaction:
                 algorithm="UNKNOWN-ALG",
             )
 
+    def test_response_received__200_ok__calls_on_registered(self):
+        """Successful registration invokes sip.on_registered()."""
+        registered_calls: list[bool] = []
 
-# ---------------------------------------------------------------------------
-# InviteTransaction
-# ---------------------------------------------------------------------------
+        from voip.sip.protocol import SessionInitiationProtocol
+
+        class TrackingSession(SessionInitiationProtocol):
+            def on_registered(self) -> None:
+                registered_calls.append(True)
+
+        import ipaddress
+
+        from voip.rtp import RealtimeTransportProtocol
+        from voip.types import NetworkAddress
+
+        transport = FakeTransport()
+        mux = RealtimeTransportProtocol()
+        from voip.sip.types import SipUri
+
+        session = TrackingSession(
+            aor=SipUri.parse("sips:alice:secret@example.com"),
+            rtp=mux,
+            transaction_class=InviteTransaction,
+        )
+        session.transport = transport
+        session.local_address = NetworkAddress(ipaddress.ip_address("127.0.0.1"), 5061)
+        session.is_secure = True
+        tx = RegistrationTransaction(sip=session, method=SIPMethod.REGISTER)
+        session.transactions[tx.branch] = tx
+        response = Message.parse(
+            f"SIP/2.0 200 OK\r\n"
+            f"Via: SIP/2.0/TLS example.com;branch={tx.branch}\r\n"
+            f"From: sip:alice@example.com;tag=lt\r\n"
+            f"To: sip:example.com;tag=rt\r\n"
+            f"Call-ID: reg-hook@example.com\r\n"
+            f"CSeq: 1 REGISTER\r\n"
+            f"\r\n".encode()
+        )
+        tx.response_received(response)
+        assert registered_calls == [True]
 
 
 class TestInviteTransaction:
@@ -580,13 +616,244 @@ class TestInviteTransaction:
         ok_data = b"".join(transport.sent)
         assert b"Record-Route:" in ok_data
 
-    async def test_make_call__raises_not_implemented(self):
-        """make_call raises NotImplementedError since it is not yet implemented."""
-        sip = create_sip_session()
-        request = Message.parse(INVITE_BYTES)
-        tx = InviteTransaction.from_request(request=request, sip=sip)
-        with pytest.raises(NotImplementedError):
-            await tx.make_call("sip:bob@biloxi.com", call_class=CallFixture)
+    async def test_make_call__sends_invite(self):
+        """make_call sends an INVITE request and registers the transaction."""
+        import ipaddress
+
+        from voip.types import NetworkAddress
+
+        transport = FakeTransport()
+        rtp = RealtimeTransportProtocol()
+        rtp.public_address = NetworkAddress(ipaddress.ip_address("192.0.2.1"), 5004)
+        sip = create_sip_session(fake_transport=transport, rtp=rtp)
+        tx = InviteTransaction(sip=sip, method=SIPMethod.INVITE, cseq=1)
+        request = await tx.make_call("sip:bob@biloxi.com", call_class=CallFixture)
+        assert any(b"INVITE" in data for data in transport.sent)
+        assert tx.branch in sip.transactions
+        assert request.method == SIPMethod.INVITE
+
+    async def test_make_call__sdp_offer_contains_codec(self):
+        """make_call includes a non-empty SDP offer body in the INVITE."""
+        import ipaddress
+
+        from voip.types import NetworkAddress
+
+        transport = FakeTransport()
+        rtp = RealtimeTransportProtocol()
+        rtp.public_address = NetworkAddress(ipaddress.ip_address("192.0.2.1"), 5004)
+        sip = create_sip_session(fake_transport=transport, rtp=rtp)
+        tx = InviteTransaction(sip=sip, method=SIPMethod.INVITE, cseq=1)
+        await tx.make_call("sip:bob@biloxi.com", call_class=CallFixture)
+        sent_data = b"".join(transport.sent)
+        assert b"application/sdp" in sent_data
+        assert b"m=audio" in sent_data
+
+    def test_response_received__100_is_noop(self):
+        """1xx provisional responses are silently ignored."""
+        transport = FakeTransport()
+        sip = create_sip_session(fake_transport=transport)
+        tx = InviteTransaction(sip=sip, method=SIPMethod.INVITE, cseq=1)
+        sip.transactions[tx.branch] = tx
+        response = Message.parse(
+            f"SIP/2.0 100 Trying\r\n"
+            f"Via: SIP/2.0/TLS example.com;branch={tx.branch}\r\n"
+            f"From: sip:alice@example.com;tag=lt\r\n"
+            f"To: sip:bob@biloxi.com\r\n"
+            f"Call-ID: trying-call@example.com\r\n"
+            f"CSeq: 1 INVITE\r\n"
+            f"\r\n".encode()
+        )
+        tx.response_received(response)
+        assert tx.branch in sip.transactions
+
+    def test_response_received__4xx_removes_transaction(self):
+        """4xx responses remove the transaction from the registry."""
+        transport = FakeTransport()
+        sip = create_sip_session(fake_transport=transport)
+        tx = InviteTransaction(sip=sip, method=SIPMethod.INVITE, cseq=1)
+        sip.transactions[tx.branch] = tx
+        response = Message.parse(
+            f"SIP/2.0 486 Busy Here\r\n"
+            f"Via: SIP/2.0/TLS example.com;branch={tx.branch}\r\n"
+            f"From: sip:alice@example.com;tag=lt\r\n"
+            f"To: sip:bob@biloxi.com;tag=rt\r\n"
+            f"Call-ID: busy-call@example.com\r\n"
+            f"CSeq: 1 INVITE\r\n"
+            f"\r\n".encode()
+        )
+        tx.response_received(response)
+        assert tx.branch not in sip.transactions
+
+    async def test_accept_call__sends_ack_on_200_ok(self):
+        """_accept_call sends an ACK after receiving 200 OK."""
+        import ipaddress
+
+        from voip.types import NetworkAddress
+
+        transport = FakeTransport()
+        rtp = RealtimeTransportProtocol()
+        rtp.public_address = NetworkAddress(ipaddress.ip_address("192.0.2.1"), 5004)
+        sip = create_sip_session(fake_transport=transport, rtp=rtp)
+        tx = InviteTransaction(sip=sip, method=SIPMethod.INVITE, cseq=1)
+        sip.transactions[tx.branch] = tx
+        await tx.make_call("sip:bob@biloxi.com", call_class=CallFixture)
+        ok_response = Message.parse(
+            f"SIP/2.0 200 OK\r\n"
+            f"Via: SIP/2.0/TLS example.com;branch={tx.branch}\r\n"
+            f"From: sip:alice@example.com;tag=our-tag\r\n"
+            f"To: sip:bob@biloxi.com;tag=callee-tag\r\n"
+            f"Call-ID: out-call@example.com\r\n"
+            f"CSeq: 1 INVITE\r\n"
+            f"Contact: <sip:bob@192.0.2.2>\r\n"
+            f"\r\n".encode()
+        )
+        await tx._accept_call(ok_response)
+        sent_data = b"".join(transport.sent)
+        assert b"ACK" in sent_data
+
+    async def test_accept_call__with_sdp_registers_rtp_handler(self):
+        """_accept_call registers an RTP call handler when remote SDP is present."""
+        import ipaddress
+
+        from voip.types import NetworkAddress
+
+        transport = FakeTransport()
+        rtp = RealtimeTransportProtocol()
+        rtp.public_address = NetworkAddress(ipaddress.ip_address("192.0.2.1"), 5004)
+        sip = create_sip_session(fake_transport=transport, rtp=rtp)
+        tx = InviteTransaction(sip=sip, method=SIPMethod.INVITE, cseq=1)
+        await tx.make_call("sip:bob@biloxi.com", call_class=CallFixture)
+        ok_response = Message.parse(
+            f"SIP/2.0 200 OK\r\n"
+            f"Via: SIP/2.0/TLS example.com;branch={tx.branch}\r\n"
+            f"From: sip:alice@example.com;tag=our-tag\r\n"
+            f"To: sip:bob@biloxi.com;tag=callee-tag\r\n"
+            f"Call-ID: out-sdp@example.com\r\n"
+            f"CSeq: 1 INVITE\r\n"
+            f"Content-Type: application/sdp\r\n"
+            f"\r\n"
+            f"v=0\r\n"
+            f"o=- 1 1 IN IP4 192.0.2.2\r\n"
+            f"s=-\r\n"
+            f"c=IN IP4 192.0.2.2\r\n"
+            f"t=0 0\r\n"
+            f"m=audio 5004 RTP/AVP 0\r\n"
+            f"a=rtpmap:0 PCMU/8000\r\n".encode()
+        )
+        await tx._accept_call(ok_response)
+        assert len(rtp.calls) > 0
+
+    async def test_accept_call__stores_dialog(self):
+        """_accept_call stores the dialog in sip.dialogs after 200 OK."""
+        import ipaddress
+
+        from voip.types import NetworkAddress
+
+        transport = FakeTransport()
+        rtp = RealtimeTransportProtocol()
+        rtp.public_address = NetworkAddress(ipaddress.ip_address("192.0.2.1"), 5004)
+        sip = create_sip_session(fake_transport=transport, rtp=rtp)
+        tx = InviteTransaction(sip=sip, method=SIPMethod.INVITE, cseq=1)
+        await tx.make_call("sip:bob@biloxi.com", call_class=CallFixture)
+        ok_response = Message.parse(
+            f"SIP/2.0 200 OK\r\n"
+            f"Via: SIP/2.0/TLS example.com;branch={tx.branch}\r\n"
+            f"From: sip:alice@example.com;tag=our-tag\r\n"
+            f"To: sip:bob@biloxi.com;tag=callee-tag\r\n"
+            f"Call-ID: out-dialog@example.com\r\n"
+            f"CSeq: 1 INVITE\r\n"
+            f"\r\n".encode()
+        )
+        await tx._accept_call(ok_response)
+        assert len(sip.dialogs) > 0
+
+    async def test_accept_call__no_pending_call_class_sends_ack(self):
+        """_accept_call sends ACK even when no pending_call_class is set."""
+        import ipaddress
+
+        from voip.types import NetworkAddress
+
+        transport = FakeTransport()
+        rtp = RealtimeTransportProtocol()
+        rtp.public_address = NetworkAddress(ipaddress.ip_address("192.0.2.1"), 5004)
+        sip = create_sip_session(fake_transport=transport, rtp=rtp)
+        tx = InviteTransaction(sip=sip, method=SIPMethod.INVITE, cseq=1)
+        await tx.make_call("sip:bob@biloxi.com", call_class=CallFixture)
+        tx.pending_call_class = None
+        ok_response = Message.parse(
+            f"SIP/2.0 200 OK\r\n"
+            f"Via: SIP/2.0/TLS example.com;branch={tx.branch}\r\n"
+            f"From: sip:alice@example.com;tag=our-tag\r\n"
+            f"To: sip:bob@biloxi.com;tag=callee-tag\r\n"
+            f"Call-ID: no-class@example.com\r\n"
+            f"CSeq: 1 INVITE\r\n"
+            f"\r\n".encode()
+        )
+        await tx._accept_call(ok_response)
+        sent_data = b"".join(transport.sent)
+        assert b"ACK" in sent_data
+
+    async def test_accept_call__sdp_no_connection_uses_peer(self):
+        """_accept_call falls back to transport peer address when SDP has no c= line."""
+        import ipaddress
+
+        from voip.types import NetworkAddress
+
+        transport = FakeTransport()
+        rtp = RealtimeTransportProtocol()
+        rtp.public_address = NetworkAddress(ipaddress.ip_address("192.0.2.1"), 5004)
+        sip = create_sip_session(fake_transport=transport, rtp=rtp)
+        tx = InviteTransaction(sip=sip, method=SIPMethod.INVITE, cseq=1)
+        await tx.make_call("sip:bob@biloxi.com", call_class=CallFixture)
+        ok_response = Message.parse(
+            f"SIP/2.0 200 OK\r\n"
+            f"Via: SIP/2.0/TLS example.com;branch={tx.branch}\r\n"
+            f"From: sip:alice@example.com;tag=our-tag\r\n"
+            f"To: sip:bob@biloxi.com;tag=callee-tag\r\n"
+            f"Call-ID: no-conn@example.com\r\n"
+            f"CSeq: 1 INVITE\r\n"
+            f"Content-Type: application/sdp\r\n"
+            f"\r\n"
+            f"v=0\r\n"
+            f"o=- 1 1 IN IP4 192.0.2.2\r\n"
+            f"s=-\r\n"
+            f"t=0 0\r\n"
+            f"m=audio 5004 RTP/AVP 0\r\n"
+            f"a=rtpmap:0 PCMU/8000\r\n".encode()
+        )
+        await tx._accept_call(ok_response)
+        assert len(rtp.calls) > 0
+
+    async def test_accept_call__sdp_zero_port_no_rtp_address(self):
+        """_accept_call registers call with None address when audio port is 0."""
+        import ipaddress
+
+        from voip.types import NetworkAddress
+
+        transport = FakeTransport()
+        rtp = RealtimeTransportProtocol()
+        rtp.public_address = NetworkAddress(ipaddress.ip_address("192.0.2.1"), 5004)
+        sip = create_sip_session(fake_transport=transport, rtp=rtp)
+        tx = InviteTransaction(sip=sip, method=SIPMethod.INVITE, cseq=1)
+        await tx.make_call("sip:bob@biloxi.com", call_class=CallFixture)
+        ok_response = Message.parse(
+            f"SIP/2.0 200 OK\r\n"
+            f"Via: SIP/2.0/TLS example.com;branch={tx.branch}\r\n"
+            f"From: sip:alice@example.com;tag=our-tag\r\n"
+            f"To: sip:bob@biloxi.com;tag=callee-tag\r\n"
+            f"Call-ID: zero-port@example.com\r\n"
+            f"CSeq: 1 INVITE\r\n"
+            f"Content-Type: application/sdp\r\n"
+            f"\r\n"
+            f"v=0\r\n"
+            f"o=- 1 1 IN IP4 192.0.2.2\r\n"
+            f"s=-\r\n"
+            f"c=IN IP4 192.0.2.2\r\n"
+            f"t=0 0\r\n"
+            f"m=audio 0 RTP/AVP 0\r\n".encode()
+        )
+        await tx._accept_call(ok_response)
+        assert None in rtp.calls
 
     def test_answer__sdp_without_connection_uses_peer_address(self):
         """Use the transport peer address when SDP has no c= connection line."""
@@ -650,10 +917,33 @@ class TestInviteTransaction:
         tx.answer(call_class=CallFixture)
         assert any(b"200" in data for data in transport.sent)
 
+    async def test_accept_call__record_route_adds_route_header(self):
+        """_accept_call includes a Route header in the ACK when Record-Route is present."""
+        import ipaddress
 
-# ---------------------------------------------------------------------------
-# RegistrationError
-# ---------------------------------------------------------------------------
+        from voip.types import NetworkAddress
+
+        transport = FakeTransport()
+        rtp = RealtimeTransportProtocol()
+        rtp.public_address = NetworkAddress(ipaddress.ip_address("192.0.2.1"), 5004)
+        sip = create_sip_session(fake_transport=transport, rtp=rtp)
+        tx = InviteTransaction(sip=sip, method=SIPMethod.INVITE, cseq=1)
+        await tx.make_call("sip:bob@biloxi.com", call_class=CallFixture)
+        ok_response = Message.parse(
+            f"SIP/2.0 200 OK\r\n"
+            f"Via: SIP/2.0/TLS example.com;branch={tx.branch}\r\n"
+            f"From: sip:alice@example.com;tag=our-tag\r\n"
+            f"To: sip:bob@biloxi.com;tag=callee-tag\r\n"
+            f"Call-ID: rr-call@example.com\r\n"
+            f"CSeq: 1 INVITE\r\n"
+            f"Contact: <sip:bob@192.0.2.2>\r\n"
+            f"Record-Route: <sip:proxy.example.com;lr>\r\n"
+            f"\r\n".encode()
+        )
+        await tx._accept_call(ok_response)
+        sent_data = b"".join(transport.sent)
+        assert b"ACK" in sent_data
+        assert b"Route" in sent_data
 
 
 class TestRegistrationError:

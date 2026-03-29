@@ -6,6 +6,8 @@ import datetime
 import socket
 import uuid
 
+from urllib3 import HTTPHeaderDict
+
 from voip.sdp.messages import SessionDescription
 
 from ..types import ByteSerializableObject
@@ -14,7 +16,26 @@ from .types import CallerID, SIPMethod, SIPStatus, SipUri
 __all__ = ["Request", "Response", "Message", "Dialog"]
 
 #: Headers whose values are parsed as `CallerID` objects.
-_CALLER_HEADERS = frozenset({"From", "To"})
+CALLER_IDS_HEADERS = frozenset({"From", "To", "Route", "Record-Route", "Contact"})
+
+
+class SIPHeaderDict(ByteSerializableObject, HTTPHeaderDict):
+    """Header map for SIP messages, mapping header names to their values."""
+
+    def __bytes__(self) -> bytes:
+        return b"".join(f"{name}: {value}\r\n".encode() for name, value in self.items())
+
+    @classmethod
+    def parse(cls, data: bytes) -> SIPHeaderDict:
+        self = SIPHeaderDict()
+        for line in data.decode().split("\r\n"):
+            name, sep, value = line.partition(":")
+            if not sep:
+                raise ValueError(f"Invalid header: {data!r}")
+            name = name.strip()
+            value = value.strip()
+            self.add(name, CallerID(value) if name in CALLER_IDS_HEADERS else value)
+        return self
 
 
 @dataclasses.dataclass(slots=True, kw_only=True)
@@ -25,45 +46,41 @@ class Message(ByteSerializableObject, abc.ABC):
     [RFC 3261 §7]: https://datatracker.ietf.org/doc/html/rfc3261#section-7
     """
 
-    headers: dict[str, str | CallerID] = dataclasses.field(
-        default_factory=dict, repr=False
+    headers: SIPHeaderDict | dict[str, str | CallerID] = dataclasses.field(
+        default_factory=SIPHeaderDict, repr=False
     )
     body: SessionDescription | None = dataclasses.field(default=None, repr=False)
     version: str = "SIP/2.0"
 
+    def __post_init__(self):
+        if not isinstance(self.headers, SIPHeaderDict):
+            self.headers: SIPHeaderDict = SIPHeaderDict(dict(self.headers))
+
     @classmethod
     def parse(cls, data: bytes) -> Request | Response:
         header_section, _, body = data.partition(b"\r\n\r\n")
-        lines = header_section.decode().split("\r\n")
-        first_line, *header_lines = lines
-        headers = {}
-        for line in header_lines:
-            name, sep, value = line.partition(":")
-            if not sep:
-                continue
-            name = name.strip()
-            value = value.strip()
-            headers[name] = CallerID(value) if name in _CALLER_HEADERS else value
-        parts = first_line.split(" ", 2)
-        if first_line.startswith("SIP/"):
+        first_line, _, header_section = header_section.partition(b"\r\n")
+        headers = SIPHeaderDict.parse(header_section)
+        parts = first_line.split(b" ", 2)
+        if first_line.startswith(b"SIP/"):
             version, status_code_str, reason = parts
             return Response(
                 status_code=int(status_code_str),
-                phrase=reason,
+                phrase=reason.decode("ascii"),
                 headers=headers,
                 body=cls._parse_body(headers, body),
-                version=version,
+                version=version.decode("ascii"),
             )
         try:
             method, uri, version = parts
         except ValueError:
             raise ValueError(f"Invalid SIP message first line: {data!r}")
         return Request(
-            method=method,
-            uri=uri,
+            method=method.decode("ascii"),
+            uri=uri.decode("ascii"),
             headers=headers,
             body=cls._parse_body(headers, body),
-            version=version,
+            version=version.decode("ascii"),
         )
 
     @staticmethod
@@ -74,14 +91,11 @@ class Message(ByteSerializableObject, abc.ABC):
         return None
 
     def __bytes__(self) -> bytes:
-        headers = dict(self.headers)
-        raw_body = bytes(self.body) if self.body is not None else b""
-        if raw_body:
-            headers.setdefault("Content-Length", str(len(raw_body)))
-        header_lines = "".join(
-            f"{name}: {value}\r\n" for name, value in headers.items()
+        if raw_body := bytes(self.body) if self.body is not None else b"":
+            self.headers["Content-Length"] = str(len(raw_body))
+        return b"\r\n".join(
+            (self._first_line().encode(), bytes(self.headers), raw_body)
         )
-        return f"{self._first_line()}\r\n{header_lines}\r\n".encode() + raw_body
 
     @property
     def branch(self) -> str | None:
@@ -92,12 +106,12 @@ class Message(ByteSerializableObject, abc.ABC):
     @property
     def remote_tag(self) -> str | None:
         """To-tag used with From-tag to identify the SIP dialog (RFC 3261 §12.2.2)."""
-        return self.headers["To"].tag
+        return CallerID(self.headers["To"]).tag
 
     @property
     def local_tag(self) -> str:
         """From-tag used with To-tag to identify the SIP dialog (RFC 3261 §12.2.2)."""
-        return self.headers["From"].tag
+        return CallerID(self.headers["From"]).tag
 
     @property
     def sequence(self) -> int:
@@ -199,7 +213,7 @@ class Dialog:
     @property
     def from_header(self) -> str:
         """The logical sender of a request."""
-        return f"{self.uac.scheme}:{self.uac.user}@{socket.gethostname()};tag={self.local_tag}"
+        return f"{self.uac.scheme}:{self.uac.user}@{self.uac.host};tag={self.local_tag}"
 
     @property
     def to_header(self) -> str:

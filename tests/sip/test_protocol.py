@@ -857,3 +857,8 @@ class TestSessionInitiationProtocol:
         session.keepalive_task = None
         session.connection_lost(None)
         assert session.transport is None
+
+    def test_on_registered__is_noop(self, rtp, fake_transport):
+        """on_registered base implementation does nothing and returns None."""
+        session = self._make_session(rtp, fake_transport)
+        assert session.on_registered() is None

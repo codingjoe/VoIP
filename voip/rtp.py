@@ -13,7 +13,7 @@ import struct
 import typing
 from typing import TYPE_CHECKING
 
-from voip.sdp.types import MediaDescription
+from voip.sdp.types import MediaDescription, RTPPayloadFormat
 from voip.srtp import SRTPSession
 from voip.stun import STUNProtocol
 from voip.types import ByteSerializableObject, NetworkAddress
@@ -167,6 +167,22 @@ class Session:
             "Override this classmethod in a subclass (e.g. AudioCall) to "
             "support codec negotiation."
         )
+
+    @classmethod
+    def sdp_formats(cls) -> list[RTPPayloadFormat]:
+        """Return the list of supported payload formats for outbound SDP offers.
+
+        Override in subclasses to advertise codec capabilities.
+        [`AudioCall`][voip.audio.AudioCall] overrides this to return all
+        supported codecs in priority order.
+
+        Returns:
+            List of [`RTPPayloadFormat`][voip.sdp.types.RTPPayloadFormat]
+            objects describing the supported codecs.
+        """
+        from voip.sdp.types import StaticPayloadType  # noqa: PLC0415
+
+        return [RTPPayloadFormat.from_pt(StaticPayloadType.PCMU.pt)]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)

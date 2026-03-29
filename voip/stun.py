@@ -120,11 +120,10 @@ class STUNProtocol(asyncio.DatagramProtocol):
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
         self.transport = transport
         if self.stun_server_address is None:
-            # IPv6 sockets return a 4-tuple (host, port, flowinfo, scope_id);
-            # we only need the first two elements.
-            sockname = transport.get_extra_info("sockname")
-            host, port = sockname[0], sockname[1]
-            self.stun_connection_made(transport, (ipaddress.ip_address(host), port))
+            host, port = transport.get_extra_info("sockname")[:2]
+            self.stun_connection_made(
+                transport, NetworkAddress(host=ipaddress.ip_address(host), port=port)
+            )
         else:
             self._stun_transaction_id = uuid.uuid4().bytes[:12]
             self._send_stun_request()
@@ -132,7 +131,7 @@ class STUNProtocol(asyncio.DatagramProtocol):
     def stun_connection_made(
         self,
         transport: asyncio.DatagramTransport,
-        addr: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int],
+        addr: NetworkAddress,
     ) -> None:
         """Called when the socket is ready and the reachable address is known.
 
@@ -243,10 +242,10 @@ class STUNProtocol(asyncio.DatagramProtocol):
                 case STUNAttributeType.MAPPED_ADDRESS:
                     mapped = _parse_address(attribute_value, b"")
             offset += 4 + ((attribute_len + 3) & ~3)  # 4-byte aligned
-        result = xor_mapped or mapped
-        if result:
-            logger.debug("STUN response: %s:%s", *result)
-            assert self.transport is not None
-            self.stun_connection_made(self.transport, result)
+        try:
+            host, port = xor_mapped or mapped
+            host = ipaddress.ip_address(host)
+        except ValueError, TypeError:
+            logger.exception("No address attribute in STUN response")
         else:
-            logger.error("No address attribute in STUN response")
+            self.stun_connection_made(self.transport, NetworkAddress(host, port))
