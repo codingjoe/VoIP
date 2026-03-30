@@ -817,23 +817,35 @@ class ByeTransaction(Transaction):
     This class is created by [`Session.hang_up`][voip.rtp.Session.hang_up]
     and registered in the SIP session's transaction table so that the
     200 OK response is routed back here and the transaction is cleaned up.
+    [`Session.hang_up`][voip.rtp.Session.hang_up] awaits
+    [`acknowledged`][voip.sip.transactions.ByeTransaction.acknowledged] to
+    ensure the remote party has received the BYE before returning.
 
     [RFC 3261 §17.1.2]: https://datatracker.ietf.org/doc/html/rfc3261#section-17.1.2
     """
 
     cseq: int = 1
+    acknowledged: asyncio.Event = dataclasses.field(
+        default_factory=asyncio.Event,
+        compare=False,
+        hash=False,
+        repr=False,
+    )
 
     def response_received(self, response: Response) -> None:
         """Handle the BYE response (typically 200 OK) [RFC 3261 §15.1.1].
 
         Removes this transaction from the SIP session once any final (2xx–6xx)
         response is received.  Provisional 1xx responses are silently ignored.
+        Sets [`acknowledged`][voip.sip.transactions.ByeTransaction.acknowledged]
+        so that [`Session.hang_up`][voip.rtp.Session.hang_up] can unblock.
 
         Args:
             response: The parsed SIP response to our BYE request.
         """
         if response.status_code >= 200:
             self.sip.transactions.pop(self.branch, None)
+            self.acknowledged.set()
             logger.debug(
                 "BYE acknowledged: %s %s", response.status_code, response.phrase
             )

@@ -1071,6 +1071,7 @@ class TestByeTransaction:
         )
         tx.response_received(response)
         assert tx.branch not in sip.transactions
+        assert tx.acknowledged.is_set()
 
     def test_response_received__ignores_provisional_response(self):
         """response_received leaves the transaction in place for 1xx responses."""
@@ -1089,6 +1090,7 @@ class TestByeTransaction:
         )
         tx.response_received(response)
         assert tx.branch in sip.transactions
+        assert not tx.acknowledged.is_set()
 
 
 class TestRegistrationError:

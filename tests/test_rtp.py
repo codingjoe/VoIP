@@ -565,7 +565,11 @@ class TestSession:
         mock_sip.dialogs = {(dialog.remote_tag, dialog.local_tag): dialog}
         mock_sip.transactions = {}
         call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
-        await call.hang_up()
+        hang_task = asyncio.create_task(call.hang_up())
+        await asyncio.sleep(0)
+        (tx,) = mock_sip.transactions.values()
+        tx.acknowledged.set()
+        await hang_task
         mock_sip.send.assert_called_once()
         sent = mock_sip.send.call_args[0][0]
         assert b"BYE" in bytes(sent)
@@ -593,16 +597,17 @@ class TestSession:
         transactions: dict = {}
         mock_sip.transactions = transactions
         call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
-        await call.hang_up()
-        assert len(transactions) == 1
+        hang_task = asyncio.create_task(call.hang_up())
+        await asyncio.sleep(0)
         (tx,) = transactions.values()
         assert isinstance(tx, ByeTransaction)
         assert tx.cseq == 2
+        tx.acknowledged.set()
+        await hang_task
 
     async def test_hang_up__bye_transaction_cleaned_up_on_200(self):
         """ByeTransaction removes itself from sip.transactions when 200 OK arrives."""
         from voip.sip.messages import Dialog, Message
-        from voip.sip.transactions import ByeTransaction
 
         mock_sip = MagicMock()
         mock_sip.aor.transport = "TLS"
@@ -620,7 +625,8 @@ class TestSession:
         transactions: dict = {}
         mock_sip.transactions = transactions
         call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
-        await call.hang_up()
+        hang_task = asyncio.create_task(call.hang_up())
+        await asyncio.sleep(0)
         (tx,) = transactions.values()
         ok_response = Message.parse(
             f"SIP/2.0 200 OK\r\n"
@@ -632,9 +638,67 @@ class TestSession:
             f"\r\n".encode()
         )
         tx.response_received(ok_response)
+        await hang_task
         assert tx.branch not in transactions
 
+    async def test_hang_up__waits_for_bye_acknowledgment(self):
+        """hang_up blocks until the ByeTransaction is acknowledged."""
+        from voip.sip.messages import Dialog
 
+        mock_sip = MagicMock()
+        mock_sip.aor.transport = "TLS"
+        mock_sip.local_address = "192.0.2.1:5061"
+        mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
+        mock_rtp.calls = {}
+        dialog = Dialog(
+            call_id="test-call@example.com",
+            local_party="sip:alice@example.com;tag=our-tag",
+            remote_party="sip:bob@biloxi.com;tag=callee-tag",
+            remote_contact="sip:bob@192.0.2.2",
+            outbound_cseq=2,
+        )
+        mock_sip.dialogs = {(dialog.remote_tag, dialog.local_tag): dialog}
+        mock_sip.transactions = {}
+        call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
+        hang_task = asyncio.create_task(call.hang_up())
+        await asyncio.sleep(0)
+        assert not hang_task.done(), "hang_up() should still be waiting for BYE ack"
+        (tx,) = mock_sip.transactions.values()
+        tx.acknowledged.set()
+        await hang_task
+        assert hang_task.done()
+
+    async def test_hang_up__continues_after_bye_timeout(self):
+        """hang_up logs a warning and continues when BYE is not acknowledged in time."""
+        from voip.sip.messages import Dialog
+
+        class ShortTimeoutCall(Session):
+            BYE_ACK_TIMEOUT = 0.001  # 1 ms — expire immediately in tests
+
+        mock_sip = MagicMock()
+        mock_sip.aor.transport = "TLS"
+        mock_sip.local_address = "192.0.2.1:5061"
+        mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
+        mock_rtp.calls = {}
+        dialog = Dialog(
+            call_id="test-call@example.com",
+            local_party="sip:alice@example.com;tag=our-tag",
+            remote_party="sip:bob@biloxi.com;tag=callee-tag",
+            remote_contact="sip:bob@192.0.2.2",
+            outbound_cseq=2,
+        )
+        mock_sip.dialogs = {(dialog.remote_tag, dialog.local_tag): dialog}
+        mock_sip.transactions = {}
+        call = ShortTimeoutCall(
+            sip=mock_sip,
+            rtp=mock_rtp,
+            media=make_media(),
+            caller=CallerID(""),
+            dialog=dialog,
+        )
+        await call.hang_up()  # must not raise despite no 200 OK
+
+    async def test_hang_up__removes_dialog(self):
         """hang_up removes the dialog from sip.dialogs."""
         from voip.sip.messages import Dialog
 
@@ -650,8 +714,13 @@ class TestSession:
             remote_contact="sip:bob@192.0.2.2",
         )
         mock_sip.dialogs = {(dialog.remote_tag, dialog.local_tag): dialog}
+        mock_sip.transactions = {}
         call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
-        await call.hang_up()
+        hang_task = asyncio.create_task(call.hang_up())
+        await asyncio.sleep(0)
+        (tx,) = mock_sip.transactions.values()
+        tx.acknowledged.set()
+        await hang_task
         assert (dialog.remote_tag, dialog.local_tag) not in mock_sip.dialogs
 
     async def test_hang_up__deregisters_rtp_handler(self):
@@ -669,10 +738,15 @@ class TestSession:
             remote_contact="sip:bob@192.0.2.2",
         )
         mock_sip.dialogs = {(dialog.remote_tag, dialog.local_tag): dialog}
+        mock_sip.transactions = {}
         call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
         remote_addr = ("192.0.2.2", 5004)
         mock_rtp.calls = {remote_addr: call}
-        await call.hang_up()
+        hang_task = asyncio.create_task(call.hang_up())
+        await asyncio.sleep(0)
+        (tx,) = mock_sip.transactions.values()
+        tx.acknowledged.set()
+        await hang_task
         mock_rtp.unregister_call.assert_called_once_with(remote_addr)
 
     async def test_hang_up__deregisters_wildcard_rtp_handler(self):
@@ -690,9 +764,14 @@ class TestSession:
             remote_contact="sip:bob@192.0.2.2",
         )
         mock_sip.dialogs = {(dialog.remote_tag, dialog.local_tag): dialog}
+        mock_sip.transactions = {}
         call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
         mock_rtp.calls = {None: call}  # wildcard registration
-        await call.hang_up()
+        hang_task = asyncio.create_task(call.hang_up())
+        await asyncio.sleep(0)
+        (tx,) = mock_sip.transactions.values()
+        tx.acknowledged.set()
+        await hang_task
         mock_rtp.unregister_call.assert_called_once_with(None)
 
     async def test_hang_up__skips_unregister_when_handler_not_in_rtp(self):
@@ -711,8 +790,13 @@ class TestSession:
             remote_contact="sip:bob@192.0.2.2",
         )
         mock_sip.dialogs = {(dialog.remote_tag, dialog.local_tag): dialog}
+        mock_sip.transactions = {}
         call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
-        await call.hang_up()
+        hang_task = asyncio.create_task(call.hang_up())
+        await asyncio.sleep(0)
+        (tx,) = mock_sip.transactions.values()
+        tx.acknowledged.set()
+        await hang_task
         mock_rtp.unregister_call.assert_not_called()
 
     async def test_hang_up__missing_local_party_is_noop(self):

@@ -120,6 +120,15 @@ class Session:
     srtp: SRTPSession | None = None
     dialog: Dialog | None = None
 
+    BYE_ACK_TIMEOUT: typing.ClassVar[float] = 32.0
+    """Seconds to wait for a 200 OK acknowledgment after sending BYE.
+
+    Defaults to 64×T1 = 32 s (the standard non-INVITE transaction timeout
+    from [RFC 3261 §17.1.2]).  Override in subclasses to change the timeout.
+
+    [RFC 3261 §17.1.2]: https://datatracker.ietf.org/doc/html/rfc3261#section-17.1.2
+    """
+
     def packet_received(self, packet: RTPPacket, addr: NetworkAddress) -> None:
         """Handle a parsed RTP packet. Override in subclasses to process media.
 
@@ -147,7 +156,10 @@ class Session:
 
         Constructs and sends a BYE request for the active dialog, removes the
         dialog from the SIP session's registry, and deregisters the RTP handler
-        so that no further media packets are dispatched.
+        so that no further media packets are dispatched.  Then **awaits** the
+        200 OK acknowledgment from the remote party before returning (standard
+        non-INVITE transaction timeout of 32 s applies; a warning is logged if
+        the acknowledgment is not received in time).
 
         The method is a no-op when no dialog is associated with this call (e.g.
         before the call is fully established).
@@ -227,6 +239,15 @@ class Session:
         )
         if remote_addr is not _not_found:
             self.rtp.unregister_call(remote_addr)
+        # Wait for the remote party to acknowledge the BYE (RFC 3261 §15.1.1).
+        # Use the standard 64×T1 = 32 s non-INVITE transaction timeout.
+        try:
+            await asyncio.wait_for(tx.acknowledged.wait(), timeout=self.BYE_ACK_TIMEOUT)
+        except TimeoutError:
+            logger.warning(
+                "BYE for dialog %s was not acknowledged within 32 s",
+                self.dialog.call_id,
+            )
 
     @classmethod
     def negotiate_codec(cls, remote_media: MediaDescription) -> MediaDescription:
