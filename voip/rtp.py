@@ -188,17 +188,23 @@ class Session:
             return
 
         from voip.sip.messages import Request  # noqa: PLC0415
+        from voip.sip.transactions import ByeTransaction  # noqa: PLC0415
         from voip.sip.types import SIPMethod  # noqa: PLC0415
 
         request_uri = str(remote_contact).strip("<>").split(";")[0]
-        bye_branch = f"z9hG4bK-{uuid.uuid4()}"
+        tx = ByeTransaction(
+            sip=self.sip,
+            method=SIPMethod.BYE,
+            cseq=self.dialog.outbound_cseq,
+            dialog=self.dialog,
+        )
         bye_request = Request(
             method=SIPMethod.BYE,
             uri=request_uri,
             headers={
                 "Via": (
                     f"SIP/2.0/{self.sip.aor.transport}"
-                    f" {self.sip.rtp.public_address};rport;alias;branch={bye_branch}"
+                    f" {self.sip.local_address};rport;branch={tx.branch}"
                 ),
                 "Max-Forwards": "70",
                 "From": self.dialog.local_party,
@@ -208,6 +214,7 @@ class Session:
                 "Content-Length": "0",
             },
         )
+        self.sip.transactions[tx.branch] = tx
         self.sip.send(bye_request)
         self.dialog.outbound_cseq += 1
         self.sip.dialogs.pop((self.dialog.remote_tag, self.dialog.local_tag), None)

@@ -41,6 +41,7 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger("voip.sip")
 
 __all__ = [
+    "ByeTransaction",
     "InviteTransaction",
     "RegistrationTransaction",
 ]
@@ -803,3 +804,36 @@ class InviteTransaction(Transaction):
             )
         )
         self.sip.transactions.pop(self.branch, None)
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class ByeTransaction(Transaction):
+    """BYE client transaction [RFC 3261 §17.1.2].
+
+    Sends a BYE request to terminate an established dialog and waits for the
+    200 OK acknowledgment from the remote party.  Unlike INVITE, BYE responses
+    do **not** require an ACK — the 200 OK itself ends the transaction.
+
+    This class is created by [`Session.hang_up`][voip.rtp.Session.hang_up]
+    and registered in the SIP session's transaction table so that the
+    200 OK response is routed back here and the transaction is cleaned up.
+
+    [RFC 3261 §17.1.2]: https://datatracker.ietf.org/doc/html/rfc3261#section-17.1.2
+    """
+
+    cseq: int = 1
+
+    def response_received(self, response: Response) -> None:
+        """Handle the BYE response (typically 200 OK) [RFC 3261 §15.1.1].
+
+        Removes this transaction from the SIP session once any final (2xx–6xx)
+        response is received.  Provisional 1xx responses are silently ignored.
+
+        Args:
+            response: The parsed SIP response to our BYE request.
+        """
+        if response.status_code >= 200:
+            self.sip.transactions.pop(self.branch, None)
+            logger.debug(
+                "BYE acknowledged: %s %s", response.status_code, response.phrase
+            )

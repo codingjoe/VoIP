@@ -563,6 +563,7 @@ class TestSession:
             outbound_cseq=2,
         )
         mock_sip.dialogs = {(dialog.remote_tag, dialog.local_tag): dialog}
+        mock_sip.transactions = {}
         call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
         await call.hang_up()
         mock_sip.send.assert_called_once()
@@ -571,7 +572,69 @@ class TestSession:
         assert b"sip:bob@192.0.2.2" in bytes(sent)
         assert b"CSeq: 2 BYE" in bytes(sent)
 
-    async def test_hang_up__removes_dialog(self):
+    async def test_hang_up__registers_bye_transaction(self):
+        """hang_up registers a ByeTransaction to handle the 200 OK acknowledgment."""
+        from voip.sip.messages import Dialog
+        from voip.sip.transactions import ByeTransaction
+
+        mock_sip = MagicMock()
+        mock_sip.aor.transport = "TLS"
+        mock_sip.local_address = "192.0.2.1:5061"
+        mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
+        mock_rtp.calls = {}
+        dialog = Dialog(
+            call_id="test-call@example.com",
+            local_party="sip:alice@example.com;tag=our-tag",
+            remote_party="sip:bob@biloxi.com;tag=callee-tag",
+            remote_contact="sip:bob@192.0.2.2",
+            outbound_cseq=2,
+        )
+        mock_sip.dialogs = {(dialog.remote_tag, dialog.local_tag): dialog}
+        transactions: dict = {}
+        mock_sip.transactions = transactions
+        call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
+        await call.hang_up()
+        assert len(transactions) == 1
+        (tx,) = transactions.values()
+        assert isinstance(tx, ByeTransaction)
+        assert tx.cseq == 2
+
+    async def test_hang_up__bye_transaction_cleaned_up_on_200(self):
+        """ByeTransaction removes itself from sip.transactions when 200 OK arrives."""
+        from voip.sip.messages import Dialog, Message
+        from voip.sip.transactions import ByeTransaction
+
+        mock_sip = MagicMock()
+        mock_sip.aor.transport = "TLS"
+        mock_sip.local_address = "192.0.2.1:5061"
+        mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
+        mock_rtp.calls = {}
+        dialog = Dialog(
+            call_id="test-call@example.com",
+            local_party="sip:alice@example.com;tag=our-tag",
+            remote_party="sip:bob@biloxi.com;tag=callee-tag",
+            remote_contact="sip:bob@192.0.2.2",
+            outbound_cseq=2,
+        )
+        mock_sip.dialogs = {(dialog.remote_tag, dialog.local_tag): dialog}
+        transactions: dict = {}
+        mock_sip.transactions = transactions
+        call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
+        await call.hang_up()
+        (tx,) = transactions.values()
+        ok_response = Message.parse(
+            f"SIP/2.0 200 OK\r\n"
+            f"Via: SIP/2.0/TLS 192.0.2.1:5061;rport;branch={tx.branch}\r\n"
+            f"From: sip:alice@example.com;tag=our-tag\r\n"
+            f"To: sip:bob@biloxi.com;tag=callee-tag\r\n"
+            f"Call-ID: test-call@example.com\r\n"
+            f"CSeq: 2 BYE\r\n"
+            f"\r\n".encode()
+        )
+        tx.response_received(ok_response)
+        assert tx.branch not in transactions
+
+
         """hang_up removes the dialog from sip.dialogs."""
         from voip.sip.messages import Dialog
 

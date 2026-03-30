@@ -5,6 +5,7 @@ from voip.rtp import RealtimeTransportProtocol
 from voip.sip.exceptions import RegistrationError
 from voip.sip.messages import Dialog, Message, Response
 from voip.sip.transactions import (
+    ByeTransaction,
     InviteTransaction,
     RegistrationTransaction,
 )
@@ -1044,6 +1045,50 @@ class TestInviteTransaction:
         sent_data = b"".join(transport.sent)
         assert b"ACK" in sent_data
         assert b"Route" in sent_data
+
+
+class TestByeTransaction:
+    def test_bye_transaction__has_default_cseq(self):
+        """ByeTransaction.cseq defaults to 1."""
+        sip = create_sip_session()
+        tx = ByeTransaction(sip=sip, method=SIPMethod.BYE)
+        assert tx.cseq == 1
+
+    def test_response_received__removes_transaction_on_200(self):
+        """response_received removes the transaction when 200 OK is received."""
+        transport = FakeTransport()
+        sip = create_sip_session(fake_transport=transport)
+        tx = ByeTransaction(sip=sip, method=SIPMethod.BYE, cseq=2)
+        sip.transactions[tx.branch] = tx
+        response = Message.parse(
+            f"SIP/2.0 200 OK\r\n"
+            f"Via: SIP/2.0/TLS 127.0.0.1:5061;branch={tx.branch}\r\n"
+            f"From: sip:alice@example.com;tag=our-tag\r\n"
+            f"To: sip:bob@biloxi.com;tag=callee-tag\r\n"
+            f"Call-ID: bye-call@example.com\r\n"
+            f"CSeq: 2 BYE\r\n"
+            f"\r\n".encode()
+        )
+        tx.response_received(response)
+        assert tx.branch not in sip.transactions
+
+    def test_response_received__ignores_provisional_response(self):
+        """response_received leaves the transaction in place for 1xx responses."""
+        transport = FakeTransport()
+        sip = create_sip_session(fake_transport=transport)
+        tx = ByeTransaction(sip=sip, method=SIPMethod.BYE, cseq=2)
+        sip.transactions[tx.branch] = tx
+        response = Message.parse(
+            f"SIP/2.0 100 Trying\r\n"
+            f"Via: SIP/2.0/TLS 127.0.0.1:5061;branch={tx.branch}\r\n"
+            f"From: sip:alice@example.com;tag=our-tag\r\n"
+            f"To: sip:bob@biloxi.com\r\n"
+            f"Call-ID: bye-call@example.com\r\n"
+            f"CSeq: 2 BYE\r\n"
+            f"\r\n".encode()
+        )
+        tx.response_received(response)
+        assert tx.branch in sip.transactions
 
 
 class TestRegistrationError:
