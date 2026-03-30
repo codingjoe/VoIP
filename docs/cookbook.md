@@ -198,3 +198,57 @@ session = SIP(
     rtp_stun_server_address=None,
 )
 ```
+
+## Hanging Up a Call
+
+Every [`Session`][voip.rtp.Session] subclass exposes a
+[`hang_up`][voip.rtp.Session.hang_up] coroutine that sends a proper SIP BYE
+request (RFC 3261 §15) to terminate the active dialog and deregisters the RTP
+handler.  You can call it programmatically from within any call class:
+
+```python
+import asyncio
+import ssl
+
+import numpy as np
+
+from voip.audio import AudioCall
+from voip.sip.protocol import SIP
+
+
+class OneUtteranceCall(AudioCall):
+    """Hang up as soon as the first voice utterance is received."""
+
+    async def voice_received(self, audio: np.ndarray) -> None:
+        await self.hang_up()
+        self.sip.close()  # close the SIP transport after hanging up
+
+
+class MySession(SIP):
+    def call_received(self, request) -> None:
+        asyncio.create_task(self.answer(request=request, call_class=OneUtteranceCall))
+
+
+async def main():
+    loop = asyncio.get_running_loop()
+    await loop.create_connection(
+        lambda: MySession(
+            aor="sips:alice@example.com",
+            username="alice",
+            password="secret",
+        ),
+        host="sip.example.com",
+        port=5061,
+        ssl=ssl.create_default_context(),
+    )
+    await asyncio.Future()
+
+
+asyncio.run(main())
+```
+
+[`hang_up`][voip.rtp.Session.hang_up] sends the BYE and cleans up the dialog
+and RTP handler — it does **not** close the SIP transport so that the same
+[`SIP`][voip.sip.protocol.SessionInitiationProtocol] instance can continue
+handling other calls.  Call `sip.close()` when you also want to tear down the
+transport.

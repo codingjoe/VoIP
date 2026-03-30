@@ -541,7 +541,141 @@ class TestSession:
         with pytest.raises(NotImplementedError):
             Session.negotiate_codec(MagicMock())
 
-    async def test_hang_up__raises_not_implemented(self):
-        """hang_up raises NotImplementedError in the base class."""
-        with pytest.raises(NotImplementedError):
-            await make_call().hang_up()
+    async def test_hang_up__no_dialog_is_noop(self):
+        """hang_up is a no-op when no dialog is associated with the call."""
+        call = make_call()
+        await call.hang_up()  # must not raise
+
+    async def test_hang_up__sends_bye(self):
+        """hang_up sends a BYE request when a fully established dialog is present."""
+        from voip.sip.messages import Dialog
+
+        mock_sip = MagicMock()
+        mock_sip.aor.transport = "TLS"
+        mock_sip.local_address = "192.0.2.1:5061"
+        mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
+        mock_rtp.calls = {}
+        dialog = Dialog(
+            call_id="test-call@example.com",
+            local_party="sip:alice@example.com;tag=our-tag",
+            remote_party="sip:bob@biloxi.com;tag=callee-tag",
+            remote_contact="sip:bob@192.0.2.2",
+            outbound_cseq=2,
+        )
+        mock_sip.dialogs = {(dialog.remote_tag, dialog.local_tag): dialog}
+        call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
+        await call.hang_up()
+        mock_sip.send.assert_called_once()
+        sent = mock_sip.send.call_args[0][0]
+        assert b"BYE" in bytes(sent)
+        assert b"sip:bob@192.0.2.2" in bytes(sent)
+        assert b"CSeq: 2 BYE" in bytes(sent)
+
+    async def test_hang_up__removes_dialog(self):
+        """hang_up removes the dialog from sip.dialogs."""
+        from voip.sip.messages import Dialog
+
+        mock_sip = MagicMock()
+        mock_sip.aor.transport = "TLS"
+        mock_sip.local_address = "192.0.2.1:5061"
+        mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
+        mock_rtp.calls = {}
+        dialog = Dialog(
+            call_id="test-call@example.com",
+            local_party="sip:alice@example.com;tag=our-tag",
+            remote_party="sip:bob@biloxi.com;tag=callee-tag",
+            remote_contact="sip:bob@192.0.2.2",
+        )
+        mock_sip.dialogs = {(dialog.remote_tag, dialog.local_tag): dialog}
+        call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
+        await call.hang_up()
+        assert (dialog.remote_tag, dialog.local_tag) not in mock_sip.dialogs
+
+    async def test_hang_up__deregisters_rtp_handler(self):
+        """hang_up unregisters the RTP call handler."""
+        from voip.sip.messages import Dialog
+
+        mock_sip = MagicMock()
+        mock_sip.aor.transport = "TLS"
+        mock_sip.local_address = "192.0.2.1:5061"
+        mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
+        dialog = Dialog(
+            call_id="test-call@example.com",
+            local_party="sip:alice@example.com;tag=our-tag",
+            remote_party="sip:bob@biloxi.com;tag=callee-tag",
+            remote_contact="sip:bob@192.0.2.2",
+        )
+        mock_sip.dialogs = {(dialog.remote_tag, dialog.local_tag): dialog}
+        call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
+        remote_addr = ("192.0.2.2", 5004)
+        mock_rtp.calls = {remote_addr: call}
+        await call.hang_up()
+        mock_rtp.unregister_call.assert_called_once_with(remote_addr)
+
+    async def test_hang_up__deregisters_wildcard_rtp_handler(self):
+        """hang_up unregisters a wildcard (addr=None) RTP handler."""
+        from voip.sip.messages import Dialog
+
+        mock_sip = MagicMock()
+        mock_sip.aor.transport = "TLS"
+        mock_sip.local_address = "192.0.2.1:5061"
+        mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
+        dialog = Dialog(
+            call_id="test-call@example.com",
+            local_party="sip:alice@example.com;tag=our-tag",
+            remote_party="sip:bob@biloxi.com;tag=callee-tag",
+            remote_contact="sip:bob@192.0.2.2",
+        )
+        mock_sip.dialogs = {(dialog.remote_tag, dialog.local_tag): dialog}
+        call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
+        mock_rtp.calls = {None: call}  # wildcard registration
+        await call.hang_up()
+        mock_rtp.unregister_call.assert_called_once_with(None)
+
+    async def test_hang_up__skips_unregister_when_handler_not_in_rtp(self):
+        """hang_up does not call unregister_call when handler is not found."""
+        from voip.sip.messages import Dialog
+
+        mock_sip = MagicMock()
+        mock_sip.aor.transport = "TLS"
+        mock_sip.local_address = "192.0.2.1:5061"
+        mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
+        mock_rtp.calls = {}  # call not registered
+        dialog = Dialog(
+            call_id="test-call@example.com",
+            local_party="sip:alice@example.com;tag=our-tag",
+            remote_party="sip:bob@biloxi.com;tag=callee-tag",
+            remote_contact="sip:bob@192.0.2.2",
+        )
+        mock_sip.dialogs = {(dialog.remote_tag, dialog.local_tag): dialog}
+        call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
+        await call.hang_up()
+        mock_rtp.unregister_call.assert_not_called()
+
+    async def test_hang_up__missing_local_party_is_noop(self):
+        """hang_up logs a warning and returns when local_party is not set."""
+        from voip.sip.messages import Dialog
+
+        mock_sip = MagicMock()
+        mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
+        mock_rtp.calls = {}
+        dialog = Dialog(call_id="test@example.com", remote_contact="sip:bob@192.0.2.2")
+        call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
+        await call.hang_up()
+        mock_sip.send.assert_not_called()
+
+    async def test_hang_up__missing_remote_contact_is_noop(self):
+        """hang_up logs a warning and returns when remote_contact is not set."""
+        from voip.sip.messages import Dialog
+
+        mock_sip = MagicMock()
+        mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
+        mock_rtp.calls = {}
+        dialog = Dialog(
+            call_id="test@example.com",
+            local_party="sip:alice@example.com;tag=our-tag",
+            remote_party="sip:bob@biloxi.com;tag=callee-tag",
+        )
+        call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
+        await call.hang_up()
+        mock_sip.send.assert_not_called()

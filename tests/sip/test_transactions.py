@@ -591,6 +591,42 @@ class TestInviteTransaction:
         tx.answer(call_class=CallFixture)
         assert len(sip.dialogs) > 0
 
+    def test_answer__dialog_has_local_and_remote_party(self):
+        """Answer populates dialog.local_party and dialog.remote_party for BYE."""
+        import ipaddress
+
+        from voip.types import NetworkAddress
+
+        transport = FakeTransport()
+        rtp = RealtimeTransportProtocol()
+        rtp.public_address = NetworkAddress(ipaddress.ip_address("192.0.2.1"), 5004)
+        sip = create_sip_session(fake_transport=transport, rtp=rtp)
+        request = Message.parse(INVITE_BYTES)
+        tx = InviteTransaction.from_request(request=request, sip=sip)
+        tx.answer(call_class=CallFixture)
+        dialog = next(iter(sip.dialogs.values()))
+        assert dialog.local_party is not None
+        assert dialog.remote_party is not None
+        assert "tag=" in dialog.local_party
+        assert "tag=" in dialog.remote_party
+
+    def test_answer__call_handler_has_dialog(self):
+        """Answer passes the dialog to the call handler."""
+        import ipaddress
+
+        from voip.types import NetworkAddress
+
+        transport = FakeTransport()
+        rtp = RealtimeTransportProtocol()
+        rtp.public_address = NetworkAddress(ipaddress.ip_address("192.0.2.1"), 5004)
+        sip = create_sip_session(fake_transport=transport, rtp=rtp)
+        request = Message.parse(INVITE_WITH_SDP_BYTES)
+        tx = InviteTransaction.from_request(request=request, sip=sip)
+        tx.answer(call_class=CallFixture)
+        dialog = next(iter(sip.dialogs.values()))
+        registered_handler = next(iter(rtp.calls.values()))
+        assert registered_handler.dialog is dialog
+
     def test_answer__with_record_route(self):
         """Include Record-Route in 200 OK when present in the INVITE."""
         import ipaddress
@@ -766,6 +802,70 @@ class TestInviteTransaction:
         )
         await tx._accept_call(ok_response)
         assert len(sip.dialogs) > 0
+
+    async def test_accept_call__dialog_has_bye_fields(self):
+        """_accept_call populates dialog.local_party, remote_party, and outbound_cseq."""
+        import ipaddress
+
+        from voip.types import NetworkAddress
+
+        transport = FakeTransport()
+        rtp = RealtimeTransportProtocol()
+        rtp.public_address = NetworkAddress(ipaddress.ip_address("192.0.2.1"), 5004)
+        sip = create_sip_session(fake_transport=transport, rtp=rtp)
+        tx = InviteTransaction(sip=sip, method=SIPMethod.INVITE, cseq=1)
+        await tx.make_call("sip:bob@biloxi.com", call_class=CallFixture)
+        ok_response = Message.parse(
+            f"SIP/2.0 200 OK\r\n"
+            f"Via: SIP/2.0/TLS example.com;branch={tx.branch}\r\n"
+            f"From: sip:alice@example.com;tag=our-tag\r\n"
+            f"To: sip:bob@biloxi.com;tag=callee-tag\r\n"
+            f"Call-ID: bye-fields@example.com\r\n"
+            f"CSeq: 1 INVITE\r\n"
+            f"Contact: <sip:bob@192.0.2.2>\r\n"
+            f"\r\n".encode()
+        )
+        await tx._accept_call(ok_response)
+        dialog = next(iter(sip.dialogs.values()))
+        assert dialog.local_party == "sip:alice@example.com;tag=our-tag"
+        assert dialog.remote_party == "sip:bob@biloxi.com;tag=callee-tag"
+        assert dialog.outbound_cseq == 2
+        assert dialog.remote_contact == "sip:bob@192.0.2.2"
+
+    async def test_accept_call__call_handler_has_dialog(self):
+        """_accept_call passes the dialog to the call handler."""
+        import ipaddress
+
+        from voip.types import NetworkAddress
+
+        transport = FakeTransport()
+        rtp = RealtimeTransportProtocol()
+        rtp.public_address = NetworkAddress(ipaddress.ip_address("192.0.2.1"), 5004)
+        sip = create_sip_session(fake_transport=transport, rtp=rtp)
+        tx = InviteTransaction(sip=sip, method=SIPMethod.INVITE, cseq=1)
+        await tx.make_call("sip:bob@biloxi.com", call_class=CallFixture)
+        ok_response = Message.parse(
+            f"SIP/2.0 200 OK\r\n"
+            f"Via: SIP/2.0/TLS example.com;branch={tx.branch}\r\n"
+            f"From: sip:alice@example.com;tag=our-tag\r\n"
+            f"To: sip:bob@biloxi.com;tag=callee-tag\r\n"
+            f"Call-ID: bye-fields@example.com\r\n"
+            f"CSeq: 1 INVITE\r\n"
+            f"Contact: <sip:bob@192.0.2.2>\r\n"
+            f"Content-Type: application/sdp\r\n"
+            f"\r\n"
+            f"v=0\r\n"
+            f"o=- 1 1 IN IP4 192.0.2.2\r\n"
+            f"s=-\r\n"
+            f"c=IN IP4 192.0.2.2\r\n"
+            f"t=0 0\r\n"
+            f"m=audio 5004 RTP/AVP 0\r\n"
+            f"a=rtpmap:0 PCMU/8000\r\n".encode()
+        )
+        await tx._accept_call(ok_response)
+        dialog = next(iter(sip.dialogs.values()))
+        registered_handler = next(iter(rtp.calls.values()))
+        assert registered_handler.dialog is dialog
 
     async def test_accept_call__no_pending_call_class_sends_ack(self):
         """_accept_call sends ACK even when no pending_call_class is set."""

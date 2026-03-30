@@ -191,6 +191,16 @@ class Dialog:
         call_id: The Call-ID header value for this dialog.
         local_tag: The From-header tag parameter value for this dialog.
         remote_tag: The To-header tag parameter value for this dialog.
+        local_party: Raw ``From:`` header value (URI + tag) to use in
+            outbound in-dialog requests such as BYE.  Populated by the
+            transaction layer when the dialog is confirmed.
+        remote_party: Raw ``To:`` header value (URI + tag) to use in
+            outbound in-dialog requests such as BYE.  Populated by the
+            transaction layer when the dialog is confirmed.
+        outbound_cseq: CSeq sequence number for the *next* outbound
+            in-dialog request.  Defaults to ``1`` for the UAS side
+            (no prior outbound request) and is set to ``cseq + 1`` on the
+            UAC side after the INVITE is confirmed.
 
     """
 
@@ -205,6 +215,9 @@ class Dialog:
     remote_tag: str | None = dataclasses.field(default=None, compare=True)
     remote_contact: SipUri | None = dataclasses.field(default=None, compare=True)
     route_set: list[SipUri] = dataclasses.field(default_factory=list)
+    local_party: str | None = dataclasses.field(default=None, compare=False)
+    remote_party: str | None = dataclasses.field(default=None, compare=False)
+    outbound_cseq: int = dataclasses.field(default=1, compare=False)
 
     created: datetime.datetime = dataclasses.field(
         init=False, default_factory=datetime.datetime.now

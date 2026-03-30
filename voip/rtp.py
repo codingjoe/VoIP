@@ -11,6 +11,7 @@ import json
 import logging
 import struct
 import typing
+import uuid
 from typing import TYPE_CHECKING
 
 from voip.sdp.types import MediaDescription, RTPPayloadFormat
@@ -19,8 +20,9 @@ from voip.stun import STUNProtocol
 from voip.types import ByteSerializableObject, NetworkAddress
 
 if TYPE_CHECKING:
+    from voip.sip.messages import Dialog, Request
     from voip.sip.protocol import SessionInitiationProtocol
-    from voip.sip.types import CallerID
+    from voip.sip.types import CallerID, SIPMethod
 
 __all__ = ["RTP", "Session", "RTPPacket", "RTPPayloadType", "RealtimeTransportProtocol"]
 
@@ -106,6 +108,9 @@ class Session:
         caller: Caller identifier as received in the SIP From header.
         media: Negotiated SDP media description for this call leg.
         srtp: Optional SRTP session for encrypting and decrypting media.
+        dialog: SIP dialog state for this call leg.  Set by the transaction
+            layer after the call is established; used by
+            [`hang_up`][voip.rtp.Session.hang_up] to send BYE.
     """
 
     rtp: RealtimeTransportProtocol
@@ -113,6 +118,7 @@ class Session:
     media: MediaDescription
     caller: CallerID
     srtp: SRTPSession | None = None
+    dialog: "Dialog | None" = None
 
     def packet_received(self, packet: RTPPacket, addr: NetworkAddress) -> None:
         """Handle a parsed RTP packet. Override in subclasses to process media.
@@ -137,13 +143,85 @@ class Session:
         self.rtp.send(data, addr)
 
     async def hang_up(self) -> None:
-        """Terminate the call by sending a SIP BYE request.
+        """Terminate the call by sending a SIP BYE request [RFC 3261 §15].
 
-        Raises:
-            NotImplementedError: Not yet implemented; the call_id and remote
-                SIP address need to be stored per call to make this work.
+        Constructs and sends a BYE request for the active dialog, removes the
+        dialog from the SIP session's registry, and deregisters the RTP handler
+        so that no further media packets are dispatched.
+
+        The method is a no-op when no dialog is associated with this call (e.g.
+        before the call is fully established).
+
+        Call `sip.close()` afterwards when you also want to shut down the SIP
+        transport (e.g. after a single-shot outbound call).
+
+        Example:
+            Override [`on_audio_sent`][voip.audio.AudioCall.on_audio_sent] to
+            hang up programmatically once all outbound audio has been sent:
+
+            ```python
+            from voip.audio import AudioCall
+
+
+            class SayAndHangUp(AudioCall):
+                async def on_audio_sent(self) -> None:
+                    await self.hang_up()
+            ```
+
+        [RFC 3261 §15]: https://datatracker.ietf.org/doc/html/rfc3261#section-15
         """
-        raise NotImplementedError("hang_up is not yet implemented")
+        if self.dialog is None:
+            return
+        if self.dialog.local_party is None or self.dialog.remote_party is None:
+            logger.warning(
+                "Cannot hang up dialog %s: local or remote party not set",
+                self.dialog.call_id,
+            )
+            return
+
+        remote_contact = self.dialog.remote_contact
+        if remote_contact is None:
+            logger.warning(
+                "Cannot hang up dialog %s: remote contact not known",
+                self.dialog.call_id,
+            )
+            return
+
+        from voip.sip.messages import Request  # noqa: PLC0415
+        from voip.sip.types import SIPMethod  # noqa: PLC0415
+
+        request_uri = str(remote_contact).strip("<>").split(";")[0]
+        bye_branch = f"z9hG4bK-{uuid.uuid4()}"
+        bye_request = Request(
+            method=SIPMethod.BYE,
+            uri=request_uri,
+            headers={
+                "Via": (
+                    f"SIP/2.0/{self.sip.aor.transport}"
+                    f" {self.sip.local_address};rport;branch={bye_branch}"
+                ),
+                "Max-Forwards": "70",
+                "From": self.dialog.local_party,
+                "To": self.dialog.remote_party,
+                "Call-ID": self.dialog.call_id,
+                "CSeq": f"{self.dialog.outbound_cseq} {SIPMethod.BYE}",
+                "Content-Length": "0",
+            },
+        )
+        self.sip.send(bye_request)
+        self.dialog.outbound_cseq += 1
+        self.sip.dialogs.pop(
+            (self.dialog.remote_tag, self.dialog.local_tag), None
+        )
+        # Deregister the RTP handler for this call.  Use a sentinel so that a
+        # wildcard handler registered under addr=None can still be removed.
+        _not_found = object()
+        remote_addr = next(
+            (addr for addr, call in self.rtp.calls.items() if call is self),
+            _not_found,
+        )
+        if remote_addr is not _not_found:
+            self.rtp.unregister_call(remote_addr)
 
     @classmethod
     def negotiate_codec(cls, remote_media: MediaDescription) -> MediaDescription:

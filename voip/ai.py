@@ -142,8 +142,8 @@ class SayCall(TTSMixin, AudioCall):
     """Dial a number, say a message using TTS, and hang up.
 
     Synthesises `text` with Pocket TTS immediately after the call is
-    established, sends the audio as outbound RTP, then closes the SIP
-    session once the last packet has been dispatched.
+    established, sends the audio as outbound RTP, then sends a SIP BYE
+    and closes the SIP session once the last packet has been dispatched.
 
     Example:
         ```python
@@ -153,6 +153,16 @@ class SayCall(TTSMixin, AudioCall):
                 asyncio.create_task(
                     tx.make_call("sip:bob@biloxi.com", call_class=SayCall, text="Hello!")
                 )
+        ```
+
+        To hang up programmatically from any call class, call
+        [`hang_up`][voip.rtp.Session.hang_up]:
+
+        ```python
+        class MyCall(AudioCall):
+            async def voice_received(self, audio: np.ndarray) -> None:
+                await self.hang_up()
+                self.sip.close()
         ```
 
     Args:
@@ -169,7 +179,17 @@ class SayCall(TTSMixin, AudioCall):
         asyncio.create_task(self.send_speech(self.text))
 
     def on_audio_sent(self) -> None:
-        """Close the SIP session after the audio has been fully dispatched."""
+        """Send a SIP BYE and close the session after audio is fully dispatched."""
+        asyncio.create_task(self.hang_up())
+
+    async def hang_up(self) -> None:
+        """Send BYE and close the SIP transport.
+
+        Extends the base [`hang_up`][voip.rtp.Session.hang_up] by also
+        closing the SIP transport after the BYE is sent, terminating the
+        single-shot outbound call session.
+        """
+        await super().hang_up()
         self.sip.close()
 
 

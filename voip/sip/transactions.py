@@ -493,12 +493,18 @@ class InviteTransaction(Transaction):
         use_srtp = negotiated_media.proto == "RTP/SAVP"
         srtp_session = SRTPSession.generate() if use_srtp else None
 
+        dialog = Dialog.from_request(self.request)
+        dialog.local_party = f"{self.request.headers['To']};tag={dialog.remote_tag}"
+        dialog.remote_party = str(self.request.headers["From"])
+        self.sip.dialogs[dialog.remote_tag, dialog.local_tag] = dialog
+
         call_handler = call_class(
             rtp=self.sip.rtp,
             sip=self.sip,
             caller=caller,
             media=negotiated_media,
             srtp=srtp_session,
+            dialog=dialog,
             **call_kwargs,
         )
         if remote_audio is not None and remote_audio.port != 0:
@@ -529,8 +535,6 @@ class InviteTransaction(Transaction):
             sdp_media_attributes.append(
                 Attribute(name="crypto", value=srtp_session.sdes_attribute)
             )
-        dialog = Dialog.from_request(self.request)
-        self.sip.dialogs[dialog.remote_tag, dialog.local_tag] = dialog
         self.send_response(
             Response.from_request(
                 request=self.request,
@@ -727,6 +731,7 @@ class InviteTransaction(Transaction):
                 caller=CallerID(str(self.sip.aor)),
                 media=negotiated_media,
                 srtp=None,
+                dialog=self.dialog,
                 **self.pending_call_kwargs,
             )
             if remote_audio is not None and remote_audio.port != 0:
@@ -768,6 +773,12 @@ class InviteTransaction(Transaction):
         ack_uri = (
             contact.strip("<>").split(";")[0] if contact else str(self.request.uri)
         )
+
+        # Store BYE-ready dialog state now that dialog tags are finalised.
+        self.dialog.local_party = str(response.headers["From"])
+        self.dialog.remote_party = str(response.headers["To"])
+        self.dialog.remote_contact = ack_uri
+        self.dialog.outbound_cseq = self.cseq + 1
         ack_headers: SIPHeaderDict = SIPHeaderDict(
             {
                 "Via": (

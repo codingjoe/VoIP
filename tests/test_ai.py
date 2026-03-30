@@ -626,3 +626,77 @@ class TestSayCall:
             )
 
         assert call.text == "Hello there!"
+
+    def test_on_audio_sent__schedules_hang_up(self):
+        """on_audio_sent schedules hang_up via create_task."""
+        tts_mock = MagicMock()
+        tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
+        audio_mock = MagicMock()
+        audio_mock.numpy.return_value = np.zeros(0, dtype=np.float32)
+        tts_mock.generate_audio.return_value = audio_mock
+        tts_mock.sample_rate = 8000
+
+        with (
+            patch("voip.ai.TTSModel") as tts_cls,
+            patch("asyncio.create_task"),
+        ):
+            tts_cls.load_model.return_value = tts_mock
+            call = SayCall(
+                rtp=MagicMock(),
+                sip=MagicMock(),
+                caller=CallerID("sip:bob@biloxi.com"),
+                media=PCMA_MEDIA,
+                text="Hello!",
+            )
+
+        with patch(
+            "voip.ai.asyncio.create_task",
+            side_effect=lambda c: c.close() or MagicMock(),
+        ) as mock_create_task:
+            call.on_audio_sent()
+
+        mock_create_task.assert_called_once()
+
+    async def test_hang_up__sends_bye_and_closes_sip(self):
+        """hang_up sends BYE and closes the SIP transport."""
+        from voip.sip.messages import Dialog
+        from voip.rtp import RealtimeTransportProtocol
+
+        tts_mock = MagicMock()
+        tts_mock.get_state_for_audio_prompt.return_value = MagicMock()
+        audio_mock = MagicMock()
+        audio_mock.numpy.return_value = np.zeros(0, dtype=np.float32)
+        tts_mock.generate_audio.return_value = audio_mock
+        tts_mock.sample_rate = 8000
+
+        mock_sip = MagicMock()
+        mock_sip.aor.transport = "TLS"
+        mock_sip.local_address = "192.0.2.1:5061"
+        mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
+        mock_rtp.calls = {}
+        dialog = Dialog(
+            call_id="say-call@example.com",
+            local_party="sip:alice@example.com;tag=our-tag",
+            remote_party="sip:bob@biloxi.com;tag=callee-tag",
+            remote_contact="sip:bob@192.0.2.2",
+            outbound_cseq=2,
+        )
+        mock_sip.dialogs = {(dialog.remote_tag, dialog.local_tag): dialog}
+
+        with (
+            patch("voip.ai.TTSModel") as tts_cls,
+            patch("asyncio.create_task"),
+        ):
+            tts_cls.load_model.return_value = tts_mock
+            call = SayCall(
+                rtp=mock_rtp,
+                sip=mock_sip,
+                caller=CallerID("sip:bob@biloxi.com"),
+                media=PCMA_MEDIA,
+                text="Hello!",
+                dialog=dialog,
+            )
+
+        await call.hang_up()
+        mock_sip.send.assert_called_once()
+        mock_sip.close.assert_called_once()
