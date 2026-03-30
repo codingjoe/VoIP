@@ -20,9 +20,9 @@ from voip.stun import STUNProtocol
 from voip.types import ByteSerializableObject, NetworkAddress
 
 if TYPE_CHECKING:
-    from voip.sip.messages import Dialog, Request
+    from voip.sip.messages import Dialog
     from voip.sip.protocol import SessionInitiationProtocol
-    from voip.sip.types import CallerID, SIPMethod
+    from voip.sip.types import CallerID
 
 __all__ = ["RTP", "Session", "RTPPacket", "RTPPayloadType", "RealtimeTransportProtocol"]
 
@@ -118,7 +118,7 @@ class Session:
     media: MediaDescription
     caller: CallerID
     srtp: SRTPSession | None = None
-    dialog: "Dialog | None" = None
+    dialog: Dialog | None = None
 
     def packet_received(self, packet: RTPPacket, addr: NetworkAddress) -> None:
         """Handle a parsed RTP packet. Override in subclasses to process media.
@@ -198,7 +198,7 @@ class Session:
             headers={
                 "Via": (
                     f"SIP/2.0/{self.sip.aor.transport}"
-                    f" {self.sip.local_address};rport;branch={bye_branch}"
+                    f" {self.sip.rtp.public_address};rport;alias;branch={bye_branch}"
                 ),
                 "Max-Forwards": "70",
                 "From": self.dialog.local_party,
@@ -210,9 +210,7 @@ class Session:
         )
         self.sip.send(bye_request)
         self.dialog.outbound_cseq += 1
-        self.sip.dialogs.pop(
-            (self.dialog.remote_tag, self.dialog.local_tag), None
-        )
+        self.sip.dialogs.pop((self.dialog.remote_tag, self.dialog.local_tag), None)
         # Deregister the RTP handler for this call.  Use a sentinel so that a
         # wildcard handler registered under addr=None can still be removed.
         _not_found = object()
