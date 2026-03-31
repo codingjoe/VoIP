@@ -344,8 +344,8 @@ class InviteTransaction(Transaction):
     SIP layer creates one instance per incoming INVITE, keyed by Via branch
     (RFC 3261 §17.1.3).
 
-    For inbound call handling, subclass [`Dialog`][voip.sip.messages.Dialog]
-    and override [`call_received`][voip.sip.messages.Dialog.call_received]:
+    For inbound call handling, subclass [`Dialog`][voip.sip.dialog.Dialog]
+    and override [`call_received`][voip.sip.dialog.Dialog.call_received]:
 
     ```python
     class MyDialog(Dialog):
@@ -370,11 +370,6 @@ class InviteTransaction(Transaction):
     def invite_received(self, request: Request) -> None:
         """Handle an incoming INVITE by delegating to the dialog.
 
-        Wires up [`dialog.invite_tx`][voip.sip.messages.Dialog.invite_tx] and
-        [`dialog.sip`][voip.sip.messages.Dialog.sip], then calls
-        [`dialog.call_received`][voip.sip.messages.Dialog.call_received] so
-        that application logic lives in the dialog subclass.
-
         Args:
             request: The SIP INVITE request.
         """
@@ -398,7 +393,7 @@ class InviteTransaction(Transaction):
         """Handle a BYE terminating a dialog.
 
         Removes the dialog from the registry, sends a 200 OK, and calls
-        [`dialog.hangup_received`][voip.sip.messages.Dialog.hangup_received]
+        [`dialog.hangup_received`][voip.sip.dialog.Dialog.hangup_received]
         so application code can perform teardown (e.g. closing the SIP
         transport for single-shot sessions).
 
@@ -471,8 +466,8 @@ class InviteTransaction(Transaction):
         """Answer the call by setting up RTP and sending 200 OK with SDP.
 
         Example:
-            Call from within [`Dialog.call_received`][voip.sip.messages.Dialog.call_received]
-            via [`Dialog.accept`][voip.sip.messages.Dialog.accept]:
+            Call from within [`Dialog.call_received`][voip.sip.dialog.Dialog.call_received]
+            via [`Dialog.accept`][voip.sip.dialog.Dialog.accept]:
 
             ```python
             class MyDialog(Dialog):
@@ -619,7 +614,7 @@ class InviteTransaction(Transaction):
         and registers the RTP call handler.
 
         Prefer calling this indirectly via
-        [`Dialog.dial`][voip.sip.messages.Dialog.dial].
+        [`Dialog.dial`][voip.sip.dialog.Dialog.dial].
 
         Args:
             target: SIP URI of the callee (e.g. ``"sip:+15551234567@carrier.com"``).
@@ -860,7 +855,7 @@ class ByeTransaction(Transaction):
     ```
 
     This transaction is created and awaited by
-    [`Dialog.bye`][voip.sip.messages.Dialog.bye].
+    [`Dialog.bye`][voip.sip.dialog.Dialog.bye].
 
     [RFC 3261 §17.1.2]: https://datatracker.ietf.org/doc/html/rfc3261#section-17.1.2
     """
@@ -869,11 +864,6 @@ class ByeTransaction(Transaction):
 
     def response_received(self, response: Response) -> None:
         """Handle the BYE response (typically 200 OK) [RFC 3261 §15.1.1].
-
-        Removes this transaction from the SIP session once any final (2xx–6xx)
-        response is received.  Provisional 1xx responses are silently ignored.
-        Sets [`Transaction.done`][voip.sip.transactions.Transaction.done]
-        so that anything awaiting this transaction can unblock.
 
         Args:
             response: The parsed SIP response to our BYE request.

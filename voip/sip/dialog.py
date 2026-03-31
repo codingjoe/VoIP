@@ -22,9 +22,9 @@ class Dialog:
     established by a non-final response to the INVITE, see also: [RFC 3261 §12].
 
     Subclass `Dialog` to implement inbound call handling.  Override
-    [`call_received`][voip.sip.messages.Dialog.call_received] and call
-    [`accept`][voip.sip.messages.Dialog.accept] or
-    [`reject`][voip.sip.messages.Dialog.reject] from within it.  Register the
+    [`call_received`][voip.sip.dialog.Dialog.call_received] and call
+    [`accept`][voip.sip.dialog.Dialog.accept] or
+    [`reject`][voip.sip.dialog.Dialog.reject] from within it.  Register the
     subclass as `dialog_class` on the SIP session:
 
     ```python
@@ -38,7 +38,7 @@ class Dialog:
     ```
 
     For outbound calls, create a `Dialog` with the SIP session set and call
-    [`dial`][voip.sip.messages.Dialog.dial]:
+    [`dial`][voip.sip.dialog.Dialog.dial]:
 
     ```python
     dialog = Dialog(sip=my_sip_session)
@@ -65,11 +65,7 @@ class Dialog:
         sip: The SIP session that owns this dialog.  Set by the transaction
             layer when the dialog is confirmed.
         invite_tx: The [`InviteTransaction`][voip.sip.transactions.InviteTransaction]
-            for an inbound INVITE.  Set before
-            [`call_received`][voip.sip.messages.Dialog.call_received] is called
-            so that [`accept`][voip.sip.messages.Dialog.accept],
-            [`reject`][voip.sip.messages.Dialog.reject], and
-            [`ringing`][voip.sip.messages.Dialog.ringing] can delegate to it.
+            for an inbound INVITE.
     """
 
     BYE_ACK_TIMEOUT: typing.ClassVar[float] = 32.0
@@ -137,9 +133,9 @@ class Dialog:
         Called by the SIP layer after the dialog is created from the INVITE
         request.  The base implementation rejects the call with ``486 Busy
         Here``.  Override in subclasses to answer, ring, or reject the call
-        using [`accept`][voip.sip.messages.Dialog.accept],
-        [`ringing`][voip.sip.messages.Dialog.ringing], and
-        [`reject`][voip.sip.messages.Dialog.reject].
+        using [`accept`][voip.sip.dialog.Dialog.accept],
+        [`ringing`][voip.sip.dialog.Dialog.ringing], and
+        [`reject`][voip.sip.dialog.Dialog.reject].
         """
         self.reject()
 
@@ -154,9 +150,6 @@ class Dialog:
 
     def ringing(self) -> None:
         """Send a 180 Ringing provisional response [RFC 3261 §21.1.2].
-
-        Delegates to the [`InviteTransaction`][voip.sip.transactions.InviteTransaction]
-        set on [`invite_tx`][voip.sip.messages.Dialog.invite_tx].
 
         [RFC 3261 §21.1.2]: https://datatracker.ietf.org/doc/html/rfc3261#section-21.1.2
         """
@@ -190,18 +183,6 @@ class Dialog:
 
     async def bye(self) -> None:
         """Terminate the dialog by sending a SIP BYE request [RFC 3261 §15].
-
-        Constructs and sends a BYE request, removes this dialog from the SIP
-        session's registry, and awaits the remote party's 200 OK
-        acknowledgment.  The standard non-INVITE transaction timeout of
-        [`BYE_ACK_TIMEOUT`][voip.sip.messages.Dialog.BYE_ACK_TIMEOUT] seconds
-        applies; a warning is logged if no acknowledgment arrives in time.
-
-        This is a no-op when [`sip`][voip.sip.messages.Dialog.sip] is not set,
-        or when [`local_party`][voip.sip.messages.Dialog.local_party],
-        [`remote_party`][voip.sip.messages.Dialog.remote_party], or
-        [`remote_contact`][voip.sip.messages.Dialog.remote_contact] are
-        missing (call not yet fully established).
 
         [RFC 3261 §15]: https://datatracker.ietf.org/doc/html/rfc3261#section-15
         """
@@ -269,10 +250,6 @@ class Dialog:
         **call_kwargs: typing.Any,
     ) -> None:
         """Initiate an outbound call to *target* [RFC 3261 §13.1].
-
-        Requires [`sip`][voip.sip.messages.Dialog.sip] to be set.  Sets
-        [`uac`][voip.sip.messages.Dialog.uac] from the SIP session's AOR when
-        not already provided.
 
         Args:
             target: SIP URI of the callee (e.g. ``"sip:+15551234567@carrier.com"``).

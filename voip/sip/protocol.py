@@ -48,8 +48,8 @@ class SessionInitiationProtocol(asyncio.Protocol):
     authentication [RFC 3261 §22].  All signaling is sent over a single
     persistent TLS/TCP connection.
 
-    Subclass [`Dialog`][voip.sip.messages.Dialog] and override
-    [`call_received`][voip.sip.messages.Dialog.call_received] to handle
+    Subclass [`Dialog`][voip.sip.dialog.Dialog] and override
+    [`call_received`][voip.sip.dialog.Dialog.call_received] to handle
     inbound calls, then register it as `dialog_class`:
 
     ```python
@@ -63,7 +63,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
     ```
 
     For outbound calls, use
-    [`Dialog.dial`][voip.sip.messages.Dialog.dial] from within
+    [`Dialog.dial`][voip.sip.dialog.Dialog.dial] from within
     [`on_registered`][voip.sip.protocol.SessionInitiationProtocol.on_registered]:
 
     ```python
@@ -79,9 +79,9 @@ class SessionInitiationProtocol(asyncio.Protocol):
     Args:
         aor: SIP Address of Record (AOR) to register with the carrier.
         rtp: Shared RTP mux for call media.
-        dialog_class: [`Dialog`][voip.sip.messages.Dialog] subclass used to
+        dialog_class: [`Dialog`][voip.sip.dialog.Dialog] subclass used to
             create dialogs for incoming calls.  Defaults to the base
-            [`Dialog`][voip.sip.messages.Dialog] which rejects all calls with
+            [`Dialog`][voip.sip.dialog.Dialog] which rejects all calls with
             ``486 Busy Here``.
         registration_class: Transaction subclass to handle registration transactions.
         keepalive_interval: Keep-alive ping interval. Should be between 30 and 90 seconds.

@@ -106,10 +106,7 @@ class Session:
         caller: Caller identifier as received in the SIP From header.
         media: Negotiated SDP media description for this call leg.
         srtp: Optional SRTP session for encrypting and decrypting media.
-        dialog: SIP dialog state for this call leg.  Set by the transaction
-            layer after the call is established; used by
-            [`hang_up`][voip.rtp.Session.hang_up] to send BYE via
-            [`Dialog.bye`][voip.sip.messages.Dialog.bye].
+        dialog: SIP dialog state for this call leg.
     """
 
     rtp: RealtimeTransportProtocol
@@ -144,7 +141,7 @@ class Session:
         """Terminate the call by sending a SIP BYE request [RFC 3261 §15].
 
         Deregisters this call from the RTP multiplexer, then delegates the
-        BYE signaling to [`Dialog.bye`][voip.sip.messages.Dialog.bye], which
+        BYE signaling to [`Dialog.bye`][voip.sip.dialog.Dialog.bye], which
         constructs and sends the BYE request, removes the dialog from the
         SIP session's registry, and awaits the 200 OK acknowledgment.
 

@@ -214,10 +214,10 @@ session = SIP(
 Every \[`Session`\][voip.rtp.Session] subclass exposes a
 \[`hang_up`\][voip.rtp.Session.hang_up] coroutine that sends a proper SIP BYE
 request (RFC 3261 §15) by delegating to
-\[`Dialog.bye`\][voip.sip.messages.Dialog.bye]. It deregisters the RTP
+\[`Dialog.bye`\][voip.sip.dialog.Dialog.bye]. It deregisters the RTP
 handler and awaits the 200 OK acknowledgment before returning.
 
-Override \[`Dialog.call_received`\][voip.sip.messages.Dialog.call_received]
+Override \[`Dialog.call_received`\][voip.sip.dialog.Dialog.call_received]
 to hook into the call lifecycle, and call `await self.hang_up()` from within
 the call class when you want to terminate:
 
@@ -278,9 +278,9 @@ tear down the transport.
 
 ## Making Outbound Calls
 
-Create a \[`Dialog`\][voip.sip.messages.Dialog] subclass, set it as
+Create a \[`Dialog`\][voip.sip.dialog.Dialog] subclass, set it as
 `dialog_class` on your SIP session, and call
-\[`dialog.dial`\][voip.sip.messages.Dialog.dial] from
+\[`dialog.dial`\][voip.sip.dialog.Dialog.dial] from
 \[`on_registered`\]\[voip.sip.protocol.SessionInitiationProtocol.on_registered\]:
 
 ```python
