@@ -181,19 +181,6 @@ async def _connect_sip_once(
     use_tls: bool,
     no_verify_tls: bool,
 ) -> None:
-    """Connect to a SIP proxy exactly once and wait until the session ends.
-
-    Unlike `_connect_sip`, this coroutine does not reconnect after the session
-    is closed.  Use it when a single outbound call should end the process.
-
-    Args:
-        session_factory: Callable that returns a new
-            [`SessionInitiationProtocol`][voip.sip.protocol.SessionInitiationProtocol]
-            instance.
-        proxy_addr: SIP proxy address as a `NetworkAddress`.
-        use_tls: Whether to establish a TLS connection.
-        no_verify_tls: When ``True``, skip TLS certificate verification.
-    """
     loop = asyncio.get_running_loop()
     ssl_context: ssl.SSLContext | None = None
     if use_tls:
@@ -219,25 +206,6 @@ def _make_outbound_factory(
     call_class: type,
     call_kwargs: dict,
 ) -> collections.abc.Callable[[], ConsoleMessageProtocol]:
-    """Build a single-shot protocol factory that dials TARGET after registration.
-
-    Returns a factory suitable for `_connect_sip_once`.  The factory creates a
-    [`ConsoleMessageProtocol`][voip.__main__.ConsoleMessageProtocol] subclass
-    that calls `on_registered` to initiate an outbound INVITE and closes the
-    SIP session when a BYE is received.
-
-    Args:
-        verbose: Verbosity level forwarded to
-            [`ConsoleMessageProtocol`][voip.__main__.ConsoleMessageProtocol].
-        aor: Local address-of-record.
-        rtp_protocol: Shared RTP mux.
-        target_uri: SIP URI to dial.
-        call_class: Call handler class (e.g. `EchoCall`).
-        call_kwargs: Extra keyword arguments forwarded to `call_class`.
-
-    Returns:
-        A zero-argument factory returning a new protocol instance.
-    """
     target = str(target_uri)
 
     class OutboundDialog(dialog.Dialog):
@@ -268,19 +236,6 @@ def _make_outbound_factory(
 
 
 def _parse_dial_target(dial: str | None) -> SipUri | None:
-    """Parse and validate a ``--dial TARGET`` CLI value.
-
-    Args:
-        dial: Raw string from the ``--dial`` option, or ``None`` when the
-            option is not supplied.
-
-    Returns:
-        A parsed [`SipUri`][voip.sip.types.SipUri], or ``None`` when *dial*
-        is ``None``.
-
-    Raises:
-        click.BadParameter: When *dial* is not a valid SIP URI.
-    """
     if dial is None:
         return None
     try:
@@ -298,11 +253,7 @@ def _parse_dial_target(dial: str | None) -> SipUri | None:
 )
 @click.pass_context
 def echo(ctx, dial: str | None):
-    """Echo the caller's speech back after they finish speaking.
-
-    Without ``--dial``, waits for inbound calls and echoes them.
-    With ``--dial TARGET``, registers and immediately dials TARGET.
-    """
+    """Echo the caller's speech back after they finish speaking."""
     from .audio import EchoCall  # noqa: PLC0415
 
     obj = ctx.obj
@@ -368,11 +319,7 @@ def echo(ctx, dial: str | None):
 )
 @click.pass_context
 def transcribe(ctx, stt_model, dial: str | None):
-    """Transcribe incoming call audio.
-
-    Without ``--dial``, waits for inbound calls and transcribes them.
-    With ``--dial TARGET``, registers and immediately dials TARGET.
-    """
+    """Transcribe incoming call audio."""
     from faster_whisper import WhisperModel
 
     from .ai import TranscribeCall  # noqa: PLC0415

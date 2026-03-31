@@ -49,18 +49,17 @@ __all__ = [
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
-class Transaction:
+class Transaction(asyncio.Event):
     """
     Initiated by a request, completed by any number of responses.
 
     Transactions are awaitable: ``await tx`` suspends until the transaction
-    reaches its terminal state (i.e. until ``tx.done`` is set).
+    reaches its terminal state.
 
     Args:
         dialog: The SIP dialog this transaction belongs to.
         branch: Unique identifier for the transaction, must start with "z9hG4bK".
-        cseq: The CSeq number for this transaction, starting at 1 and incremented
-            for each new request sent within the transaction.
+        cseq: The CSeq sequence number for this transaction.
     """
 
     branch_prefix: typing.ClassVar[str] = "z9hG4bK"
@@ -69,32 +68,26 @@ class Transaction:
     branch: str = dataclasses.field(
         default_factory=lambda: f"{Transaction.branch_prefix}-{uuid.uuid4()}"
     )
-    cseq: int
+    cseq: int = 0
     sip: SessionInitiationProtocol
     request: messages.Request | None = None
     responses: list[messages.Response] = dataclasses.field(
         init=False, default_factory=list
     )
     dialog: Dialog = None
-    done: asyncio.Event = dataclasses.field(
-        init=False,
-        default_factory=asyncio.Event,
-        compare=False,
-        hash=False,
-        repr=False,
-    )
 
     created: datetime.datetime = dataclasses.field(
         init=False, default_factory=datetime.datetime.now
     )
 
     def __post_init__(self):
+        asyncio.Event.__init__(self)
         if not self.branch.startswith(self.branch_prefix):
             raise ValueError(f"Branch parameter must start with {self.branch_prefix!r}")
 
     def __await__(self) -> typing.Generator[typing.Any]:
         """Await the transaction reaching its terminal state."""
-        yield from self.done.wait().__await__()
+        yield from self.wait().__await__()
 
     @property
     def headers(self) -> dict[str, str]:
@@ -188,7 +181,7 @@ class RegistrationTransaction(Transaction):
         match response.status_code:
             case SIPStatus.OK:
                 logger.info("Registration successful")
-                self.done.set()
+                self.set()
                 self.sip.on_registered()
                 return
             case SIPStatus.UNAUTHORIZED | SIPStatus.PROXY_AUTHENTICATION_REQUIRED:
@@ -387,7 +380,7 @@ class InviteTransaction(Transaction):
             request: The SIP ACK request.
         """
         self.sip.transactions.pop(self.branch)
-        self.done.set()
+        self.set()
 
     def bye_received(self, request: Request) -> None:
         """Handle a BYE terminating a dialog.
@@ -515,6 +508,7 @@ class InviteTransaction(Transaction):
         dialog.sip = self.sip
         dialog.local_party = f"{self.request.headers['To']};tag={dialog.remote_tag}"
         dialog.remote_party = str(self.request.headers["From"])
+        dialog.route_set = list(self.request.headers.getlist("Record-Route"))
         self.sip.dialogs[dialog.remote_tag, dialog.local_tag] = dialog
 
         call_handler = call_class(
@@ -809,6 +803,10 @@ class InviteTransaction(Transaction):
         self.dialog.remote_party = str(response.headers["To"])
         self.dialog.remote_contact = ack_uri
         self.dialog.outbound_cseq = self.cseq + 1
+        # RFC 3261 §12.1.2: UAC route set is Record-Route in reverse order.
+        self.dialog.route_set = list(
+            reversed(list(response.headers.getlist("Record-Route")))
+        )
         ack_headers: SIPHeaderDict = SIPHeaderDict(
             {
                 "Via": (
@@ -823,8 +821,8 @@ class InviteTransaction(Transaction):
                 "Content-Length": 0,
             }
         )
-        for record_route in response.headers.getlist("Record-Route"):
-            ack_headers.add("Route", record_route)
+        for route in self.dialog.route_set:
+            ack_headers.add("Route", route)
         self.sip.send(
             Request(
                 method=SIPMethod.ACK,
@@ -833,44 +831,55 @@ class InviteTransaction(Transaction):
             )
         )
         self.sip.transactions.pop(self.branch, None)
-        self.done.set()
+        self.set()
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
 class ByeTransaction(Transaction):
     """BYE client transaction [RFC 3261 §17.1.2].
 
-    Sends a BYE request to terminate an established dialog and waits for the
-    200 OK acknowledgment from the remote party.  Unlike INVITE, BYE responses
-    do **not** require an ACK — the 200 OK itself ends the transaction.
-
-    Awaiting a `ByeTransaction` suspends until the remote party sends a final
-    (2xx+) response:
-
-    ```python
-    tx = ByeTransaction(sip=sip, method=SIPMethod.BYE, cseq=2, dialog=dialog)
-    sip.transactions[tx.branch] = tx
-    sip.send(bye_request)
-    await asyncio.wait_for(tx, timeout=32.0)
-    ```
-
-    This transaction is created and awaited by
-    [`Dialog.bye`][voip.sip.dialog.Dialog.bye].
+    Created by [`Dialog.bye`][voip.sip.dialog.Dialog.bye] to terminate a
+    dialog.  The BYE request is built and sent immediately on construction.
+    Await the transaction to wait for the 200 OK acknowledgment.
 
     [RFC 3261 §17.1.2]: https://datatracker.ietf.org/doc/html/rfc3261#section-17.1.2
     """
 
-    cseq: int = 1
+    def __post_init__(self):
+        self.cseq = self.dialog.outbound_cseq
+        self.dialog.outbound_cseq += 1
+        super().__post_init__()
+        request_uri = str(self.dialog.remote_contact).strip("<>").split(";")[0]
+        headers: SIPHeaderDict = SIPHeaderDict(
+            {
+                "Via": (
+                    f"SIP/2.0/{self.sip.aor.transport}"
+                    f' {self.sip.rtp.public_address};oc-algo="loss";oc;rport;branch={self.branch}'
+                ),
+                "Max-Forwards": "70",
+                "From": self.dialog.local_party,
+                "To": self.dialog.remote_party,
+                "Call-ID": self.dialog.call_id,
+                "CSeq": f"{self.cseq} {SIPMethod.BYE}",
+                "User-Agent": f"python/voip/{voip.__version__}",
+                "Content-Length": "0",
+            }
+        )
+        for route in self.dialog.route_set:
+            headers.add("Route", route)
+        self.request = Request(method=SIPMethod.BYE, uri=request_uri, headers=headers)
+        self.sip.transactions[self.branch] = self
+        self.sip.send(self.request)
 
     def response_received(self, response: Response) -> None:
-        """Handle the BYE response (typically 200 OK) [RFC 3261 §15.1.1].
+        """Handle the BYE response [RFC 3261 §15.1.1].
 
         Args:
             response: The parsed SIP response to our BYE request.
         """
         if response.status_code >= 200:
             self.sip.transactions.pop(self.branch, None)
-            self.done.set()
+            self.set()
             logger.debug(
                 "BYE acknowledged: %s %s", response.status_code, response.phrase
             )

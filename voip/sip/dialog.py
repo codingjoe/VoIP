@@ -6,7 +6,6 @@ import socket
 import typing
 import uuid
 
-import voip
 from voip.sip import messages, transactions, types
 from voip.sip.types import SipUri
 
@@ -15,17 +14,10 @@ logger = logging.getLogger("voip.sip")
 
 @dataclasses.dataclass(kw_only=True, slots=True)
 class Dialog:
-    """
-    Peer-to-peer SIP relationship between two user agents.
+    """Peer-to-peer SIP relationship between two user agents [RFC 3261 §12].
 
-    A dialog is identified by the tuple of (Call-ID, From tag, To tag) and
-    established by a non-final response to the INVITE, see also: [RFC 3261 §12].
-
-    Subclass `Dialog` to implement inbound call handling.  Override
-    [`call_received`][voip.sip.dialog.Dialog.call_received] and call
-    [`accept`][voip.sip.dialog.Dialog.accept] or
-    [`reject`][voip.sip.dialog.Dialog.reject] from within it.  Register the
-    subclass as `dialog_class` on the SIP session:
+    Subclass `Dialog` to implement call handling.  Set the subclass as
+    `dialog_class` on the SIP session for inbound calls:
 
     ```python
     class MyDialog(Dialog):
@@ -37,8 +29,7 @@ class Dialog:
         dialog_class = MyDialog
     ```
 
-    For outbound calls, create a `Dialog` with the SIP session set and call
-    [`dial`][voip.sip.dialog.Dialog.dial]:
+    For outbound calls:
 
     ```python
     dialog = Dialog(sip=my_sip_session)
@@ -46,36 +37,10 @@ class Dialog:
     ```
 
     [RFC 3261 §12]: https://datatracker.ietf.org/doc/html/rfc3261#section-12
-
-    Args:
-        uac: The user agent that initiated the dialog.
-        call_id: The Call-ID header value for this dialog.
-        local_tag: The From-header tag parameter value for this dialog.
-        remote_tag: The To-header tag parameter value for this dialog.
-        local_party: Raw ``From:`` header value (URI + tag) to use in
-            outbound in-dialog requests such as BYE.  Populated by the
-            transaction layer when the dialog is confirmed.
-        remote_party: Raw ``To:`` header value (URI + tag) to use in
-            outbound in-dialog requests such as BYE.  Populated by the
-            transaction layer when the dialog is confirmed.
-        outbound_cseq: CSeq sequence number for the *next* outbound
-            in-dialog request.  Defaults to ``1`` for the UAS side
-            (no prior outbound request) and is set to ``cseq + 1`` on the
-            UAC side after the INVITE is confirmed.
-        sip: The SIP session that owns this dialog.  Set by the transaction
-            layer when the dialog is confirmed.
-        invite_tx: The [`InviteTransaction`][voip.sip.transactions.InviteTransaction]
-            for an inbound INVITE.
     """
 
     BYE_ACK_TIMEOUT: typing.ClassVar[float] = 32.0
-    """Seconds to wait for a 200 OK from the remote party after sending BYE.
-
-    Defaults to 64×T1 = 32 s — the standard non-INVITE transaction timeout
-    from [RFC 3261 §17.1.2].  The timeout lives on `Dialog` (rather than on
-    [`ByeTransaction`][voip.sip.transactions.ByeTransaction]) so that
-    application subclasses can configure it in one place alongside the other
-    call lifecycle hooks.  Override in subclasses to change the timeout.
+    """Seconds to wait for a 200 OK after sending BYE (64×T1, [RFC 3261 §17.1.2]).
 
     [RFC 3261 §17.1.2]: https://datatracker.ietf.org/doc/html/rfc3261#section-17.1.2
     """
@@ -128,24 +93,20 @@ class Dialog:
         }
 
     def call_received(self) -> None:
-        """Handle an incoming INVITE.
+        """Called when an inbound INVITE arrives.
 
-        Called by the SIP layer after the dialog is created from the INVITE
-        request.  The base implementation rejects the call with ``486 Busy
-        Here``.  Override in subclasses to answer, ring, or reject the call
-        using [`accept`][voip.sip.dialog.Dialog.accept],
+        Override in subclasses to accept, ring, or reject the call using
+        [`accept`][voip.sip.dialog.Dialog.accept],
         [`ringing`][voip.sip.dialog.Dialog.ringing], and
         [`reject`][voip.sip.dialog.Dialog.reject].
+        The base implementation rejects with 486 Busy Here.
         """
         self.reject()
 
     def hangup_received(self) -> None:
-        """Handle an inbound BYE (remote party hanging up).
+        """Called when the remote party sends a BYE.
 
-        Called by the SIP layer after the 200 OK response has been sent for
-        the BYE.  The base implementation is a no-op.  Override in subclasses
-        to perform teardown, e.g. closing the SIP transport for single-shot
-        outbound sessions.
+        Override in subclasses to perform teardown.
         """
 
     def ringing(self) -> None:
@@ -157,10 +118,7 @@ class Dialog:
             self.invite_tx.ringing()
 
     def accept(self, *, call_class: type, **call_kwargs: typing.Any) -> None:
-        """Accept the inbound call by answering with 200 OK and SDP.
-
-        Delegates to
-        [`InviteTransaction.answer`][voip.sip.transactions.InviteTransaction.answer].
+        """Accept the inbound call and answer with 200 OK.
 
         Args:
             call_class: Session subclass to create for this call.
@@ -171,9 +129,6 @@ class Dialog:
 
     def reject(self, status_code: types.SIPStatus = types.SIPStatus.BUSY_HERE) -> None:
         """Reject the inbound call.
-
-        Delegates to
-        [`InviteTransaction.reject`][voip.sip.transactions.InviteTransaction.reject].
 
         Args:
             status_code: SIP response status code (default: 486 Busy Here).
@@ -186,61 +141,19 @@ class Dialog:
 
         [RFC 3261 §15]: https://datatracker.ietf.org/doc/html/rfc3261#section-15
         """
-        if self.sip is None:
-            return
-        if self.local_party is None or self.remote_party is None:
-            logger.warning(
-                "Cannot BYE dialog %s: local or remote party not set",
-                self.call_id,
-            )
-            return
-        if self.remote_contact is None:
-            logger.warning(
-                "Cannot BYE dialog %s: remote contact not known",
-                self.call_id,
-            )
-            return
-
         from voip.sip.transactions import ByeTransaction  # noqa: PLC0415
         from voip.sip.types import SIPMethod  # noqa: PLC0415
 
-        request_uri = str(self.remote_contact).strip("<>").split(";")[0]
-        tx = ByeTransaction(
-            sip=self.sip,
-            method=SIPMethod.BYE,
-            cseq=self.outbound_cseq,
-            dialog=self,
-        )
-        bye_request = messages.Request(
-            method=SIPMethod.BYE,
-            uri=request_uri,
-            headers={
-                "Via": (
-                    f"SIP/2.0/{self.sip.aor.transport}"
-                    f' {self.sip.rtp.public_address};oc-algo="loss";oc;rport;branch={tx.branch}'
-                ),
-                "Max-Forwards": "70",
-                "From": self.local_party,
-                "To": self.remote_party,
-                "Call-ID": self.call_id,
-                "CSeq": f"{self.outbound_cseq} {SIPMethod.BYE}",
-                "Route": self.route_set[0] if self.route_set else None,
-                "User-Agent": f"python/vuoip/{voip.__version__}",
-                "Content-Length": "0",
-            },
-        )
-        self.sip.transactions[tx.branch] = tx
-        self.sip.send(bye_request)
-        self.outbound_cseq += 1
-        self.sip.dialogs.pop((self.remote_tag, self.local_tag), None)
+        tx = ByeTransaction(sip=self.sip, method=SIPMethod.BYE, dialog=self)
         try:
-            await asyncio.wait_for(tx, timeout=self.BYE_ACK_TIMEOUT)
+            await asyncio.wait_for(tx.wait(), timeout=self.BYE_ACK_TIMEOUT)
         except TimeoutError:
             logger.warning(
                 "BYE for dialog %s was not acknowledged within %.0f s",
                 self.call_id,
                 self.BYE_ACK_TIMEOUT,
             )
+        self.sip.dialogs.pop((self.remote_tag, self.local_tag), None)
 
     async def dial(
         self,
