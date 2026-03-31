@@ -6,7 +6,7 @@ import ipaddress
 import pytest
 from voip.rtp import RealtimeTransportProtocol, Session
 from voip.sdp.types import MediaDescription, RTPPayloadFormat
-from voip.sip.messages import Dialog
+from voip.sip.dialog import Dialog
 from voip.sip.protocol import SessionInitiationProtocol
 from voip.sip.types import SipUri
 from voip.types import NetworkAddress

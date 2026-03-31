@@ -9,7 +9,7 @@ import asyncio
 import ssl
 
 from voip.ai import TranscribeCall
-from voip.sip.messages import Dialog
+from voip.sip.dialog import Dialog
 from voip.sip.protocol import SIP
 
 
@@ -78,7 +78,7 @@ import ssl
 from pocket_tts import TTSModel
 
 from voip.ai import AgentCall
-from voip.sip.messages import Dialog
+from voip.sip.dialog import Dialog
 from voip.sip.protocol import SIP
 
 shared_tts = TTSModel.load_model()
@@ -214,7 +214,7 @@ session = SIP(
 Every \[`Session`\][voip.rtp.Session] subclass exposes a
 \[`hang_up`\][voip.rtp.Session.hang_up] coroutine that sends a proper SIP BYE
 request (RFC 3261 §15) by delegating to
-\[`Dialog.bye`\][voip.sip.messages.Dialog.bye].  It deregisters the RTP
+\[`Dialog.bye`\][voip.sip.messages.Dialog.bye]. It deregisters the RTP
 handler and awaits the 200 OK acknowledgment before returning.
 
 Override \[`Dialog.call_received`\][voip.sip.messages.Dialog.call_received]
@@ -281,7 +281,7 @@ tear down the transport.
 Create a \[`Dialog`\][voip.sip.messages.Dialog] subclass, set it as
 `dialog_class` on your SIP session, and call
 \[`dialog.dial`\][voip.sip.messages.Dialog.dial] from
-\[`on_registered`\][voip.sip.protocol.SessionInitiationProtocol.on_registered]:
+\[`on_registered`\]\[voip.sip.protocol.SessionInitiationProtocol.on_registered\]:
 
 ```python
 import asyncio
@@ -330,4 +330,3 @@ async def main():
 
 asyncio.run(main())
 ```
-

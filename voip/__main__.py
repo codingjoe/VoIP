@@ -10,7 +10,7 @@ import time
 
 from voip.ai import SayCall
 from voip.rtp import RealtimeTransportProtocol
-from voip.sip import messages
+from voip.sip import dialog, messages
 from voip.sip.protocol import SessionInitiationProtocol
 from voip.sip.types import SipUri
 from voip.types import NetworkAddress
@@ -240,7 +240,7 @@ def _make_outbound_factory(
     """
     target = str(target_uri)
 
-    class OutboundDialog(messages.Dialog):
+    class OutboundDialog(dialog.Dialog):
         def hangup_received(self) -> None:
             if self.sip is not None:
                 self.sip.close()
@@ -309,7 +309,7 @@ def echo(ctx, dial: str | None):
     aor = obj["aor"]
     target_uri = _parse_dial_target(dial)
 
-    class EchoDialog(messages.Dialog):
+    class EchoDialog(dialog.Dialog):
         def call_received(self) -> None:
             self.ringing()
             self.accept(call_class=EchoCall)
@@ -388,7 +388,7 @@ def transcribe(ctx, stt_model, dial: str | None):
         def transcription_received(self, text: str) -> None:
             click.echo(click.style(text, fg="green", bold=True))
 
-    class TranscribeDialog(messages.Dialog):
+    class TranscribeDialog(dialog.Dialog):
         def call_received(self) -> None:
             self.ringing()
             self.accept(
@@ -519,7 +519,7 @@ def agent(
             self.msg_count = len(self._messages)
             await super().respond()
 
-    class AgentDialog(messages.Dialog):
+    class AgentDialog(dialog.Dialog):
         def call_received(self) -> None:
             self.ringing()
             self.accept(
@@ -561,7 +561,7 @@ def agent(
                         "llm_model": llm_model,
                         "voice": voice,
                         "system_prompt": system_prompt,
-                        "initial_prompt": salutation,
+                        "salutation": salutation,
                     },
                 ),
                 aor.maddr,

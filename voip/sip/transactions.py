@@ -26,7 +26,7 @@ from voip.srtp import SRTPSession
 
 from ..types import NetworkAddress
 from . import messages, types
-from .messages import Dialog, Request, Response, SIPHeaderDict
+from .messages import Request, Response, SIPHeaderDict
 from .types import (
     CallerID,
     DigestAlgorithm,
@@ -36,6 +36,7 @@ from .types import (
 )
 
 if typing.TYPE_CHECKING:
+    from .dialog import Dialog
     from .protocol import SessionInitiationProtocol
 
 logger = logging.getLogger("voip.sip")
@@ -91,15 +92,15 @@ class Transaction:
         if not self.branch.startswith(self.branch_prefix):
             raise ValueError(f"Branch parameter must start with {self.branch_prefix!r}")
 
-    def __await__(self) -> typing.Generator[typing.Any, None, None]:
+    def __await__(self) -> typing.Generator[typing.Any]:
         """Await the transaction reaching its terminal state."""
-        return self.done.wait().__await__()
+        yield from self.done.wait().__await__()
 
     @property
     def headers(self) -> dict[str, str]:
         """Return a dict of headers for this transaction."""
         return {
-            "Via": f"SIP/2.0/{self.sip.aor.transport} {self.sip.local_address};rport;branch={self.branch}",
+            "Via": f"SIP/2.0/{self.sip.aor.transport} {self.sip.rtp.public_address};rport;branch={self.branch}",
             "CSeq": f"{self.cseq} {self.method}",
         }
 
@@ -151,6 +152,8 @@ class RegistrationTransaction(Transaction):
 
     def __post_init__(self):
         super().__post_init__()
+        from .dialog import Dialog
+
         self.dialog = self.dialog or Dialog(uac=self.sip.aor)
         headers = (
             self.headers
@@ -629,6 +632,8 @@ class InviteTransaction(Transaction):
         Returns:
             The INVITE [`Request`][voip.sip.messages.Request] that was sent.
         """
+        from .dialog import Dialog
+
         self.pending_call_class = call_class
         self.pending_call_kwargs = call_kwargs
 

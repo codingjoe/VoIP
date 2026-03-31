@@ -15,7 +15,8 @@ from voip.rtp import RealtimeTransportProtocol
 
 from ..types import NetworkAddress
 from . import types
-from .messages import Dialog, Message, Request, Response
+from .dialog import Dialog
+from .messages import Message, Request, Response
 from .transactions import InviteTransaction, RegistrationTransaction, Transaction
 from .types import (
     SIPMethod,
@@ -226,14 +227,10 @@ class SessionInitiationProtocol(asyncio.Protocol):
             Frozenset of [`SIPMethod`][voip.sip.types.SIPMethod] values.
         """
         core = frozenset(
-            m
-            for m in SIPMethod
-            if hasattr(InviteTransaction, f"{m.lower()}_received")
+            m for m in SIPMethod if hasattr(InviteTransaction, f"{m.lower()}_received")
         )
         extra = frozenset(
-            m
-            for m in SIPMethod
-            if hasattr(self, f"{m.lower()}_received")
+            m for m in SIPMethod if hasattr(self, f"{m.lower()}_received")
         )
         # OPTIONS is handled inline in request_received() without a dedicated
         # handler method, so we add it to the allowed set explicitly.
