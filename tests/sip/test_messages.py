@@ -399,6 +399,7 @@ class TestDialog:
     def test_reject__delegates_to_invite_tx(self):
         """reject() calls reject() on the invite_tx when it is set."""
         from unittest.mock import MagicMock
+
         from voip.sip.types import SIPStatus
 
         mock_tx = MagicMock()

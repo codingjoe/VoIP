@@ -11,7 +11,6 @@ import json
 import logging
 import struct
 import typing
-import uuid
 from typing import TYPE_CHECKING
 
 from voip.sdp.types import MediaDescription, RTPPayloadFormat

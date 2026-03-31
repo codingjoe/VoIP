@@ -540,7 +540,9 @@ class TestInviteTransaction:
             remote_contact=tx.dialog.remote_contact,
         )
         tx.dialog = tracking_dialog
-        sip.dialogs[(tracking_dialog.remote_tag, tracking_dialog.local_tag)] = tracking_dialog
+        sip.dialogs[(tracking_dialog.remote_tag, tracking_dialog.local_tag)] = (
+            tracking_dialog
+        )
 
         bye = Message.parse(
             b"BYE sip:alice@example.com SIP/2.0\r\n"
@@ -754,7 +756,9 @@ class TestInviteTransaction:
         sip = create_sip_session(fake_transport=transport, rtp=rtp)
         existing_dialog = Dialog()
         tx = InviteTransaction(sip=sip, method=SIPMethod.INVITE, cseq=1)
-        await tx.make_call("sip:bob@biloxi.com", call_class=CallFixture, dialog=existing_dialog)
+        await tx.make_call(
+            "sip:bob@biloxi.com", call_class=CallFixture, dialog=existing_dialog
+        )
         assert tx.dialog is existing_dialog
         assert existing_dialog.sip is sip
 

@@ -6,10 +6,10 @@ carries the SIP dialog state and provides the call lifecycle hooks.
 
 ## Dialog
 
-The [`Dialog`][voip.sip.messages.Dialog] class manages the SIP dialog state
-and is the primary extension point for application logic.  Override
-[`call_received`][voip.sip.messages.Dialog.call_received] to accept or reject
-inbound calls, and [`hangup_received`][voip.sip.messages.Dialog.hangup_received]
+The \[`Dialog`\][voip.sip.messages.Dialog] class manages the SIP dialog state
+and is the primary extension point for application logic. Override
+\[`call_received`\][voip.sip.messages.Dialog.call_received] to accept or reject
+inbound calls, and \[`hangup_received`\][voip.sip.messages.Dialog.hangup_received]
 to react when the remote party hangs up.
 
 ::: voip.sip.messages.Dialog
