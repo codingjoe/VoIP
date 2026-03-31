@@ -12,8 +12,7 @@ from voip.ai import SayCall
 from voip.rtp import RealtimeTransportProtocol
 from voip.sip import messages
 from voip.sip.protocol import SessionInitiationProtocol
-from voip.sip.transactions import InviteTransaction
-from voip.sip.types import SIPMethod, SipUri
+from voip.sip.types import SipUri
 from voip.types import NetworkAddress
 
 try:
@@ -241,29 +240,25 @@ def _make_outbound_factory(
     """
     target = str(target_uri)
 
-    class OutboundInviteTransaction(InviteTransaction):
-        def bye_received(self, request: messages.Request) -> None:
-            super().bye_received(request)
-            self.sip.close()
+    class OutboundDialog(messages.Dialog):
+        def hangup_received(self) -> None:
+            if self.sip is not None:
+                self.sip.close()
 
     @dataclasses.dataclass(kw_only=True, slots=True)
     class OutboundProtocol(ConsoleMessageProtocol):
         dial_target: str
 
         def on_registered(self) -> None:
-            tx = OutboundInviteTransaction(
-                sip=self,
-                method=SIPMethod.INVITE,
-                cseq=1,
-            )
+            dialog = OutboundDialog(sip=self)
             asyncio.create_task(
-                tx.make_call(self.dial_target, call_class=call_class, **call_kwargs)
+                dialog.dial(self.dial_target, call_class=call_class, **call_kwargs)
             )
 
     def factory() -> ConsoleMessageProtocol:
         return OutboundProtocol(
             verbose=verbose,
-            transaction_class=OutboundInviteTransaction,
+            dialog_class=OutboundDialog,
             aor=aor,
             rtp=rtp_protocol,
             dial_target=target,
@@ -314,10 +309,10 @@ def echo(ctx, dial: str | None):
     aor = obj["aor"]
     target_uri = _parse_dial_target(dial)
 
-    class EchoInviteTransaction(InviteTransaction):
-        def invite_received(self, request: messages.Request) -> None:
+    class EchoDialog(messages.Dialog):
+        def call_received(self) -> None:
             self.ringing()
-            self.answer(call_class=EchoCall)
+            self.accept(call_class=EchoCall)
 
     async def run():
         _, rtp_protocol = await _connect_rtp(
@@ -328,7 +323,7 @@ def echo(ctx, dial: str | None):
             await _connect_sip(
                 lambda: ConsoleMessageProtocol(
                     verbose=obj.get("verbose", 0),
-                    transaction_class=EchoInviteTransaction,
+                    dialog_class=EchoDialog,
                     aor=aor,
                     rtp=rtp_protocol,
                 ),
@@ -393,10 +388,10 @@ def transcribe(ctx, stt_model, dial: str | None):
         def transcription_received(self, text: str) -> None:
             click.echo(click.style(text, fg="green", bold=True))
 
-    class TranscribeInviteTransaction(InviteTransaction):
-        def invite_received(self, request: messages.Request) -> None:
+    class TranscribeDialog(messages.Dialog):
+        def call_received(self) -> None:
             self.ringing()
-            self.answer(
+            self.accept(
                 call_class=TranscribingCall,
                 stt_model=WhisperModel(stt_model),
             )
@@ -410,7 +405,7 @@ def transcribe(ctx, stt_model, dial: str | None):
             await _connect_sip(
                 lambda: ConsoleMessageProtocol(
                     verbose=obj.get("verbose", 0),
-                    transaction_class=TranscribeInviteTransaction,
+                    dialog_class=TranscribeDialog,
                     aor=aor,
                     rtp=rtp_protocol,
                 ),
@@ -524,10 +519,10 @@ def agent(
             self.msg_count = len(self._messages)
             await super().respond()
 
-    class AgentInviteTransaction(InviteTransaction):
-        def invite_received(self, request: messages.Request) -> None:
+    class AgentDialog(messages.Dialog):
+        def call_received(self) -> None:
             self.ringing()
-            self.answer(
+            self.accept(
                 call_class=AgentCallWithOutput,
                 stt_model=WhisperModel(stt_model),
                 llm_model=llm_model,
@@ -545,7 +540,7 @@ def agent(
             await _connect_sip(
                 lambda: ConsoleMessageProtocol(
                     verbose=obj.get("verbose", 0),
-                    transaction_class=AgentInviteTransaction,
+                    dialog_class=AgentDialog,
                     aor=aor,
                     rtp=rtp_protocol,
                 ),

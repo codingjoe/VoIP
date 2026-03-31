@@ -4,7 +4,7 @@ import asyncio
 import datetime
 import ipaddress
 
-from voip.sip.messages import Message, Response
+from voip.sip.messages import Dialog, Message, Response
 from voip.sip.protocol import PING, PONG, SessionInitiationProtocol
 from voip.sip.transactions import InviteTransaction
 from voip.sip.types import SIPMethod, SipUri
@@ -19,7 +19,7 @@ class TestSessionInitiationProtocol:
         session = SessionInitiationProtocol(
             aor=SipUri.parse("sips:alice:secret@example.com"),
             rtp=rtp,
-            transaction_class=InviteTransaction,
+            dialog_class=Dialog,
         )
         session.connection_made(fake_transport)
         assert session.transport is fake_transport
@@ -29,7 +29,7 @@ class TestSessionInitiationProtocol:
         session = SessionInitiationProtocol(
             aor=SipUri.parse("sips:alice:secret@example.com"),
             rtp=rtp,
-            transaction_class=InviteTransaction,
+            dialog_class=Dialog,
         )
         session.connection_made(fake_transport)
         assert str(session.local_address.host) == "127.0.0.1"
@@ -41,7 +41,7 @@ class TestSessionInitiationProtocol:
         session = SessionInitiationProtocol(
             aor=SipUri.parse("sips:alice:secret@example.com"),
             rtp=rtp,
-            transaction_class=InviteTransaction,
+            dialog_class=Dialog,
         )
         session.connection_made(transport)
         assert session.is_secure is True
@@ -52,7 +52,7 @@ class TestSessionInitiationProtocol:
         session = SessionInitiationProtocol(
             aor=SipUri.parse("sip:alice:secret@example.com"),
             rtp=rtp,
-            transaction_class=InviteTransaction,
+            dialog_class=Dialog,
         )
         session.connection_made(transport)
         assert session.is_secure is False
@@ -62,7 +62,7 @@ class TestSessionInitiationProtocol:
         session = SessionInitiationProtocol(
             aor=SipUri.parse("sips:alice:secret@example.com"),
             rtp=rtp,
-            transaction_class=InviteTransaction,
+            dialog_class=Dialog,
         )
         session.connection_made(fake_transport)
         if session.keepalive_task:
@@ -74,7 +74,7 @@ class TestSessionInitiationProtocol:
         session = SessionInitiationProtocol(
             aor=SipUri.parse("sips:alice:secret@example.com"),
             rtp=rtp,
-            transaction_class=InviteTransaction,
+            dialog_class=Dialog,
         )
         session.connection_made(fake_transport)
         assert session.keepalive_task is not None
@@ -152,10 +152,8 @@ class TestSessionInitiationProtocol:
         """Always include OPTIONS in allowed methods."""
         assert "OPTIONS" in sip.allowed_methods
 
-    def test_allowed_methods__includes_invite_when_transaction_class_has_handler(
-        self, sip
-    ):
-        """Include INVITE when transaction_class defines invite_received."""
+    def test_allowed_methods__includes_invite(self, sip):
+        """Always include INVITE since InviteTransaction defines invite_received."""
         assert SIPMethod.INVITE in sip.allowed_methods
 
     def test_allow_header__is_comma_separated_string(self, sip):
@@ -273,7 +271,7 @@ class TestSessionInitiationProtocol:
         session = SessionInitiationProtocol(
             aor=SipUri.parse("sip:alice:secret@example.com"),
             rtp=rtp,
-            transaction_class=InviteTransaction,
+            dialog_class=Dialog,
         )
         session.connection_made(transport)
         if session.keepalive_task:
@@ -286,7 +284,7 @@ class TestSessionInitiationProtocol:
         session = SessionInitiationProtocol(
             aor=SipUri.parse("sip:alice:secret@example.com"),
             rtp=rtp,
-            transaction_class=InviteTransaction,
+            dialog_class=Dialog,
         )
         session.connection_made(transport)
         assert "transport=tls" not in session.contact
@@ -297,7 +295,7 @@ class TestSessionInitiationProtocol:
         session = SessionInitiationProtocol(
             aor=SipUri(scheme="sips", host="example.com"),
             rtp=rtp,
-            transaction_class=InviteTransaction,
+            dialog_class=Dialog,
         )
         session.connection_made(transport)
         if session.keepalive_task:
@@ -349,7 +347,7 @@ class TestSessionInitiationProtocol:
         session = SessionInitiationProtocol(
             aor=SipUri.parse("sips:alice@example.com"),
             rtp=rtp,
-            transaction_class=InviteTransaction,
+            dialog_class=Dialog,
         )
         transport = fake_transport or FakeTransport()
         session.transport = transport

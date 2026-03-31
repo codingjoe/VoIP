@@ -20,10 +20,9 @@ def make_media() -> MediaDescription:
 
 
 def make_call(**kwargs) -> Session:
-    """Create an RTPCall with mock rtp/sip for unit testing."""
+    """Create an RTPCall with mock rtp for unit testing."""
     defaults: dict = {
         "rtp": MagicMock(spec=RealtimeTransportProtocol),
-        "sip": MagicMock(),
         "media": make_media(),
         "caller": CallerID(""),
     }
@@ -162,7 +161,7 @@ class TestRealtimeTransportProtocol:
 
         mux = RealtimeTransportProtocol()
         handler = RecordCall(
-            rtp=mux, sip=MagicMock(), media=make_media(), caller=CallerID("")
+            rtp=mux, media=make_media(), caller=CallerID("")
         )
         remote_addr = ("127.0.0.1", 5004)
         mux.register_call(remote_addr, handler)
@@ -189,7 +188,7 @@ class TestRealtimeTransportProtocol:
 
         mux = RealtimeTransportProtocol()
         handler = RecordCall(
-            rtp=mux, sip=MagicMock(), media=make_media(), caller=CallerID("")
+            rtp=mux, media=make_media(), caller=CallerID("")
         )
         mux.register_call(("127.0.0.1", 5004), handler)
         # 5 bytes is shorter than the 12-byte minimum RTP header — must not raise.
@@ -207,7 +206,7 @@ class TestRealtimeTransportProtocol:
         mux = RealtimeTransportProtocol()
         mux.connection_made(MagicMock(spec=asyncio.DatagramTransport))
         handler = RecordCall(
-            rtp=mux, sip=MagicMock(), media=make_media(), caller=CallerID("")
+            rtp=mux, media=make_media(), caller=CallerID("")
         )
         mux.register_call(None, handler)
         stun_bytes = b"\x01\x01" + b"\x00" * 18  # first byte = 1 (STUN range [0,3])
@@ -293,10 +292,10 @@ class TestRealtimeTransportProtocol:
         mux = RealtimeTransportProtocol()
         specific_addr = ("1.2.3.4", 5004)
         wildcard_handler = WildcardCall(
-            rtp=mux, sip=MagicMock(), media=make_media(), caller=CallerID("")
+            rtp=mux, media=make_media(), caller=CallerID("")
         )
         specific_handler = SpecificCall(
-            rtp=mux, sip=MagicMock(), media=make_media(), caller=CallerID("")
+            rtp=mux, media=make_media(), caller=CallerID("")
         )
         mux.register_call(None, wildcard_handler)
         mux.register_call(specific_addr, specific_handler)
@@ -318,7 +317,7 @@ class TestRealtimeTransportProtocol:
 
         mux = RealtimeTransportProtocol()
         handler = WildcardCall(
-            rtp=mux, sip=MagicMock(), media=make_media(), caller=CallerID("")
+            rtp=mux, media=make_media(), caller=CallerID("")
         )
         mux.register_call(None, handler)
 
@@ -338,7 +337,7 @@ class TestRealtimeTransportProtocol:
 
         mux = RealtimeTransportProtocol()
         handler = RecordCall(
-            rtp=mux, sip=MagicMock(), media=make_media(), caller=CallerID("")
+            rtp=mux, media=make_media(), caller=CallerID("")
         )
         remote_addr = ("5.6.7.8", 5004)
         mux.register_call(remote_addr, handler)
@@ -354,7 +353,7 @@ class TestRealtimeTransportProtocol:
 
         mux = RealtimeTransportProtocol()
         handler = Session(
-            rtp=mux, sip=MagicMock(), media=make_media(), caller=CallerID("")
+            rtp=mux, media=make_media(), caller=CallerID("")
         )
         with caplog.at_level(logging.INFO, logger="voip.rtp"):
             mux.register_call(("1.2.3.4", 5004), handler)
@@ -367,7 +366,7 @@ class TestRealtimeTransportProtocol:
 
         mux = RealtimeTransportProtocol()
         handler = Session(
-            rtp=mux, sip=MagicMock(), media=make_media(), caller=CallerID("")
+            rtp=mux, media=make_media(), caller=CallerID("")
         )
         addr = ("1.2.3.4", 5004)
         mux.register_call(addr, handler)
@@ -386,7 +385,7 @@ class TestRealtimeTransportProtocol:
 
         mux = RealtimeTransportProtocol()
         handler = CapturingCall(
-            rtp=mux, sip=MagicMock(), media=make_media(), caller=CallerID("")
+            rtp=mux, media=make_media(), caller=CallerID("")
         )
         mux.register_call(None, handler)
         packet = make_rtp_packet()
@@ -430,7 +429,6 @@ class TestSRTPIntegration:
         session = SRTPSession.generate()
         handler = SRTPCapture(
             rtp=mux,
-            sip=MagicMock(),
             media=make_media(),
             srtp=session,
             caller=CallerID(""),
@@ -462,7 +460,6 @@ class TestSRTPIntegration:
         session = SRTPSession.generate()
         handler = SRTPCapture(
             rtp=mux,
-            sip=MagicMock(),
             media=make_media(),
             srtp=session,
             caller=CallerID(""),
@@ -495,15 +492,13 @@ class TestSession:
         media = make_media()
         assert make_call(media=media).media is media
 
-    def test_rtp_and_sip_stored_as_fields(self):
-        """Rtp and sip back-references are stored on the instance."""
+    def test_rtp_stored_as_field(self):
+        """Rtp back-reference is stored on the instance."""
         mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
-        mock_sip = MagicMock()
         call = Session(
-            rtp=mock_rtp, sip=mock_sip, media=make_media(), caller=CallerID("")
+            rtp=mock_rtp, media=make_media(), caller=CallerID("")
         )
         assert call.rtp is mock_rtp
-        assert call.sip is mock_sip
 
     def test_packet_received__noop_by_default(self):
         """packet_received is a no-op in the base class."""
@@ -561,14 +556,15 @@ class TestSession:
             remote_party="sip:bob@biloxi.com;tag=callee-tag",
             remote_contact="sip:bob@192.0.2.2",
             outbound_cseq=2,
+            sip=mock_sip,
         )
         mock_sip.dialogs = {(dialog.remote_tag, dialog.local_tag): dialog}
         mock_sip.transactions = {}
-        call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
+        call = make_call(rtp=mock_rtp, dialog=dialog)
         hang_task = asyncio.create_task(call.hang_up())
         await asyncio.sleep(0)
         (tx,) = mock_sip.transactions.values()
-        tx.acknowledged.set()
+        tx.done.set()
         await hang_task
         mock_sip.send.assert_called_once()
         sent = mock_sip.send.call_args[0][0]
@@ -586,23 +582,24 @@ class TestSession:
         mock_sip.local_address = "192.0.2.1:5061"
         mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
         mock_rtp.calls = {}
+        transactions: dict = {}
+        mock_sip.transactions = transactions
         dialog = Dialog(
             call_id="test-call@example.com",
             local_party="sip:alice@example.com;tag=our-tag",
             remote_party="sip:bob@biloxi.com;tag=callee-tag",
             remote_contact="sip:bob@192.0.2.2",
             outbound_cseq=2,
+            sip=mock_sip,
         )
         mock_sip.dialogs = {(dialog.remote_tag, dialog.local_tag): dialog}
-        transactions: dict = {}
-        mock_sip.transactions = transactions
-        call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
+        call = make_call(rtp=mock_rtp, dialog=dialog)
         hang_task = asyncio.create_task(call.hang_up())
         await asyncio.sleep(0)
         (tx,) = transactions.values()
         assert isinstance(tx, ByeTransaction)
         assert tx.cseq == 2
-        tx.acknowledged.set()
+        tx.done.set()
         await hang_task
 
     async def test_hang_up__bye_transaction_cleaned_up_on_200(self):
@@ -614,17 +611,18 @@ class TestSession:
         mock_sip.local_address = "192.0.2.1:5061"
         mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
         mock_rtp.calls = {}
+        transactions: dict = {}
+        mock_sip.transactions = transactions
         dialog = Dialog(
             call_id="test-call@example.com",
             local_party="sip:alice@example.com;tag=our-tag",
             remote_party="sip:bob@biloxi.com;tag=callee-tag",
             remote_contact="sip:bob@192.0.2.2",
             outbound_cseq=2,
+            sip=mock_sip,
         )
         mock_sip.dialogs = {(dialog.remote_tag, dialog.local_tag): dialog}
-        transactions: dict = {}
-        mock_sip.transactions = transactions
-        call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
+        call = make_call(rtp=mock_rtp, dialog=dialog)
         hang_task = asyncio.create_task(call.hang_up())
         await asyncio.sleep(0)
         (tx,) = transactions.values()
@@ -642,7 +640,7 @@ class TestSession:
         assert tx.branch not in transactions
 
     async def test_hang_up__waits_for_bye_acknowledgment(self):
-        """hang_up blocks until the ByeTransaction is acknowledged."""
+        """hang_up blocks until the ByeTransaction is done."""
         from voip.sip.messages import Dialog
 
         mock_sip = MagicMock()
@@ -650,21 +648,22 @@ class TestSession:
         mock_sip.local_address = "192.0.2.1:5061"
         mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
         mock_rtp.calls = {}
+        mock_sip.transactions = {}
         dialog = Dialog(
             call_id="test-call@example.com",
             local_party="sip:alice@example.com;tag=our-tag",
             remote_party="sip:bob@biloxi.com;tag=callee-tag",
             remote_contact="sip:bob@192.0.2.2",
             outbound_cseq=2,
+            sip=mock_sip,
         )
         mock_sip.dialogs = {(dialog.remote_tag, dialog.local_tag): dialog}
-        mock_sip.transactions = {}
-        call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
+        call = make_call(rtp=mock_rtp, dialog=dialog)
         hang_task = asyncio.create_task(call.hang_up())
         await asyncio.sleep(0)
         assert not hang_task.done(), "hang_up() should still be waiting for BYE ack"
         (tx,) = mock_sip.transactions.values()
-        tx.acknowledged.set()
+        tx.done.set()
         await hang_task
         assert hang_task.done()
 
@@ -672,7 +671,7 @@ class TestSession:
         """hang_up logs a warning and continues when BYE is not acknowledged in time."""
         from voip.sip.messages import Dialog
 
-        class ShortTimeoutCall(Session):
+        class ShortTimeoutDialog(Dialog):
             BYE_ACK_TIMEOUT = 0.001  # 1 ms — expire immediately in tests
 
         mock_sip = MagicMock()
@@ -680,22 +679,17 @@ class TestSession:
         mock_sip.local_address = "192.0.2.1:5061"
         mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
         mock_rtp.calls = {}
-        dialog = Dialog(
+        mock_sip.transactions = {}
+        dialog = ShortTimeoutDialog(
             call_id="test-call@example.com",
             local_party="sip:alice@example.com;tag=our-tag",
             remote_party="sip:bob@biloxi.com;tag=callee-tag",
             remote_contact="sip:bob@192.0.2.2",
             outbound_cseq=2,
+            sip=mock_sip,
         )
         mock_sip.dialogs = {(dialog.remote_tag, dialog.local_tag): dialog}
-        mock_sip.transactions = {}
-        call = ShortTimeoutCall(
-            sip=mock_sip,
-            rtp=mock_rtp,
-            media=make_media(),
-            caller=CallerID(""),
-            dialog=dialog,
-        )
+        call = make_call(rtp=mock_rtp, dialog=dialog)
         await call.hang_up()  # must not raise despite no 200 OK
 
     async def test_hang_up__removes_dialog(self):
@@ -707,19 +701,20 @@ class TestSession:
         mock_sip.local_address = "192.0.2.1:5061"
         mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
         mock_rtp.calls = {}
+        mock_sip.transactions = {}
         dialog = Dialog(
             call_id="test-call@example.com",
             local_party="sip:alice@example.com;tag=our-tag",
             remote_party="sip:bob@biloxi.com;tag=callee-tag",
             remote_contact="sip:bob@192.0.2.2",
+            sip=mock_sip,
         )
         mock_sip.dialogs = {(dialog.remote_tag, dialog.local_tag): dialog}
-        mock_sip.transactions = {}
-        call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
+        call = make_call(rtp=mock_rtp, dialog=dialog)
         hang_task = asyncio.create_task(call.hang_up())
         await asyncio.sleep(0)
         (tx,) = mock_sip.transactions.values()
-        tx.acknowledged.set()
+        tx.done.set()
         await hang_task
         assert (dialog.remote_tag, dialog.local_tag) not in mock_sip.dialogs
 
@@ -731,21 +726,22 @@ class TestSession:
         mock_sip.aor.transport = "TLS"
         mock_sip.local_address = "192.0.2.1:5061"
         mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
+        mock_sip.transactions = {}
         dialog = Dialog(
             call_id="test-call@example.com",
             local_party="sip:alice@example.com;tag=our-tag",
             remote_party="sip:bob@biloxi.com;tag=callee-tag",
             remote_contact="sip:bob@192.0.2.2",
+            sip=mock_sip,
         )
         mock_sip.dialogs = {(dialog.remote_tag, dialog.local_tag): dialog}
-        mock_sip.transactions = {}
-        call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
+        call = make_call(rtp=mock_rtp, dialog=dialog)
         remote_addr = ("192.0.2.2", 5004)
         mock_rtp.calls = {remote_addr: call}
         hang_task = asyncio.create_task(call.hang_up())
         await asyncio.sleep(0)
         (tx,) = mock_sip.transactions.values()
-        tx.acknowledged.set()
+        tx.done.set()
         await hang_task
         mock_rtp.unregister_call.assert_called_once_with(remote_addr)
 
@@ -757,20 +753,21 @@ class TestSession:
         mock_sip.aor.transport = "TLS"
         mock_sip.local_address = "192.0.2.1:5061"
         mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
+        mock_sip.transactions = {}
         dialog = Dialog(
             call_id="test-call@example.com",
             local_party="sip:alice@example.com;tag=our-tag",
             remote_party="sip:bob@biloxi.com;tag=callee-tag",
             remote_contact="sip:bob@192.0.2.2",
+            sip=mock_sip,
         )
         mock_sip.dialogs = {(dialog.remote_tag, dialog.local_tag): dialog}
-        mock_sip.transactions = {}
-        call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
+        call = make_call(rtp=mock_rtp, dialog=dialog)
         mock_rtp.calls = {None: call}  # wildcard registration
         hang_task = asyncio.create_task(call.hang_up())
         await asyncio.sleep(0)
         (tx,) = mock_sip.transactions.values()
-        tx.acknowledged.set()
+        tx.done.set()
         await hang_task
         mock_rtp.unregister_call.assert_called_once_with(None)
 
@@ -783,19 +780,20 @@ class TestSession:
         mock_sip.local_address = "192.0.2.1:5061"
         mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
         mock_rtp.calls = {}  # call not registered
+        mock_sip.transactions = {}
         dialog = Dialog(
             call_id="test-call@example.com",
             local_party="sip:alice@example.com;tag=our-tag",
             remote_party="sip:bob@biloxi.com;tag=callee-tag",
             remote_contact="sip:bob@192.0.2.2",
+            sip=mock_sip,
         )
         mock_sip.dialogs = {(dialog.remote_tag, dialog.local_tag): dialog}
-        mock_sip.transactions = {}
-        call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
+        call = make_call(rtp=mock_rtp, dialog=dialog)
         hang_task = asyncio.create_task(call.hang_up())
         await asyncio.sleep(0)
         (tx,) = mock_sip.transactions.values()
-        tx.acknowledged.set()
+        tx.done.set()
         await hang_task
         mock_rtp.unregister_call.assert_not_called()
 
@@ -806,8 +804,12 @@ class TestSession:
         mock_sip = MagicMock()
         mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
         mock_rtp.calls = {}
-        dialog = Dialog(call_id="test@example.com", remote_contact="sip:bob@192.0.2.2")
-        call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
+        dialog = Dialog(
+            call_id="test@example.com",
+            remote_contact="sip:bob@192.0.2.2",
+            sip=mock_sip,
+        )
+        call = make_call(rtp=mock_rtp, dialog=dialog)
         await call.hang_up()
         mock_sip.send.assert_not_called()
 
@@ -822,7 +824,8 @@ class TestSession:
             call_id="test@example.com",
             local_party="sip:alice@example.com;tag=our-tag",
             remote_party="sip:bob@biloxi.com;tag=callee-tag",
+            sip=mock_sip,
         )
-        call = make_call(sip=mock_sip, rtp=mock_rtp, dialog=dialog)
+        call = make_call(rtp=mock_rtp, dialog=dialog)
         await call.hang_up()
         mock_sip.send.assert_not_called()

@@ -1,5 +1,3 @@
-# Cookbook
-
 ## Call Transcription
 
 Subclass \[`TranscribeCall`\][voip.ai.TranscribeCall] and override
@@ -11,6 +9,7 @@ import asyncio
 import ssl
 
 from voip.ai import TranscribeCall
+from voip.sip.messages import Dialog
 from voip.sip.protocol import SIP
 
 
@@ -19,9 +18,14 @@ class MyCall(TranscribeCall):
         print(f"[{self.caller}] {text}")
 
 
+class MyDialog(Dialog):
+    def call_received(self) -> None:
+        self.ringing()
+        self.accept(call_class=MyCall)
+
+
 class MySession(SIP):
-    def call_received(self, request) -> None:
-        asyncio.create_task(self.answer(request=request, call_class=MyCall))
+    dialog_class = MyDialog
 
 
 async def main():
@@ -74,6 +78,7 @@ import ssl
 from pocket_tts import TTSModel
 
 from voip.ai import AgentCall
+from voip.sip.messages import Dialog
 from voip.sip.protocol import SIP
 
 shared_tts = TTSModel.load_model()
@@ -86,9 +91,14 @@ class MyCall(AgentCall):
     voice = "azelma"
 
 
+class MyDialog(Dialog):
+    def call_received(self) -> None:
+        self.ringing()
+        self.accept(call_class=MyCall)
+
+
 class MySession(SIP):
-    def call_received(self, request) -> None:
-        asyncio.create_task(self.answer(request=request, call_class=MyCall))
+    dialog_class = MyDialog
 
 
 async def main():
@@ -203,8 +213,13 @@ session = SIP(
 
 Every \[`Session`\][voip.rtp.Session] subclass exposes a
 \[`hang_up`\][voip.rtp.Session.hang_up] coroutine that sends a proper SIP BYE
-request (RFC 3261 §15) to terminate the active dialog and deregisters the RTP
-handler. You can call it programmatically from within any call class:
+request (RFC 3261 §15) by delegating to
+\[`Dialog.bye`\][voip.sip.messages.Dialog.bye].  It deregisters the RTP
+handler and awaits the 200 OK acknowledgment before returning.
+
+Override \[`Dialog.call_received`\][voip.sip.messages.Dialog.call_received]
+to hook into the call lifecycle, and call `await self.hang_up()` from within
+the call class when you want to terminate:
 
 ```python
 import asyncio
@@ -213,6 +228,7 @@ import ssl
 import numpy as np
 
 from voip.audio import AudioCall
+from voip.sip.messages import Dialog
 from voip.sip.protocol import SIP
 
 
@@ -221,12 +237,19 @@ class OneUtteranceCall(AudioCall):
 
     async def voice_received(self, audio: np.ndarray) -> None:
         await self.hang_up()
-        self.sip.close()  # close the SIP transport after hanging up
+        # dialog.sip.close() to also shut down the SIP transport:
+        if self.dialog and self.dialog.sip:
+            self.dialog.sip.close()
+
+
+class MyDialog(Dialog):
+    def call_received(self) -> None:
+        self.ringing()
+        self.accept(call_class=OneUtteranceCall)
 
 
 class MySession(SIP):
-    def call_received(self, request) -> None:
-        asyncio.create_task(self.answer(request=request, call_class=OneUtteranceCall))
+    dialog_class = MyDialog
 
 
 async def main():
@@ -250,5 +273,61 @@ asyncio.run(main())
 \[`hang_up`\][voip.rtp.Session.hang_up] sends the BYE and cleans up the dialog
 and RTP handler — it does **not** close the SIP transport so that the same
 \[`SIP`\][voip.sip.protocol.SessionInitiationProtocol] instance can continue
-handling other calls. Call `sip.close()` when you also want to tear down the
-transport.
+handling other calls. Access `self.dialog.sip.close()` when you also want to
+tear down the transport.
+
+## Making Outbound Calls
+
+Create a \[`Dialog`\][voip.sip.messages.Dialog] subclass, set it as
+`dialog_class` on your SIP session, and call
+\[`dialog.dial`\][voip.sip.messages.Dialog.dial] from
+\[`on_registered`\][voip.sip.protocol.SessionInitiationProtocol.on_registered]:
+
+```python
+import asyncio
+import ssl
+
+from voip.audio import AudioCall
+from voip.sip.messages import Dialog
+from voip.sip.protocol import SIP
+
+
+class MyCall(AudioCall):
+    pass
+
+
+class OutboundDialog(Dialog):
+    def hangup_received(self) -> None:
+        """Remote party hung up — close the SIP transport."""
+        if self.sip:
+            self.sip.close()
+
+
+class MySession(SIP):
+    dialog_class = OutboundDialog
+
+    def on_registered(self) -> None:
+        dialog = OutboundDialog(sip=self)
+        asyncio.create_task(
+            dialog.dial("sip:+15551234567@carrier.com", call_class=MyCall)
+        )
+
+
+async def main():
+    loop = asyncio.get_running_loop()
+    await loop.create_connection(
+        lambda: MySession(
+            aor="sips:alice@carrier.com",
+            username="alice",
+            password="secret",
+        ),
+        host="sip.carrier.com",
+        port=5061,
+        ssl=ssl.create_default_context(),
+    )
+    await asyncio.Future()
+
+
+asyncio.run(main())
+```
+

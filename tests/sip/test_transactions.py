@@ -1,5 +1,8 @@
 """Tests for the SIP transaction layer."""
 
+import asyncio
+import dataclasses
+
 import pytest
 from voip.rtp import RealtimeTransportProtocol
 from voip.sip.exceptions import RegistrationError
@@ -26,6 +29,7 @@ TEST_PASSWORD = "secret"  # noqa: S105
 
 def create_sip_session(fake_transport=None, rtp=None):
     """Create a minimal SessionInitiationProtocol without async event loop."""
+    from voip.sip.messages import Dialog
     from voip.sip.protocol import SessionInitiationProtocol
 
     transport = fake_transport or FakeTransport()
@@ -33,7 +37,7 @@ def create_sip_session(fake_transport=None, rtp=None):
     session = SessionInitiationProtocol(
         aor=SipUri.parse("sips:alice:secret@example.com"),
         rtp=mux,
-        transaction_class=InviteTransaction,
+        dialog_class=Dialog,
     )
     # Set up local_address without triggering async registration
     import ipaddress
@@ -98,6 +102,17 @@ class TestTransaction:
             cseq=1,
         )
         assert tx.response_received(Response(status_code=200, phrase="OK")) is None
+
+    async def test_await__suspends_until_done_is_set(self):
+        """Awaiting a transaction suspends until done.set() is called."""
+        sip = create_sip_session()
+        tx = InviteTransaction(sip=sip, method=SIPMethod.INVITE, cseq=1)
+        task = asyncio.create_task(asyncio.wait_for(asyncio.shield(tx), timeout=1.0))
+        await asyncio.sleep(0)
+        assert not task.done()
+        tx.done.set()
+        await task
+        assert task.done()
 
     def test_send_response__calls_sip_send(self):
         """Send a response through the SIP layer."""
@@ -429,7 +444,7 @@ class TestRegistrationTransaction:
         session = TrackingSession(
             aor=SipUri.parse("sips:alice:secret@example.com"),
             rtp=mux,
-            transaction_class=InviteTransaction,
+            dialog_class=Dialog,
         )
         session.transport = transport
         session.local_address = NetworkAddress(ipaddress.ip_address("127.0.0.1"), 5061)
@@ -450,12 +465,17 @@ class TestRegistrationTransaction:
 
 
 class TestInviteTransaction:
-    def test_invite_received__is_noop(self):
-        """invite_received base implementation does nothing."""
-        sip = create_sip_session()
+    def test_invite_received__delegates_to_dialog(self):
+        """invite_received sets dialog.invite_tx, dialog.sip and calls dialog.call_received()."""
+        transport = FakeTransport()
+        sip = create_sip_session(fake_transport=transport)
         request = Message.parse(INVITE_BYTES)
         tx = InviteTransaction.from_request(request=request, sip=sip)
-        assert tx.invite_received(request) is None
+        # Base Dialog.call_received() rejects with 486.
+        tx.invite_received(request)
+        assert tx.dialog.invite_tx is tx
+        assert tx.dialog.sip is sip
+        assert any(b"486" in data for data in transport.sent)
 
     def test_ack_received__removes_transaction(self):
         """ack_received removes the transaction from sip.transactions."""
@@ -475,9 +495,10 @@ class TestInviteTransaction:
         )
         tx.ack_received(ack)
         assert tx.branch not in sip.transactions
+        assert tx.done.is_set()
 
     def test_bye_received__removes_dialog_and_sends_200(self):
-        """bye_received removes the dialog and sends 200 OK."""
+        """bye_received removes the dialog, sends 200 OK, and calls hangup_received."""
         transport = FakeTransport()
         sip = create_sip_session(fake_transport=transport)
         request = Message.parse(INVITE_BYTES)
@@ -496,6 +517,42 @@ class TestInviteTransaction:
         tx.bye_received(bye)
         assert any(b"200" in data for data in transport.sent)
         assert (tx.dialog.remote_tag, tx.dialog.local_tag) not in sip.dialogs
+
+    def test_bye_received__calls_hangup_received(self):
+        """bye_received calls dialog.hangup_received() after sending 200 OK."""
+        transport = FakeTransport()
+        sip = create_sip_session(fake_transport=transport)
+        request = Message.parse(INVITE_BYTES)
+
+        hangup_calls: list[bool] = []
+
+        @dataclasses.dataclass(kw_only=True)
+        class TrackingDialog(Dialog):
+            def hangup_received(self) -> None:
+                hangup_calls.append(True)
+
+        tx = InviteTransaction.from_request(request=request, sip=sip)
+        # Replace dialog with TrackingDialog instance that has the same identity fields
+        tracking_dialog = TrackingDialog(
+            call_id=tx.dialog.call_id,
+            local_tag=tx.dialog.local_tag,
+            remote_tag=tx.dialog.remote_tag,
+            remote_contact=tx.dialog.remote_contact,
+        )
+        tx.dialog = tracking_dialog
+        sip.dialogs[(tracking_dialog.remote_tag, tracking_dialog.local_tag)] = tracking_dialog
+
+        bye = Message.parse(
+            b"BYE sip:alice@example.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/TLS 192.0.2.1:5061;branch=z9hG4bKbye002\r\n"
+            b"From: sip:bob@biloxi.com;tag=from-tag-1\r\n"
+            b"To: sip:alice@example.com\r\n"
+            b"Call-ID: test-call-id@biloxi.com\r\n"
+            b"CSeq: 2 BYE\r\n"
+            b"\r\n"
+        )
+        tx.bye_received(bye)
+        assert hangup_calls == [True]
 
     def test_cancel_received__removes_transaction_and_sends_200(self):
         """cancel_received removes the transaction, the dialog, and sends 200 OK."""
@@ -684,6 +741,22 @@ class TestInviteTransaction:
         sent_data = b"".join(transport.sent)
         assert b"application/sdp" in sent_data
         assert b"m=audio" in sent_data
+
+    async def test_make_call__with_existing_dialog_reuses_it(self):
+        """make_call() with a dialog parameter reuses that dialog instance."""
+        import ipaddress
+
+        from voip.types import NetworkAddress
+
+        transport = FakeTransport()
+        rtp = RealtimeTransportProtocol()
+        rtp.public_address = NetworkAddress(ipaddress.ip_address("192.0.2.1"), 5004)
+        sip = create_sip_session(fake_transport=transport, rtp=rtp)
+        existing_dialog = Dialog()
+        tx = InviteTransaction(sip=sip, method=SIPMethod.INVITE, cseq=1)
+        await tx.make_call("sip:bob@biloxi.com", call_class=CallFixture, dialog=existing_dialog)
+        assert tx.dialog is existing_dialog
+        assert existing_dialog.sip is sip
 
     def test_response_received__100_is_noop(self):
         """1xx provisional responses are silently ignored."""
@@ -1071,7 +1144,7 @@ class TestByeTransaction:
         )
         tx.response_received(response)
         assert tx.branch not in sip.transactions
-        assert tx.acknowledged.is_set()
+        assert tx.done.is_set()
 
     def test_response_received__ignores_provisional_response(self):
         """response_received leaves the transaction in place for 1xx responses."""
@@ -1090,7 +1163,7 @@ class TestByeTransaction:
         )
         tx.response_received(response)
         assert tx.branch in sip.transactions
-        assert not tx.acknowledged.is_set()
+        assert not tx.done.is_set()
 
 
 class TestRegistrationError:

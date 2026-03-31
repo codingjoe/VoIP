@@ -186,11 +186,12 @@ class SayCall(TTSMixin, AudioCall):
         """Send BYE and close the SIP transport.
 
         Extends the base [`hang_up`][voip.rtp.Session.hang_up] by also
-        closing the SIP transport after the BYE is sent, terminating the
+        closing the SIP transport after the BYE is acknowledged, terminating the
         single-shot outbound call session.
         """
         await super().hang_up()
-        self.sip.close()
+        if self.dialog is not None and self.dialog.sip is not None:
+            self.dialog.sip.close()
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)

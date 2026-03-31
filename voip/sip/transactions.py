@@ -52,6 +52,9 @@ class Transaction:
     """
     Initiated by a request, completed by any number of responses.
 
+    Transactions are awaitable: ``await tx`` suspends until the transaction
+    reaches its terminal state (i.e. until ``tx.done`` is set).
+
     Args:
         dialog: The SIP dialog this transaction belongs to.
         branch: Unique identifier for the transaction, must start with "z9hG4bK".
@@ -72,6 +75,13 @@ class Transaction:
         init=False, default_factory=list
     )
     dialog: Dialog = None
+    done: asyncio.Event = dataclasses.field(
+        init=False,
+        default_factory=asyncio.Event,
+        compare=False,
+        hash=False,
+        repr=False,
+    )
 
     created: datetime.datetime = dataclasses.field(
         init=False, default_factory=datetime.datetime.now
@@ -80,6 +90,10 @@ class Transaction:
     def __post_init__(self):
         if not self.branch.startswith(self.branch_prefix):
             raise ValueError(f"Branch parameter must start with {self.branch_prefix!r}")
+
+    def __await__(self) -> typing.Generator[typing.Any, None, None]:
+        """Await the transaction reaching its terminal state."""
+        return self.done.wait().__await__()
 
     @property
     def headers(self) -> dict[str, str]:
@@ -106,7 +120,8 @@ class Transaction:
         try:
             dialog = sip.dialogs[request.remote_tag, request.local_tag]
         except KeyError:
-            dialog = Dialog.from_request(request)
+            dialog_class = getattr(sip, "dialog_class", Dialog)
+            dialog = dialog_class.from_request(request)
         return cls(
             sip=sip,
             dialog=dialog,
@@ -171,6 +186,7 @@ class RegistrationTransaction(Transaction):
         match response.status_code:
             case SIPStatus.OK:
                 logger.info("Registration successful")
+                self.done.set()
                 self.sip.on_registered()
                 return
             case SIPStatus.UNAUTHORIZED | SIPStatus.PROXY_AUTHENTICATION_REQUIRED:
@@ -320,30 +336,26 @@ class RegistrationTransaction(Transaction):
 
 @dataclasses.dataclass(kw_only=True, slots=True)
 class InviteTransaction(Transaction):
-    """SIP INVITE server transaction [RFC 3261 §17.2].
+    """SIP INVITE transaction for inbound and outbound calls [RFC 3261 §17].
 
-    Encapsulates the state and behavior of a single INVITE dialog.
-    The SIP layer creates one instance per incoming INVITE, keyed by
-    Via branch (RFC 3261 §17.1.3).
+    Handles the SIP signaling state machine for a single INVITE dialog.  The
+    SIP layer creates one instance per incoming INVITE, keyed by Via branch
+    (RFC 3261 §17.1.3).
 
-    Override `call_received` in a subclass to react to the call without
-    subclassing
-    [`SessionInitiationProtocol`][voip.sip.protocol.SessionInitiationProtocol]:
+    For inbound call handling, subclass [`Dialog`][voip.sip.messages.Dialog]
+    and override [`call_received`][voip.sip.messages.Dialog.call_received]:
 
     ```python
-    class MyTransaction(Transaction):
+    class MyDialog(Dialog):
         def call_received(self) -> None:
-            asyncio.create_task(self.answer(call_class=MyCall))
-    ```
+            self.ringing()
+            self.accept(call_class=MyCall)
 
-    Register the subclass on the session:
-
-    ```python
     class MySession(SessionInitiationProtocol):
-        transaction_class = MyTransaction
+        dialog_class = MyDialog
     ```
 
-    [RFC 3261 §17.2]: https://datatracker.ietf.org/doc/html/rfc3261#section-17.2
+    [RFC 3261 §17]: https://datatracker.ietf.org/doc/html/rfc3261#section-17
     """
 
     pending_call_class: type[Session] | None = dataclasses.field(
@@ -354,31 +366,39 @@ class InviteTransaction(Transaction):
     )
 
     def invite_received(self, request: Request) -> None:
-        """Handle the incoming call.
+        """Handle an incoming INVITE by delegating to the dialog.
 
-        Override in subclasses to decide whether to answer, ring, or reject.
-        Implementations are expected to produce a response by calling
-        `ringing`, `answer`, or `reject`. The base implementation is a no-op.
+        Wires up [`dialog.invite_tx`][voip.sip.messages.Dialog.invite_tx] and
+        [`dialog.sip`][voip.sip.messages.Dialog.sip], then calls
+        [`dialog.call_received`][voip.sip.messages.Dialog.call_received] so
+        that application logic lives in the dialog subclass.
 
         Args:
             request: The SIP INVITE request.
         """
+        self.dialog.invite_tx = self
+        self.dialog.sip = self.sip
+        self.dialog.call_received()
 
     def ack_received(self, request: Request) -> None:
         """Handle an ACK confirming dialog establishment (RFC 3261 §17.2.1).
 
-        Removes the INVITE server transaction from the registry.  Override
-        in subclasses to react to the ACK.
+        Removes the INVITE server transaction from the registry and marks the
+        transaction as done.
 
         Args:
             request: The SIP ACK request.
         """
         self.sip.transactions.pop(self.branch)
+        self.done.set()
 
     def bye_received(self, request: Request) -> None:
         """Handle a BYE terminating a dialog.
 
-        Override in subclasses to tear down the call.
+        Removes the dialog from the registry, sends a 200 OK, and calls
+        [`dialog.hangup_received`][voip.sip.messages.Dialog.hangup_received]
+        so application code can perform teardown (e.g. closing the SIP
+        transport for single-shot sessions).
 
         Args:
             request: The SIP BYE request.
@@ -392,12 +412,10 @@ class InviteTransaction(Transaction):
                 phrase=SIPStatus.OK.phrase,
             )
         )
+        self.dialog.hangup_received()
 
     def cancel_received(self, request: Request) -> None:
         """Handle a CANCEL request for a pending INVITE.
-
-        Override in subclasses to react to caller cancellation before the call
-        is answered.
 
         Args:
             request: The SIP CANCEL request.
@@ -451,11 +469,13 @@ class InviteTransaction(Transaction):
         """Answer the call by setting up RTP and sending 200 OK with SDP.
 
         Example:
-            Call from within `call_received`:
+            Call from within [`Dialog.call_received`][voip.sip.messages.Dialog.call_received]
+            via [`Dialog.accept`][voip.sip.messages.Dialog.accept]:
 
             ```python
-            def call_received(self) -> None:
-                asyncio.create_task(self.answer(call_class=MyCall))
+            class MyDialog(Dialog):
+                def call_received(self) -> None:
+                    self.accept(call_class=MyCall)
             ```
 
         Args:
@@ -495,13 +515,13 @@ class InviteTransaction(Transaction):
         srtp_session = SRTPSession.generate() if use_srtp else None
 
         dialog = Dialog.from_request(self.request)
+        dialog.sip = self.sip
         dialog.local_party = f"{self.request.headers['To']};tag={dialog.remote_tag}"
         dialog.remote_party = str(self.request.headers["From"])
         self.sip.dialogs[dialog.remote_tag, dialog.local_tag] = dialog
 
         call_handler = call_class(
             rtp=self.sip.rtp,
-            sip=self.sip,
             caller=caller,
             media=negotiated_media,
             srtp=srtp_session,
@@ -586,6 +606,7 @@ class InviteTransaction(Transaction):
         target: str,
         *,
         call_class: type[Session],
+        dialog: Dialog | None = None,
         **call_kwargs: typing.Any,
     ) -> Request:
         """Initiate an outgoing call to `target`.
@@ -595,9 +616,14 @@ class InviteTransaction(Transaction):
         answers (200 OK), `_accept_call` completes the setup, sends the ACK,
         and registers the RTP call handler.
 
+        Prefer calling this indirectly via
+        [`Dialog.dial`][voip.sip.messages.Dialog.dial].
+
         Args:
             target: SIP URI of the callee (e.g. ``"sip:+15551234567@carrier.com"``).
             call_class: Session implementation that will be initialized for the call.
+            dialog: Existing dialog to use.  When ``None`` a new dialog is
+                created from the SIP session's AOR.
             **call_kwargs: Additional keyword arguments forwarded to the
                 call class constructor.
 
@@ -608,8 +634,13 @@ class InviteTransaction(Transaction):
         self.pending_call_kwargs = call_kwargs
 
         target_uri = types.SipUri.parse(target)
-        dialog = Dialog(uac=self.sip.aor)
-        self.dialog = dialog
+        if dialog is not None:
+            self.dialog = dialog
+            if self.dialog.uac is None:
+                self.dialog.uac = self.sip.aor
+        else:
+            self.dialog = Dialog(uac=self.sip.aor)
+        self.dialog.sip = self.sip
 
         rtp_public = self.sip.rtp.public_address
         session_id = str(secrets.randbelow(2**32) + 1)
@@ -648,10 +679,10 @@ class InviteTransaction(Transaction):
             headers={
                 "Max-Forwards": "70",
                 **self.headers,
-                "From": dialog.from_header,
+                "From": self.dialog.from_header,
                 "To": str(target_uri),
                 "Contact": self.sip.contact,
-                "Call-ID": dialog.call_id,
+                "Call-ID": self.dialog.call_id,
                 "Route": f"<sip:{str(rtp_public[0])}:5060;transport=tcp;lr>",
                 "Allow": self.sip.allow_header,
                 "User-Agent": f"python/voip/{voip.__version__}",
@@ -728,7 +759,6 @@ class InviteTransaction(Transaction):
         if self.pending_call_class is not None:
             call_handler = self.pending_call_class(
                 rtp=self.sip.rtp,
-                sip=self.sip,
                 caller=CallerID(str(self.sip.aor)),
                 media=negotiated_media,
                 srtp=None,
@@ -804,6 +834,7 @@ class InviteTransaction(Transaction):
             )
         )
         self.sip.transactions.pop(self.branch, None)
+        self.done.set()
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -814,38 +845,38 @@ class ByeTransaction(Transaction):
     200 OK acknowledgment from the remote party.  Unlike INVITE, BYE responses
     do **not** require an ACK — the 200 OK itself ends the transaction.
 
-    This class is created by [`Session.hang_up`][voip.rtp.Session.hang_up]
-    and registered in the SIP session's transaction table so that the
-    200 OK response is routed back here and the transaction is cleaned up.
-    [`Session.hang_up`][voip.rtp.Session.hang_up] awaits
-    [`acknowledged`][voip.sip.transactions.ByeTransaction.acknowledged] to
-    ensure the remote party has received the BYE before returning.
+    Awaiting a `ByeTransaction` suspends until the remote party sends a final
+    (2xx+) response:
+
+    ```python
+    tx = ByeTransaction(sip=sip, method=SIPMethod.BYE, cseq=2, dialog=dialog)
+    sip.transactions[tx.branch] = tx
+    sip.send(bye_request)
+    await asyncio.wait_for(tx, timeout=32.0)
+    ```
+
+    This transaction is created and awaited by
+    [`Dialog.bye`][voip.sip.messages.Dialog.bye].
 
     [RFC 3261 §17.1.2]: https://datatracker.ietf.org/doc/html/rfc3261#section-17.1.2
     """
 
     cseq: int = 1
-    acknowledged: asyncio.Event = dataclasses.field(
-        default_factory=asyncio.Event,
-        compare=False,
-        hash=False,
-        repr=False,
-    )
 
     def response_received(self, response: Response) -> None:
         """Handle the BYE response (typically 200 OK) [RFC 3261 §15.1.1].
 
         Removes this transaction from the SIP session once any final (2xx–6xx)
         response is received.  Provisional 1xx responses are silently ignored.
-        Sets [`acknowledged`][voip.sip.transactions.ByeTransaction.acknowledged]
-        so that [`Session.hang_up`][voip.rtp.Session.hang_up] can unblock.
+        Sets [`Transaction.done`][voip.sip.transactions.Transaction.done]
+        so that anything awaiting this transaction can unblock.
 
         Args:
             response: The parsed SIP response to our BYE request.
         """
         if response.status_code >= 200:
             self.sip.transactions.pop(self.branch, None)
-            self.acknowledged.set()
+            self.done.set()
             logger.debug(
                 "BYE acknowledged: %s %s", response.status_code, response.phrase
             )

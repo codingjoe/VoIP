@@ -136,6 +136,11 @@ class TestMessage:
         with pytest.raises(ValueError, match="Invalid header"):
             messages.Message.parse(b"TOOSHORT\r\n\r\n")
 
+    def test_parse__raises_value_error_on_malformed_request_line(self):
+        """Raise ValueError when the request first line has too few parts."""
+        with pytest.raises(ValueError, match="Invalid SIP message first line"):
+            messages.Message.parse(b"INVITE sip:bob\r\nContent-Length: 0\r\n\r\n")
+
     def test___str____returns_decoded_bytes(self):
         """Return the string representation of a request as decoded bytes."""
         request = messages.Request(
@@ -359,3 +364,147 @@ class TestDialog:
         assert dialog.call_id == "call-99@atlanta.com"
         assert dialog.local_tag == "from-tag-99"
         assert dialog.remote_tag is not None
+
+    def test_ringing__delegates_to_invite_tx(self):
+        """ringing() calls ringing() on the invite_tx when it is set."""
+        from unittest.mock import MagicMock
+
+        mock_tx = MagicMock()
+        dialog = messages.Dialog(invite_tx=mock_tx)
+        dialog.ringing()
+        mock_tx.ringing.assert_called_once()
+
+    def test_ringing__noop_when_no_invite_tx(self):
+        """ringing() is a no-op when invite_tx is None."""
+        dialog = messages.Dialog()
+        dialog.ringing()  # must not raise
+
+    def test_accept__delegates_to_invite_tx(self):
+        """accept() calls answer() on the invite_tx when it is set."""
+        from unittest.mock import MagicMock
+
+        class FakeCall:
+            pass
+
+        mock_tx = MagicMock()
+        dialog = messages.Dialog(invite_tx=mock_tx)
+        dialog.accept(call_class=FakeCall)
+        mock_tx.answer.assert_called_once_with(call_class=FakeCall)
+
+    def test_accept__noop_when_no_invite_tx(self):
+        """accept() is a no-op when invite_tx is None."""
+        dialog = messages.Dialog()
+        dialog.accept(call_class=object)  # must not raise
+
+    def test_reject__delegates_to_invite_tx(self):
+        """reject() calls reject() on the invite_tx when it is set."""
+        from unittest.mock import MagicMock
+        from voip.sip.types import SIPStatus
+
+        mock_tx = MagicMock()
+        dialog = messages.Dialog(invite_tx=mock_tx)
+        dialog.reject(SIPStatus.NOT_FOUND)
+        mock_tx.reject.assert_called_once_with(SIPStatus.NOT_FOUND)
+
+    def test_reject__noop_when_no_invite_tx(self):
+        """reject() is a no-op when invite_tx is None."""
+        dialog = messages.Dialog()
+        dialog.reject()  # must not raise
+
+    def test_call_received__rejects_by_default(self):
+        """call_received() rejects the call with 486 Busy Here by default."""
+        from unittest.mock import MagicMock
+
+        mock_tx = MagicMock()
+        dialog = messages.Dialog(invite_tx=mock_tx)
+        dialog.call_received()
+        mock_tx.reject.assert_called_once()
+
+    def test_hangup_received__is_noop(self):
+        """hangup_received() base implementation does nothing."""
+        dialog = messages.Dialog()
+        dialog.hangup_received()  # must not raise
+
+    async def test_bye__noop_when_sip_is_none(self):
+        """bye() is a no-op when sip is not set."""
+        dialog = messages.Dialog()
+        await dialog.bye()  # must not raise
+
+    async def test_bye__sends_bye_request(self):
+        """bye() sends a BYE request via dialog.sip."""
+        from unittest.mock import MagicMock
+
+        mock_sip = MagicMock()
+        mock_sip.aor.transport = "TLS"
+        mock_sip.local_address = "127.0.0.1:5061"
+        mock_sip.transactions = {}
+        mock_sip.dialogs = {}
+        dialog = messages.Dialog(
+            call_id="test@example.com",
+            local_party="sip:alice@example.com;tag=a",
+            remote_party="sip:bob@biloxi.com;tag=b",
+            remote_contact="sip:bob@192.0.2.2",
+            outbound_cseq=1,
+            sip=mock_sip,
+        )
+        import asyncio
+
+        bye_task = asyncio.create_task(dialog.bye())
+        await asyncio.sleep(0)
+        (tx,) = mock_sip.transactions.values()
+        tx.done.set()
+        await bye_task
+        mock_sip.send.assert_called_once()
+
+    async def test_bye__noop_when_local_party_missing(self):
+        """bye() is a no-op when local_party is not set."""
+        from unittest.mock import MagicMock
+
+        mock_sip = MagicMock()
+        dialog = messages.Dialog(
+            remote_contact="sip:bob@192.0.2.2",
+            sip=mock_sip,
+        )
+        await dialog.bye()
+        mock_sip.send.assert_not_called()
+
+    async def test_bye__noop_when_remote_contact_missing(self):
+        """bye() is a no-op when remote_contact is not set."""
+        from unittest.mock import MagicMock
+
+        mock_sip = MagicMock()
+        dialog = messages.Dialog(
+            local_party="sip:alice@example.com;tag=a",
+            remote_party="sip:bob@biloxi.com;tag=b",
+            sip=mock_sip,
+        )
+        await dialog.bye()
+        mock_sip.send.assert_not_called()
+
+    async def test_dial__creates_invite_transaction_and_sends(self):
+        """dial() creates an InviteTransaction and sends an INVITE."""
+        import ipaddress
+
+        from voip.rtp import RealtimeTransportProtocol
+        from voip.sip.protocol import SessionInitiationProtocol
+        from voip.sip.types import SipUri
+        from voip.types import NetworkAddress
+
+        from tests.sip.conftest import CallFixture, FakeTransport
+
+        transport = FakeTransport()
+        rtp = RealtimeTransportProtocol()
+        rtp.public_address = NetworkAddress(ipaddress.ip_address("192.0.2.1"), 5004)
+        sip = SessionInitiationProtocol(
+            aor=SipUri.parse("sips:alice:secret@example.com"),
+            rtp=rtp,
+            dialog_class=messages.Dialog,
+        )
+        sip.transport = transport
+        sip.local_address = NetworkAddress(ipaddress.ip_address("127.0.0.1"), 5061)
+        sip.is_secure = True
+
+        dialog = messages.Dialog(sip=sip)
+        await dialog.dial("sip:bob@biloxi.com", call_class=CallFixture)
+        assert any(b"INVITE" in data for data in transport.sent)
+        assert dialog.uac is sip.aor

@@ -47,33 +47,41 @@ class SessionInitiationProtocol(asyncio.Protocol):
     authentication [RFC 3261 §22].  All signaling is sent over a single
     persistent TLS/TCP connection.
 
+    Subclass [`Dialog`][voip.sip.messages.Dialog] and override
+    [`call_received`][voip.sip.messages.Dialog.call_received] to handle
+    inbound calls, then register it as `dialog_class`:
+
     ```python
-    class MyTransaction(Transaction):
-        def call_received(self, request: Request) -> None:
-            asyncio.create_task(self.answer(call_class=MyCall))
+    class MyDialog(Dialog):
+        def call_received(self) -> None:
+            self.ringing()
+            self.accept(call_class=MyCall)
 
     class MySession(SessionInitiationProtocol):
-        transaction_class = MyTransaction
+        dialog_class = MyDialog
     ```
 
-    To register with a carrier on startup, pass the registration parameters:
+    For outbound calls, use
+    [`Dialog.dial`][voip.sip.messages.Dialog.dial] from within
+    [`on_registered`][voip.sip.protocol.SessionInitiationProtocol.on_registered]:
 
     ```python
-    session = SessionInitiationProtocol(
-        aor="sips:alice@example.com",
-        username="alice",
-        password="secret",
-    )
+    class MySession(SessionInitiationProtocol):
+        def on_registered(self) -> None:
+            dialog = MyDialog(sip=self)
+            asyncio.create_task(dialog.dial("sip:bob@biloxi.com", call_class=MyCall))
     ```
 
     [RFC 3261]: https://datatracker.ietf.org/doc/html/rfc3261
     [RFC 3261 §22]: https://datatracker.ietf.org/doc/html/rfc3261#section-22
 
     Args:
-        aor: SIP Address of Record (AOR) to register with the carrier, e.g.
-        rtp: Shared RTP mux for call media.  When provided, call handlers can register
-            their RTP addresses with the mux to receive media packets.
-        transaction_class: Transaction subclass to handle SIP transactions.
+        aor: SIP Address of Record (AOR) to register with the carrier.
+        rtp: Shared RTP mux for call media.
+        dialog_class: [`Dialog`][voip.sip.messages.Dialog] subclass used to
+            create dialogs for incoming calls.  Defaults to the base
+            [`Dialog`][voip.sip.messages.Dialog] which rejects all calls with
+            ``486 Busy Here``.
         registration_class: Transaction subclass to handle registration transactions.
         keepalive_interval: Keep-alive ping interval. Should be between 30 and 90 seconds.
 
@@ -81,7 +89,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
 
     aor: types.SipUri
     rtp: RealtimeTransportProtocol
-    transaction_class: type[InviteTransaction]
+    dialog_class: type[Dialog] = dataclasses.field(default=Dialog)
     registration_class: type[RegistrationTransaction] = RegistrationTransaction
     keepalive_interval: datetime.timedelta = datetime.timedelta(seconds=30)
 
@@ -206,22 +214,25 @@ class SessionInitiationProtocol(asyncio.Protocol):
     def allowed_methods(self) -> frozenset[SIPMethod]:
         """SIP methods supported by this UA.
 
-        A method is included when the class defines a ``<method_lower>_received``
-        handler (e.g. ``register_received`` enables REGISTER).
+        Always includes INVITE, ACK, BYE, CANCEL, and OPTIONS since
+        [`InviteTransaction`][voip.sip.transactions.InviteTransaction] handles
+        all of these.  Additional methods (e.g. REGISTER) are included when
+        the session defines a corresponding ``<method_lower>_received`` handler.
 
         Returns:
             Frozenset of [`SIPMethod`][voip.sip.types.SIPMethod] values.
         """
-        return frozenset(
-            (
-                *(
-                    m
-                    for m in SIPMethod
-                    if hasattr(self.transaction_class, f"{m.lower()}_received")
-                ),
-                SIPMethod.OPTIONS,
-            )
+        core = frozenset(
+            m
+            for m in SIPMethod
+            if hasattr(InviteTransaction, f"{m.lower()}_received")
         )
+        extra = frozenset(
+            m
+            for m in SIPMethod
+            if hasattr(self, f"{m.lower()}_received")
+        )
+        return core | extra | frozenset([SIPMethod.OPTIONS])
 
     @property
     def allow_header(self) -> str:
@@ -276,7 +287,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 )
                 return
             case _:
-                tx = self.transaction_class.from_request(request=request, sip=self)
+                tx = InviteTransaction.from_request(request=request, sip=self)
                 self.transactions[request.branch] = tx
         try:
             handler: typing.Callable[[Request], Response | None] = getattr(

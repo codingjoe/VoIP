@@ -6,8 +6,8 @@ import ipaddress
 import pytest
 from voip.rtp import RealtimeTransportProtocol, Session
 from voip.sdp.types import MediaDescription, RTPPayloadFormat
+from voip.sip.messages import Dialog
 from voip.sip.protocol import SessionInitiationProtocol
-from voip.sip.transactions import InviteTransaction
 from voip.sip.types import SipUri
 from voip.types import NetworkAddress
 
@@ -79,7 +79,7 @@ async def sip(
     session = SessionInitiationProtocol(
         aor=SipUri.parse("sips:alice:secret@example.com:5061"),
         rtp=rtp,
-        transaction_class=InviteTransaction,
+        dialog_class=Dialog,
     )
     session.connection_made(fake_transport)
     if session.keepalive_task is not None:
