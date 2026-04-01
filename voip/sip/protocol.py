@@ -17,7 +17,12 @@ from ..types import NetworkAddress
 from . import types
 from .dialog import Dialog
 from .messages import Message, Request, Response
-from .transactions import ByeTransaction, InviteTransaction, RegistrationTransaction, Transaction
+from .transactions import (
+    ByeTransaction,
+    InviteTransaction,
+    RegistrationTransaction,
+    Transaction,
+)
 from .types import (
     SIPMethod,
     SIPStatus,
@@ -266,12 +271,10 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 try:
                     dialog = self.dialogs[request.remote_tag, request.local_tag]
                     dialog.invite_transaction.ack_received(request)
-                except (KeyError, AttributeError):
+                except KeyError, AttributeError:
                     logger.warning("ACK for unknown dialog: %r", request)
             case SIPMethod.BYE:
-                asyncio.create_task(
-                    ByeTransaction.receive(request=request, sip=self)
-                )
+                asyncio.create_task(ByeTransaction.receive(request=request, sip=self))
             case SIPMethod.CANCEL:
                 try:
                     tx = self.transactions[request.branch]
