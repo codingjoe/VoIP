@@ -1,6 +1,6 @@
 """Opus codec implementation for RTP audio streams (RFC 7587).
 
-The [`Opus`][voip.codecs.opus.Opus] class wraps raw Opus RTP payloads in a
+The [Opus][voip.codecs.opus.Opus] class wraps raw Opus RTP payloads in a
 minimal [Ogg][] container before passing them to PyAV for decoding, and
 encodes float32 PCM via `libopus`.
 

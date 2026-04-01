@@ -1,7 +1,7 @@
 """AI-powered call handlers for RTP streams.
 
-This module provides [`TranscribeCall`][voip.ai.TranscribeCall], which transcribes decoded audio
-with faster-whisper, and [`AgentCall`][voip.ai.AgentCall], which extends it with an
+This module provides [TranscribeCall][voip.ai.TranscribeCall], which transcribes decoded audio
+with faster-whisper, and [AgentCall][voip.ai.AgentCall], which extends it with an
 Ollama-powered response loop and Pocket TTS voice synthesis.
 
 Requires the ``ai`` extra: ``pip install voip[ai]``.
@@ -35,17 +35,17 @@ logger = logging.getLogger(__name__)
 class TranscribeCall(VoiceActivityCall):
     """Transcribe incoming call audio.
 
-    Audio is decoded by [`AudioCall`][voip.audio.AudioCall] on a per-packet
-    basis and delivered to [`audio_received`][voip.audio.AudioCall.audio_received],
+    Audio is decoded by [AudioCall][voip.audio.AudioCall] on a per-packet
+    basis and delivered to [audio_received][voip.audio.AudioCall.audio_received],
     which applies an energy-based voice activity detector (VAD) from
-    [`VoiceActivityCall`][voip.audio.VoiceActivityCall].  All audio frames
+    [VoiceActivityCall][voip.audio.VoiceActivityCall].  All audio frames
     (speech and silence) are accumulated until silence is sustained for
     `silence_gap` seconds, then the entire utterance is sent to Whisper as
     one chunk.  This avoids cutting sentences in the middle and prevents
     background microphone noise from being passed to Whisper as spurious audio.
 
     Example:
-        Override [`transcription_received`][voip.ai.TranscribeCall.transcription_received]
+        Override [transcription_received][voip.ai.TranscribeCall.transcription_received]
         to handle the resulting text:
 
         ```python
@@ -101,8 +101,8 @@ class TTSMixin:
     """Mixin that adds Pocket TTS voice synthesis to a call.
 
     Provides shared `tts_model`, `voice`, and `voice_state` fields along with
-    the [`send_speech`][voip.ai.TTSMixin.send_speech] method used by both
-    [`SayCall`][voip.ai.SayCall] and [`AgentCall`][voip.ai.AgentCall].
+    the [send_speech][voip.ai.TTSMixin.send_speech] method used by both
+    [SayCall][voip.ai.SayCall] and [AgentCall][voip.ai.AgentCall].
 
     Args:
         tts_model: Pre-loaded Pocket TTS model. A new default model is loaded when omitted.

@@ -48,8 +48,8 @@ class SessionInitiationProtocol(asyncio.Protocol):
     authentication [RFC 3261 §22].  All signaling is sent over a single
     persistent TLS/TCP connection.
 
-    Subclass [`Dialog`][voip.sip.dialog.Dialog] and override
-    [`call_received`][voip.sip.dialog.Dialog.call_received] to handle
+    Subclass [Dialog][voip.sip.dialog.Dialog] and override
+    [call_received][voip.sip.dialog.Dialog.call_received] to handle
     inbound calls, then register it as `dialog_class`:
 
     ```python
@@ -63,8 +63,8 @@ class SessionInitiationProtocol(asyncio.Protocol):
     ```
 
     For outbound calls, use
-    [`Dialog.dial`][voip.sip.dialog.Dialog.dial] from within
-    [`on_registered`][voip.sip.protocol.SessionInitiationProtocol.on_registered]:
+    [Dialog.dial][voip.sip.dialog.Dialog.dial] from within
+    [on_registered][voip.sip.protocol.SessionInitiationProtocol.on_registered]:
 
     ```python
     class MySession(SessionInitiationProtocol):
@@ -79,9 +79,9 @@ class SessionInitiationProtocol(asyncio.Protocol):
     Args:
         aor: SIP Address of Record (AOR) to register with the carrier.
         rtp: Shared RTP mux for call media.
-        dialog_class: [`Dialog`][voip.sip.dialog.Dialog] subclass used to
+        dialog_class: [Dialog][voip.sip.dialog.Dialog] subclass used to
             create dialogs for incoming calls.  Defaults to the base
-            [`Dialog`][voip.sip.dialog.Dialog] which rejects all calls with
+            [Dialog][voip.sip.dialog.Dialog] which rejects all calls with
             ``486 Busy Here``.
         registration_class: Transaction subclass to handle registration transactions.
         keepalive_interval: Keep-alive ping interval. Should be between 30 and 90 seconds.
@@ -216,15 +216,15 @@ class SessionInitiationProtocol(asyncio.Protocol):
         """SIP methods supported by this UA.
 
         Always includes INVITE, ACK, BYE, CANCEL, and OPTIONS since
-        [`InviteTransaction`][voip.sip.transactions.InviteTransaction] handles
+        [InviteTransaction][voip.sip.transactions.InviteTransaction] handles
         all of these.  OPTIONS is handled directly in
-        [`request_received`][voip.sip.protocol.SessionInitiationProtocol.request_received]
+        [request_received][voip.sip.protocol.SessionInitiationProtocol.request_received]
         without an ``options_received`` method, so it is added explicitly here.
         Additional methods (e.g. REGISTER) are included when the session
         defines a corresponding ``<method_lower>_received`` handler.
 
         Returns:
-            Frozenset of [`SIPMethod`][voip.sip.types.SIPMethod] values.
+            Frozenset of [SIPMethod][voip.sip.types.SIPMethod] values.
         """
         core = frozenset(
             m for m in SIPMethod if hasattr(InviteTransaction, f"{m.lower()}_received")

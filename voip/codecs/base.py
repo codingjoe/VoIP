@@ -1,14 +1,14 @@
 """Base class for RTP audio codecs.
 
 All concrete codec classes in this package inherit from
-[`RTPCodec`][voip.codecs.base.RTPCodec].
+[RTPCodec][voip.codecs.base.RTPCodec].
 
 Codecs that require [PyAV][] for decode/encode additionally inherit from
-[`PyAVCodec`][voip.codecs.av.PyAVCodec], which provides
-[`decode_pcm`][voip.codecs.av.PyAVCodec.decode_pcm] and
-[`encode_pcm`][voip.codecs.av.PyAVCodec.encode_pcm].
+[PyAVCodec][voip.codecs.av.PyAVCodec], which provides
+[decode_pcm][voip.codecs.av.PyAVCodec.decode_pcm] and
+[encode_pcm][voip.codecs.av.PyAVCodec.encode_pcm].
 
-Pure-NumPy codecs ([`PCMA`][voip.codecs.pcma.PCMA], [`PCMU`][voip.codecs.pcmu.PCMU])
+Pure-NumPy codecs ([PCMA][voip.codecs.pcma.PCMA], [PCMU][voip.codecs.pcmu.PCMU])
 inherit directly from `RTPCodec` and require no PyAV dependency.
 
 [PyAV]: https://pyav.basswood-io.com/
@@ -29,9 +29,9 @@ class PayloadDecoder(Protocol):
     """Protocol for per-call RTP payload decoders.
 
     Implementations decode raw RTP payload bytes to float32 mono PCM.
-    Stateful implementations (e.g. [`G722Decoder`][voip.codecs.g722.G722Decoder])
+    Stateful implementations (e.g. [G722Decoder][voip.codecs.g722.G722Decoder])
     preserve codec predictor state across successive
-    [`decode`][voip.codecs.base.PayloadDecoder.decode] calls within a single
+    [decode][voip.codecs.base.PayloadDecoder.decode] calls within a single
     call session.
     """
 
@@ -50,24 +50,24 @@ class PayloadDecoder(Protocol):
 class RTPCodec:
     """Base class for RTP audio codecs.
 
-    Concrete implementations: [`Opus`][voip.codecs.Opus],
-    [`G722`][voip.codecs.G722], [`PCMA`][voip.codecs.pcma.PCMA],
-    [`PCMU`][voip.codecs.pcmu.PCMU].
+    Concrete implementations: [Opus][voip.codecs.Opus],
+    [G722][voip.codecs.G722], [PCMA][voip.codecs.pcma.PCMA],
+    [PCMU][voip.codecs.pcmu.PCMU].
 
     Codec classes are stateless; every method is a classmethod or staticmethod
     and codecs are referenced as `type[RTPCodec]`, never instantiated.
     Per-call decoder state (required for ADPCM codecs such as G.722) is
-    managed by [`PayloadDecoder`][voip.codecs.base.PayloadDecoder] instances
-    returned by [`create_decoder`][voip.codecs.base.RTPCodec.create_decoder].
+    managed by [PayloadDecoder][voip.codecs.base.PayloadDecoder] instances
+    returned by [create_decoder][voip.codecs.base.RTPCodec.create_decoder].
 
     Concrete subclasses define codec-specific class variables and override
-    [`decode`][voip.codecs.base.RTPCodec.decode],
-    [`encode`][voip.codecs.base.RTPCodec.encode], and optionally
-    [`packetize`][voip.codecs.base.RTPCodec.packetize].
+    [decode][voip.codecs.base.RTPCodec.decode],
+    [encode][voip.codecs.base.RTPCodec.encode], and optionally
+    [packetize][voip.codecs.base.RTPCodec.packetize].
 
     Subclasses may use the shared PyAV-backed helpers or implement
-    [`decode`][voip.codecs.base.RTPCodec.decode] and
-    [`encode`][voip.codecs.base.RTPCodec.encode] using alternative backends
+    [decode][voip.codecs.base.RTPCodec.decode] and
+    [encode][voip.codecs.base.RTPCodec.encode] using alternative backends
     such as NumPy.
 
     Subclasses that produce variable-length output across frames (e.g. G.722
@@ -75,7 +75,7 @@ class RTPCodec:
     preserve predictor state.
 
     Subclasses that require [PyAV][] additionally inherit from
-    [`PyAVCodec`][voip.codecs.av.PyAVCodec].
+    [PyAVCodec][voip.codecs.av.PyAVCodec].
 
     [PyAV]: https://pyav.basswood-io.com/
     """
@@ -107,7 +107,7 @@ class RTPCodec:
     ) -> np.ndarray:
         """Resample *audio* from *source_rate_hz* to *destination_rate_hz*.
 
-        Uses linear interpolation via [`numpy.interp`][].
+        Uses linear interpolation via [numpy.interp][].
 
         Args:
             audio: Float32 mono PCM array.
@@ -131,7 +131,7 @@ class RTPCodec:
 
     @classmethod
     def to_payload_format(cls) -> RTPPayloadFormat:
-        """Create an [`RTPPayloadFormat`][voip.sdp.types.RTPPayloadFormat] for SDP negotiation.
+        """Create an [RTPPayloadFormat][voip.sdp.types.RTPPayloadFormat] for SDP negotiation.
 
         Uses `rtp_clock_rate_hz` as the SDP sample rate, which is correct
         per RFC 3551 (e.g. G.722 advertises 8000 Hz in SDP even though the
@@ -178,7 +178,7 @@ class RTPCodec:
 
         Override in subclasses that require stateful decoding across RTP
         packets (e.g. G.722 ADPCM — see
-        [`G722.create_decoder`][voip.codecs.g722.G722.create_decoder]).
+        [G722.create_decoder][voip.codecs.g722.G722.create_decoder]).
 
         Args:
             output_rate_hz: Target PCM sample rate in Hz for decoded audio.
@@ -186,9 +186,9 @@ class RTPCodec:
                 codec default.
 
         Returns:
-            A [`PayloadDecoder`][voip.codecs.base.PayloadDecoder] that, by
-            default, is a [`PerPacketDecoder`][voip.codecs.base.PerPacketDecoder]
-            delegating each call to [`decode`][voip.codecs.base.RTPCodec.decode].
+            A [PayloadDecoder][voip.codecs.base.PayloadDecoder] that, by
+            default, is a [PerPacketDecoder][voip.codecs.base.PerPacketDecoder]
+            delegating each call to [decode][voip.codecs.base.RTPCodec.decode].
         """
         return PerPacketDecoder(cls, output_rate_hz, input_rate_hz)
 
@@ -229,7 +229,7 @@ class PerPacketDecoder:
     """Stateless payload decoder that processes each RTP packet independently.
 
     Delegate each call to
-    [`RTPCodec.decode`][voip.codecs.base.RTPCodec.decode], decoding each
+    [RTPCodec.decode][voip.codecs.base.RTPCodec.decode], decoding each
     payload independently without preserving cross-packet state. Suitable for
     stateless codecs such as PCMA, PCMU, and Opus.
 

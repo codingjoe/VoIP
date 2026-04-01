@@ -1,12 +1,12 @@
 """Audio call handler for RTP streams.
 
-This module provides [`AudioCall`][voip.audio.AudioCall], which buffers RTP
+This module provides [AudioCall][voip.audio.AudioCall], which buffers RTP
 packets, negotiates codecs, and decodes/encodes audio using the codec
-implementations in [`voip.codecs`][voip.codecs].
+implementations in [voip.codecs][voip.codecs].
 
 Requires the ``audio`` extra: ``pip install voip[audio]``.
 AI-powered subclasses (Whisper transcription, Ollama agent) live in
-[`voip.ai`][voip.ai] and require the ``ai`` extra.
+[voip.ai][voip.ai] and require the ``ai`` extra.
 """
 
 import asyncio
@@ -149,7 +149,7 @@ class AudioCall(Session):
         can select the best available codec.
 
         Returns:
-            List of [`RTPPayloadFormat`][voip.sdp.types.RTPPayloadFormat]
+            List of [RTPPayloadFormat][voip.sdp.types.RTPPayloadFormat]
             objects for every codec in `supported_codecs`.
         """
         return [codec.to_payload_format() for codec in cls.supported_codecs]
@@ -213,7 +213,7 @@ class AudioCall(Session):
         dispatched (i.e. `outbound_handle` transitions to ``None``).
         The base implementation is a no-op.  Override in subclasses to
         trigger post-audio actions, for example hanging up after
-        [`SayCall`][voip.ai.SayCall] finishes speaking.
+        [SayCall][voip.ai.SayCall] finishes speaking.
         """
 
     def _dispatch_next_packet(
@@ -328,7 +328,7 @@ class VoiceActivityCall(AudioCall):
     AudioCall with energy-based Voice Activity Detection (VAD) and speech buffering.
 
     Full utterances are buffered and passed to
-    [`voice_received`][voip.audio.VoiceActivityCall.voice_received].
+    [voice_received][voip.audio.VoiceActivityCall.voice_received].
     Silent chunks are dropped from the audio stream.
 
     Override that method in subclasses to process complete speech segments
@@ -342,11 +342,11 @@ class VoiceActivityCall(AudioCall):
 
     A full utterance must be separated from the previous one by at least the
     `silence_gap` to be considered complete and passed to
-    [`voice_received`][voip.audio.VoiceActivityCall.voice_received].
+    [voice_received][voip.audio.VoiceActivityCall.voice_received].
 
     Example:
         The following example shows how to use `VoiceActivityCall` to echo a caller's
-        voice back to them similar to [`EchoCall`][voip.audio.EchoCall].
+        voice back to them similar to [EchoCall][voip.audio.EchoCall].
 
         ```python
         import dataclasses

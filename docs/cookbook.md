@@ -1,7 +1,15 @@
+# Cookbook
+
+To build anything we need to understand two fundamental concepts: **Dialogs and [Sessions](sessions.md).**
+
+Dial, accept, reject, hold, transfer, etc. are part of a **dialog** between you and the remote party.
+
+The actual audio or video exchange happens in a multimedia **session**. A session is established by a dialog.
+
 ## Call Transcription
 
-Subclass \[`TranscribeCall`\][voip.ai.TranscribeCall] and override
-\[`transcription_received`\][voip.ai.TranscribeCall.transcription_received] to
+Subclass [TranscribeCall][voip.ai.TranscribeCall] and override
+[transcription_received][voip.ai.TranscribeCall.transcription_received] to
 handle each utterance after a silence gap:
 
 ```python
@@ -13,28 +21,27 @@ from voip.sip.dialog import Dialog
 from voip.sip.protocol import SIP
 
 
-class MyCall(TranscribeCall):
+class PrintTranscribeCall(TranscribeCall):
+    """Print the transcription to the console."""
+
     def transcription_received(self, text: str) -> None:
         print(f"[{self.caller}] {text}")
 
 
-class MyDialog(Dialog):
+class AutoAcceptDialog(Dialog):
+    """Accept every incoming call and transcribe it using MyCall."""
+
     def call_received(self) -> None:
         self.ringing()
-        self.accept(call_class=MyCall)
-
-
-class MySession(SIP):
-    dialog_class = MyDialog
+        self.accept(call_class=PrintTranscribeCall)
 
 
 async def main():
     loop = asyncio.get_running_loop()
     await loop.create_connection(
-        lambda: MySession(
+        lambda: SIP(
             aor="sips:alice@example.com",
-            username="alice",
-            password="secret",
+            dialog_class=AutoAcceptDialog,
         ),
         host="sip.example.com",
         port=5061,
@@ -48,8 +55,8 @@ asyncio.run(main())
 
 ## Sharing a Whisper Model Across Calls
 
-Loading the model is expensive. Pass a pre-loaded
-[`WhisperModel`](https://github.com/SYSTRAN/faster-whisper) instance as a
+Loading the model is expensive. Pass a preloaded
+[WhisperModel](https://github.com/SYSTRAN/faster-whisper) instance as a
 class attribute to share it across all incoming calls:
 
 ```python
@@ -66,7 +73,7 @@ class MyCall(TranscribeCall):
 
 ## AI Call Agent
 
-\[`AgentCall`\][voip.ai.AgentCall] extends transcription with an
+[AgentCall][voip.ai.AgentCall] extends transcription with an
 [Ollama](https://ollama.com/) LLM response loop and
 [Pocket TTS](https://github.com/pocket-ai/pocket-tts) voice synthesis.
 Share both heavy models across calls to avoid reloading them per call:
@@ -119,8 +126,8 @@ asyncio.run(main())
 
 ## Raw Audio Access
 
-Subclass \[`AudioCall`\][voip.audio.AudioCall] and override
-\[`audio_received`\][voip.audio.AudioCall.audio_received] to receive decoded
+Subclass [AudioCall][voip.audio.AudioCall] and override
+[audio_received][voip.audio.AudioCall.audio_received] to receive decoded
 float32 PCM frames without transcription:
 
 ```python
@@ -144,8 +151,8 @@ class RecordCall(AudioCall):
 
 ## Sending Audio to the Caller
 
-Use \[`_send_rtp_audio`\][voip.audio.AudioCall.\_send_rtp_audio] inside any
-\[`AudioCall`\][voip.audio.AudioCall] subclass to stream float32 PCM back to
+Use [\_send_rtp_audio][voip.audio.AudioCall.\_send_rtp_audio] inside any
+[AudioCall][voip.audio.AudioCall] subclass to stream float32 PCM back to
 the caller using the negotiated codec:
 
 ```python
@@ -164,8 +171,8 @@ class GreetingCall(AudioCall):
 
 ## Low-Level RTP Packet Handling
 
-For protocols other than audio, subclass \[`Session`\][voip.rtp.Session]
-directly and override \[`packet_received`\]\[voip.rtp.Session.packet_received\]:
+For protocols other than audio, subclass [Session][voip.rtp.Session]
+directly and override [packet_received]\[voip.rtp.Session.packet_received\]:
 
 ```python
 from voip.rtp import Session, RTPPacket
@@ -211,13 +218,13 @@ session = SIP(
 
 ## Hanging Up a Call
 
-Every \[`Session`\][voip.rtp.Session] subclass exposes a
-\[`hang_up`\][voip.rtp.Session.hang_up] coroutine that sends a proper SIP BYE
+Every [Session][voip.rtp.Session] subclass exposes a
+[hang_up][voip.rtp.Session.hang_up] coroutine that sends a proper SIP BYE
 request (RFC 3261 §15) by delegating to
-\[`Dialog.bye`\][voip.sip.dialog.Dialog.bye]. It deregisters the RTP
+[Dialog.bye][voip.sip.dialog.Dialog.bye]. It deregisters the RTP
 handler and awaits the 200 OK acknowledgment before returning.
 
-Override \[`Dialog.call_received`\][voip.sip.dialog.Dialog.call_received]
+Override [Dialog.call_received][voip.sip.dialog.Dialog.call_received]
 to hook into the call lifecycle, and call `await self.hang_up()` from within
 the call class when you want to terminate:
 
@@ -270,18 +277,18 @@ async def main():
 asyncio.run(main())
 ```
 
-\[`hang_up`\][voip.rtp.Session.hang_up] sends the BYE and cleans up the dialog
+[hang_up][voip.rtp.Session.hang_up] sends the BYE and cleans up the dialog
 and RTP handler — it does **not** close the SIP transport so that the same
-\[`SIP`\][voip.sip.protocol.SessionInitiationProtocol] instance can continue
+[SIP][voip.sip.protocol.SessionInitiationProtocol] instance can continue
 handling other calls. Access `self.dialog.sip.close()` when you also want to
 tear down the transport.
 
 ## Making Outbound Calls
 
-Create a \[`Dialog`\][voip.sip.dialog.Dialog] subclass, set it as
+Create a [Dialog][voip.sip.dialog.Dialog] subclass, set it as
 `dialog_class` on your SIP session, and call
-\[`dialog.dial`\][voip.sip.dialog.Dialog.dial] from
-\[`on_registered`\]\[voip.sip.protocol.SessionInitiationProtocol.on_registered\]:
+[dial][voip.sip.dialog.Dialog.dial] from
+[on_registered]\[voip.sip.protocol.SessionInitiationProtocol.on_registered\]:
 
 ```python
 import asyncio

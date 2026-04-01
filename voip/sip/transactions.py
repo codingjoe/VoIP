@@ -337,8 +337,8 @@ class InviteTransaction(Transaction):
     SIP layer creates one instance per incoming INVITE, keyed by Via branch
     (RFC 3261 §17.1.3).
 
-    For inbound call handling, subclass [`Dialog`][voip.sip.dialog.Dialog]
-    and override [`call_received`][voip.sip.dialog.Dialog.call_received]:
+    For inbound call handling, subclass [Dialog][voip.sip.dialog.Dialog]
+    and override [call_received][voip.sip.dialog.Dialog.call_received]:
 
     ```python
     class MyDialog(Dialog):
@@ -386,7 +386,7 @@ class InviteTransaction(Transaction):
         """Handle a BYE terminating a dialog.
 
         Removes the dialog from the registry, sends a 200 OK, and calls
-        [`dialog.hangup_received`][voip.sip.dialog.Dialog.hangup_received]
+        [dialog.hangup_received][voip.sip.dialog.Dialog.hangup_received]
         so application code can perform teardown (e.g. closing the SIP
         transport for single-shot sessions).
 
@@ -459,8 +459,8 @@ class InviteTransaction(Transaction):
         """Answer the call by setting up RTP and sending 200 OK with SDP.
 
         Example:
-            Call from within [`Dialog.call_received`][voip.sip.dialog.Dialog.call_received]
-            via [`Dialog.accept`][voip.sip.dialog.Dialog.accept]:
+            Call from within [Dialog.call_received][voip.sip.dialog.Dialog.call_received]
+            via [Dialog.accept][voip.sip.dialog.Dialog.accept]:
 
             ```python
             class MyDialog(Dialog):
@@ -608,7 +608,7 @@ class InviteTransaction(Transaction):
         and registers the RTP call handler.
 
         Prefer calling this indirectly via
-        [`Dialog.dial`][voip.sip.dialog.Dialog.dial].
+        [Dialog.dial][voip.sip.dialog.Dialog.dial].
 
         Args:
             target: SIP URI of the callee (e.g. ``"sip:+15551234567@carrier.com"``).
@@ -619,7 +619,7 @@ class InviteTransaction(Transaction):
                 call class constructor.
 
         Returns:
-            The INVITE [`Request`][voip.sip.messages.Request] that was sent.
+            The INVITE [Request][voip.sip.messages.Request] that was sent.
         """
         from .dialog import Dialog
 
@@ -838,7 +838,7 @@ class InviteTransaction(Transaction):
 class ByeTransaction(Transaction):
     """BYE client transaction [RFC 3261 §17.1.2].
 
-    Created by [`Dialog.bye`][voip.sip.dialog.Dialog.bye] to terminate a
+    Created by [Dialog.bye][voip.sip.dialog.Dialog.bye] to terminate a
     dialog.  The BYE request is built and sent immediately on construction.
     Await the transaction to wait for the 200 OK acknowledgment.
 

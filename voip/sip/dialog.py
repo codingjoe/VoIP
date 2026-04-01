@@ -96,18 +96,18 @@ class Dialog:
         """Called when an inbound INVITE arrives.
 
         Override in subclasses to accept, ring, or reject the call using
-        [`accept`][voip.sip.dialog.Dialog.accept],
-        [`ringing`][voip.sip.dialog.Dialog.ringing], and
-        [`reject`][voip.sip.dialog.Dialog.reject].
+        [accept][voip.sip.dialog.Dialog.accept],
+        [ringing][voip.sip.dialog.Dialog.ringing], and
+        [reject][voip.sip.dialog.Dialog.reject].
         The base implementation rejects with 486 Busy Here.
-        """
+        """  # noqa: D401
         self.reject()
 
     def hangup_received(self) -> None:
         """Called when the remote party sends a BYE.
 
         Override in subclasses to perform teardown.
-        """
+        """  # noqa: D401
 
     def ringing(self) -> None:
         """Send a 180 Ringing provisional response [RFC 3261 §21.1.2].

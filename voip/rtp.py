@@ -141,7 +141,7 @@ class Session:
         """Terminate the call by sending a SIP BYE request [RFC 3261 §15].
 
         Deregisters this call from the RTP multiplexer, then delegates the
-        BYE signaling to [`Dialog.bye`][voip.sip.dialog.Dialog.bye], which
+        BYE signaling to [Dialog.bye][voip.sip.dialog.Dialog.bye], which
         constructs and sends the BYE request, removes the dialog from the
         SIP session's registry, and awaits the 200 OK acknowledgment.
 
@@ -190,11 +190,11 @@ class Session:
         """Return the list of supported payload formats for outbound SDP offers.
 
         Override in subclasses to advertise codec capabilities.
-        [`AudioCall`][voip.audio.AudioCall] overrides this to return all
+        [AudioCall][voip.audio.AudioCall] overrides this to return all
         supported codecs in priority order.
 
         Returns:
-            List of [`RTPPayloadFormat`][voip.sdp.types.RTPPayloadFormat]
+            List of [RTPPayloadFormat][voip.sdp.types.RTPPayloadFormat]
             objects describing the supported codecs.
         """
         from voip.sdp.types import StaticPayloadType  # noqa: PLC0415
