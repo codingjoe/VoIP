@@ -241,250 +241,166 @@ class CallerID(str):
 
 
 class SIPStatus(enum.IntEnum):
-    """
-    SIP Status Codes based on [RFC 3261].
+    """SIP Status Codes based on [RFC 3261].
 
     [RFC 3261]: https://datatracker.ietf.org/doc/html/rfc3261#section-21
     """
 
-    def __new__(cls, value, phrase, description=""):
+    def __new__(cls, value: int, phrase: str) -> SIPStatus:
         obj = int.__new__(cls, value)
         obj._value_ = value
         obj.phrase = phrase
-        obj.description = description
         return obj
 
-    TRYING = (
-        100,
-        "Trying",
-        "The request is being processed. No final response is available yet.",
-    )
-    RINGING = 180, "Ringing", "The called party is being alerted of the call."
-    CALL_IS_BEING_FORWARDED = (
-        181,
-        "Call Is Being Forwarded",
-        "The called party is being alerted of the call, but the call is not yet established.",
-    )
-    QUEUED = (
-        182,
-        "Queued",
-        "The called party is being alerted of the call, but the call is not yet established.",
-    )
-    SESSION_PROGRESS = (
-        183,
-        "Session Progress",
-        "The called party is being alerted of the call, but the call is not yet established.",
-    )
+    TRYING = 100, "Trying"
+    """The request is being processed. No final response is available yet."""
 
-    OK = 200, "OK", "The request has succeeded."
+    RINGING = 180, "Ringing"
+    """The called party is being alerted of the call."""
 
-    MULTIPLE_CHOICES = (
-        300,
-        "Multiple Choices",
-        "The requested resource has multiple representations, each with its own specific location.",
-    )
-    MOVED_PERMANENTLY = (
-        301,
-        "Moved Permanently",
-        "The requested resource has been assigned a new permanent URI and any future references to this resource ought to use one of the returned URIs.",
-    )
-    MOVED_TEMPORARILY = (
-        302,
-        "Moved Temporarily",
-        "The requested resource is temporarily unavailable and the server is asking the client to try again later.",
-    )
-    USE_PROXY = (
-        305,
-        "Use Proxy",
-        "The requested resource is available only through a proxy, the address for which is provided in the response.",
-    )
-    ALTERNATIVE_SERVICE = (
-        380,
-        "Alternative Service",
-        "The server has fulfilled a request for the service indicated by the URI.",
-    )
+    CALL_IS_BEING_FORWARDED = 181, "Call Is Being Forwarded"
+    """The called party is being alerted of the call, but the call is not yet established."""
 
-    BAD_REQUEST = (
-        400,
-        "Bad Request",
-        "The request has bad syntax or cannot be fulfilled due to bad syntax.",
-    )
-    UNAUTHORIZED = 401, "Unauthorized", "The request requires user authentication."
-    PAYMENT_REQUIRED = 402, "Payment Required", "Further action is required."
-    FORBIDDEN = (
-        403,
-        "Forbidden",
-        "The server understood the request but refuses to fulfill it.",
-    )
-    NOT_FOUND = 404, "Not Found", "The requested resource could not be found."
-    METHOD_NOT_ALLOWED = (
-        405,
-        "Method Not Allowed",
-        "The method specified in the Request-URI is not allowed for the resource identified by the request URI.",
-    )
-    NOT_ACCEPTABLE = (
-        406,
-        "Not Acceptable",
-        "The server cannot produce a response matching the Accept headers.",
-    )
-    PROXY_AUTHENTICATION_REQUIRED = (
-        407,
-        "Proxy Authentication Required",
-        "The client must authenticate itself with the proxy.",
-    )
-    REQUEST_TIMEOUT = (
-        408,
-        "Request Timeout",
-        "The server timed out waiting for the request.",
-    )
-    GONE = (
-        410,
-        "Gone",
-        "The requested resource is no longer available at the server and no longer exists.",
-    )
-    REQUEST_ENTITY_TOO_LARGE = (
-        413,
-        "Request Entity Too Large",
-        "The server will not accept the request, because the entity of the request is too large.",
-    )
-    REQUEST_URI_TOO_LONG = (
-        414,
-        "Request-URI Too Long",
-        "The server will not accept the request, because the Request-URI is too long.",
-    )
-    UNSUPPORTED_MEDIA_TYPE = (
-        415,
-        "Unsupported Media Type",
-        "The server will not accept the request, because the media type of the request is unsupported.",
-    )
-    UNSUPPORTED_URI_SCHEME = (
-        416,
-        "Unsupported URI Scheme",
-        "The server will not accept the request, because the URI scheme of the request is unsupported.",
-    )
-    BAD_EXTENSION = (
-        420,
-        "Bad Extension",
-        "This status code indicates that the server does not recognize the value of any of the parameters that it needs to understand in the request.",
-    )
-    EXTENSION_REQUIRED = (
-        421,
-        "Extension Required",
-        "This status code indicates that the server requires the client to identify itself (usually, using the Contact header field) before it will proceed with the request.",
-    )
-    INTERVAL_TOO_BRIEF = (
-        423,
-        "Interval Too Brief",
-        "This status code indicates that the server is unwilling to process the request because either an individual header field, or all the header fields collectively, are too large.",
-    )
-    TEMPORARILY_UNAVAILABLE = (
-        480,
-        "Temporarily Unavailable",
-        "This status code indicates that the server is currently unable to handle the request due to a temporary overloading or maintenance of the server.",
-    )
-    CALL_TRANSACTION_DOES_NOT_EXIST = (
-        481,
-        "Call/Transaction Does Not Exist",
-        "This status code indicates that the server has received a final response for the transaction which it is still attempting to complete.",
-    )
-    LOOP_DETECTED = (
-        482,
-        "Loop Detected",
-        "This status code indicates that the server has detected an infinite loop while processing the request.",
-    )
-    TOO_MANY_HOPS = (
-        483,
-        "Too Many Hops",
-        "This status code indicates that the server has exceeded the maximum number of hops allowed in the request URI.",
-    )
-    ADDRESS_INCOMPLETE = (
-        484,
-        "Address Incomplete",
-        "This status code indicates that the server has received a final response for the transaction which it is still attempting to complete, but has an invalid value for one or more of the header fields included in the request message.",
-    )
-    AMBIGUOUS = (
-        485,
-        "Ambiguous",
-        "This status code indicates that the server cannot decide on a response to the request because multiple responses are possible.",
-    )
-    BUSY_HERE = (
-        486,
-        "Busy Here",
-        "This status code indicates that the server is busy here.",
-    )
-    REQUEST_TERMINATED = (
-        487,
-        "Request Terminated",
-        "This status code indicates that the server has received a final response for the transaction which it is still attempting to complete, but has received a termination request for that transaction from the client.",
-    )
-    NOT_ACCEPTABLE_HERE = (
-        488,
-        "Not Acceptable Here",
-        "This status code indicates that the server is not able to produce a response which is acceptable to the client, according to the proactive negotiation header fields received in the request, and the server is unwilling to supply a default reason phrase.",
-    )
-    REQUEST_PENDING = (
-        491,
-        "Request Pending",
-        "This status code indicates that the server has received a final response for the transaction which it is still attempting to complete, but has not yet delivered that response to the client.",
-    )
-    UNDECIPHERABLE = (
-        493,
-        "Undecipherable",
-        "This status code indicates that the server was unable to decrypt a message after performing the necessary decryption(s).",
-    )
+    QUEUED = 182, "Queued"
+    """The called party is being alerted of the call, but the call is not yet established."""
 
-    SERVER_INTERNAL_ERROR = (
-        500,
-        "Server Internal Error",
-        "The server encountered an unexpected condition which prevented it from fulfilling the request.",
-    )
-    NOT_IMPLEMENTED = (
-        501,
-        "Not Implemented",
-        "The server does not support the functionality required to fulfill the request.",
-    )
-    BAD_GATEWAY = (
-        502,
-        "Bad Gateway",
-        "The server, while acting as a gateway or proxy, received an invalid response from the upstream server it accessed in attempting to fulfill the request.",
-    )
-    SERVICE_UNAVAILABLE = (
-        503,
-        "Service Unavailable",
-        "The server is currently unable to handle the request due to a temporary overloading or maintenance of the server.",
-    )
-    SERVER_TIME_OUT = (
-        504,
-        "Server Time-out",
-        "The server, while acting as a gateway or proxy, did not receive a timely response from the upstream server specified by the URI (e.g., HTTP, FTP, LDAP) or some other auxiliary server (e.g., DNS) it needed to access in attempting to complete the request.",
-    )
-    VERSION_NOT_SUPPORTED = (
-        505,
-        "Version Not Supported",
-        "The server does not support, or refuses to support, the protocol version that was used in the request message.",
-    )
-    MESSAGE_TOO_LARGE = (
-        513,
-        "Message Too Large",
-        "The server is unwilling to process the request because its header fields are too large.",
-    )
+    SESSION_PROGRESS = 183, "Session Progress"
+    """The called party is being alerted of the call, but the call is not yet established."""
 
-    BUSY_EVERYWHERE = (
-        600,
-        "Busy Everywhere",
-        "The server is not able to process the request because it is busy.  For example, this error might be given if a server is overloaded with requests and is unable to process one of the requests.",
-    )
-    DECLINE = 603, "Decline", "The call has been declined."
-    DOES_NOT_EXIST_ANYWHERE = (
-        604,
-        "Does Not Exist Anywhere",
-        "The server has received a final response for the transaction which it is still attempting to complete, but has received a termination request for that transaction from a server which it does not control.",
-    )
-    NOT_ACCEPTABLE_ANYWHERE = (
-        606,
-        "Not Acceptable",
-        "The server is not able to produce a response which is acceptable to the client, according to the proactive negotiation header fields received in the request, and the server is unwilling to supply a default reason phrase.",
-    )
+    OK = 200, "OK"
+    """The request has succeeded."""
+
+    MULTIPLE_CHOICES = 300, "Multiple Choices"
+    """The requested resource has multiple representations, each with its own specific location."""
+
+    MOVED_PERMANENTLY = 301, "Moved Permanently"
+    """The requested resource has been assigned a new permanent URI and any future references to this resource ought to use one of the returned URIs."""
+
+    MOVED_TEMPORARILY = 302, "Moved Temporarily"
+    """The requested resource is temporarily unavailable and the server is asking the client to try again later."""
+
+    USE_PROXY = 305, "Use Proxy"
+    """The requested resource is available only through a proxy, the address for which is provided in the response."""
+
+    ALTERNATIVE_SERVICE = 380, "Alternative Service"
+    """The server has fulfilled a request for the service indicated by the URI."""
+
+    BAD_REQUEST = 400, "Bad Request"
+    """The request has bad syntax or cannot be fulfilled due to bad syntax."""
+
+    UNAUTHORIZED = 401, "Unauthorized"
+    """The request requires user authentication."""
+
+    PAYMENT_REQUIRED = 402, "Payment Required"
+    """Further action is required."""
+
+    FORBIDDEN = 403, "Forbidden"
+    """The server understood the request but refuses to fulfill it."""
+
+    NOT_FOUND = 404, "Not Found"
+    """The requested resource could not be found."""
+
+    METHOD_NOT_ALLOWED = 405, "Method Not Allowed"
+    """The method specified in the Request-URI is not allowed for the resource identified by the request URI."""
+
+    NOT_ACCEPTABLE = 406, "Not Acceptable"
+    """The server cannot produce a response matching the Accept headers."""
+
+    PROXY_AUTHENTICATION_REQUIRED = 407, "Proxy Authentication Required"
+    """The client must authenticate itself with the proxy."""
+
+    REQUEST_TIMEOUT = 408, "Request Timeout"
+    """The server timed out waiting for the request."""
+
+    GONE = 410, "Gone"
+    """The requested resource is no longer available at the server and no longer exists."""
+
+    REQUEST_ENTITY_TOO_LARGE = 413, "Request Entity Too Large"
+    """The server will not accept the request, because the entity of the request is too large."""
+
+    REQUEST_URI_TOO_LONG = 414, "Request-URI Too Long"
+    """The server will not accept the request, because the Request-URI is too long."""
+
+    UNSUPPORTED_MEDIA_TYPE = 415, "Unsupported Media Type"
+    """The server will not accept the request, because the media type of the request is unsupported."""
+
+    UNSUPPORTED_URI_SCHEME = 416, "Unsupported URI Scheme"
+    """The server will not accept the request, because the URI scheme of the request is unsupported."""
+
+    BAD_EXTENSION = 420, "Bad Extension"
+    """This status code indicates that the server does not recognize the value of any of the parameters that it needs to understand in the request."""
+
+    EXTENSION_REQUIRED = 421, "Extension Required"
+    """This status code indicates that the server requires the client to identify itself (usually, using the Contact header field) before it will proceed with the request."""
+
+    INTERVAL_TOO_BRIEF = 423, "Interval Too Brief"
+    """This status code indicates that the server is unwilling to process the request because either an individual header field, or all the header fields collectively, are too large."""
+
+    TEMPORARILY_UNAVAILABLE = 480, "Temporarily Unavailable"
+    """This status code indicates that the server is currently unable to handle the request due to a temporary overloading or maintenance of the server."""
+
+    CALL_TRANSACTION_DOES_NOT_EXIST = 481, "Call/Transaction Does Not Exist"
+    """This status code indicates that the server has received a final response for the transaction which it is still attempting to complete."""
+
+    LOOP_DETECTED = 482, "Loop Detected"
+    """This status code indicates that the server has detected an infinite loop while processing the request."""
+
+    TOO_MANY_HOPS = 483, "Too Many Hops"
+    """This status code indicates that the server has exceeded the maximum number of hops allowed in the request URI."""
+
+    ADDRESS_INCOMPLETE = 484, "Address Incomplete"
+    """This status code indicates that the server has received a final response for the transaction which it is still attempting to complete, but has an invalid value for one or more of the header fields included in the request message."""
+
+    AMBIGUOUS = 485, "Ambiguous"
+    """This status code indicates that the server cannot decide on a response to the request because multiple responses are possible."""
+
+    BUSY_HERE = 486, "Busy Here"
+    """This status code indicates that the server is busy here."""
+
+    REQUEST_TERMINATED = 487, "Request Terminated"
+    """This status code indicates that the server has received a final response for the transaction which it is still attempting to complete, but has received a termination request for that transaction from the client."""
+
+    NOT_ACCEPTABLE_HERE = 488, "Not Acceptable Here"
+    """This status code indicates that the server is not able to produce a response which is acceptable to the client, according to the proactive negotiation header fields received in the request, and the server is unwilling to supply a default reason phrase."""
+
+    REQUEST_PENDING = 491, "Request Pending"
+    """This status code indicates that the server has received a final response for the transaction which it is still attempting to complete, but has not yet delivered that response to the client."""
+
+    UNDECIPHERABLE = 493, "Undecipherable"
+    """This status code indicates that the server was unable to decrypt a message after performing the necessary decryption(s)."""
+
+    SERVER_INTERNAL_ERROR = 500, "Server Internal Error"
+    """The server encountered an unexpected condition which prevented it from fulfilling the request."""
+
+    NOT_IMPLEMENTED = 501, "Not Implemented"
+    """The server does not support the functionality required to fulfill the request."""
+
+    BAD_GATEWAY = 502, "Bad Gateway"
+    """The server, while acting as a gateway or proxy, received an invalid response from the upstream server it accessed in attempting to fulfill the request."""
+
+    SERVICE_UNAVAILABLE = 503, "Service Unavailable"
+    """The server is currently unable to handle the request due to a temporary overloading or maintenance of the server."""
+
+    SERVER_TIME_OUT = 504, "Server Time-out"
+    """The server, while acting as a gateway or proxy, did not receive a timely response from the upstream server specified by the URI (e.g., HTTP, FTP, LDAP) or some other auxiliary server (e.g., DNS) it needed to access in attempting to complete the request."""
+
+    VERSION_NOT_SUPPORTED = 505, "Version Not Supported"
+    """The server does not support, or refuses to support, the protocol version that was used in the request message."""
+
+    MESSAGE_TOO_LARGE = 513, "Message Too Large"
+    """The server is unwilling to process the request because its header fields are too large."""
+
+    BUSY_EVERYWHERE = 600, "Busy Everywhere"
+    """The server is not able to process the request because it is busy. For example, this error might be given if a server is overloaded with requests and is unable to process one of the requests."""
+
+    DECLINE = 603, "Decline"
+    """The call has been declined."""
+
+    DOES_NOT_EXIST_ANYWHERE = 604, "Does Not Exist Anywhere"
+    """The server has received a final response for the transaction which it is still attempting to complete, but has received a termination request for that transaction from a server which it does not control."""
+
+    NOT_ACCEPTABLE_ANYWHERE = 606, "Not Acceptable"
+    """The server is not able to produce a response which is acceptable to the client, according to the proactive negotiation header fields received in the request, and the server is unwilling to supply a default reason phrase."""
 
 
 class SIPMethod(enum.StrEnum):

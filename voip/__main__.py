@@ -9,7 +9,7 @@ import ssl
 import time
 
 from voip.ai import SayCall
-from voip.rtp import RealtimeTransportProtocol
+from voip.rtp import RealtimeTransportProtocol, Session
 from voip.sip import dialog, messages
 from voip.sip.protocol import SessionInitiationProtocol
 from voip.sip.types import SipUri
@@ -203,8 +203,8 @@ def _make_outbound_factory(
     aor: SipUri,
     rtp_protocol: RealtimeTransportProtocol,
     target_uri: SipUri,
-    call_class: type,
-    call_kwargs: dict,
+    session_class: type[Session],
+    session_kwargs: dict,
 ) -> collections.abc.Callable[[], ConsoleMessageProtocol]:
     target = str(target_uri)
 
@@ -220,7 +220,9 @@ def _make_outbound_factory(
         def on_registered(self) -> None:
             dialog = OutboundDialog(sip=self)
             asyncio.create_task(
-                dialog.dial(self.dial_target, session_class=call_class, **call_kwargs)
+                dialog.dial(
+                    self.dial_target, session_class=session_class, **session_kwargs
+                )
             )
 
     def factory() -> ConsoleMessageProtocol:
@@ -263,7 +265,7 @@ def echo(ctx, dial: str | None):
     class EchoDialog(dialog.Dialog):
         def call_received(self) -> None:
             self.ringing()
-            self.accept(session_class=EchoCall)
+            self.answer(session_class=EchoCall)
 
     async def run():
         _, rtp_protocol = await _connect_rtp(
@@ -289,8 +291,8 @@ def echo(ctx, dial: str | None):
                     aor=aor,
                     rtp_protocol=rtp_protocol,
                     target_uri=target_uri,
-                    call_class=EchoCall,
-                    call_kwargs={},
+                    session_class=EchoCall,
+                    session_kwargs={},
                 ),
                 aor.maddr,
                 aor.transport == "TLS",
@@ -338,7 +340,7 @@ def transcribe(ctx, stt_model, dial: str | None):
     class TranscribeDialog(dialog.Dialog):
         def call_received(self) -> None:
             self.ringing()
-            self.accept(
+            self.answer(
                 session_class=TranscribingCall,
                 stt_model=WhisperModel(stt_model),
             )
@@ -367,8 +369,8 @@ def transcribe(ctx, stt_model, dial: str | None):
                     aor=aor,
                     rtp_protocol=rtp_protocol,
                     target_uri=target_uri,
-                    call_class=TranscribingCall,
-                    call_kwargs={"stt_model": WhisperModel(stt_model)},
+                    session_class=TranscribingCall,
+                    session_kwargs={"stt_model": WhisperModel(stt_model)},
                 ),
                 aor.maddr,
                 aor.transport == "TLS",
@@ -469,7 +471,7 @@ def agent(
     class AgentDialog(dialog.Dialog):
         def call_received(self) -> None:
             self.ringing()
-            self.accept(
+            self.answer(
                 session_class=AgentCallWithOutput,
                 stt_model=WhisperModel(stt_model),
                 llm_model=llm_model,
@@ -502,8 +504,8 @@ def agent(
                     aor=aor,
                     rtp_protocol=rtp_protocol,
                     target_uri=target_uri,
-                    call_class=AgentCallWithOutput,
-                    call_kwargs={
+                    session_class=AgentCallWithOutput,
+                    session_kwargs={
                         "stt_model": WhisperModel(stt_model),
                         "llm_model": llm_model,
                         "voice": voice,
@@ -554,8 +556,8 @@ def say(ctx, target: str, prompt: str, voice: str):
                 aor=aor,
                 rtp_protocol=rtp_protocol,
                 target_uri=target_uri,
-                call_class=SayCall,
-                call_kwargs={"text": prompt, "voice": voice},
+                session_class=SayCall,
+                session_kwargs={"text": prompt, "voice": voice},
             ),
             aor.maddr,
             aor.transport == "TLS",

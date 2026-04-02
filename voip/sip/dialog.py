@@ -26,7 +26,7 @@ class Dialog:
     class MyDialog(Dialog):
         def call_received(self) -> None:
             self.ringing()
-            self.accept(call_class=MyCall)
+            self.accept(session_class=MyCall)
 
     class MySession(SessionInitiationProtocol):
         dialog_class = MyDialog
@@ -36,26 +36,23 @@ class Dialog:
 
     ```python
     dialog = Dialog(sip=my_sip_session)
-    await dialog.dial("sip:bob@biloxi.com", call_class=MyCall)
+    await dialog.dial("sip:bob@biloxi.com", session_class=MyCall)
     ```
 
+
     [RFC 3261 §12]: https://datatracker.ietf.org/doc/html/rfc3261#section-12
+
+    Args:
+        sip: The parent protocol the session belongs to.
     """
 
+    # https://datatracker.ietf.org/doc/html/rfc3261#section-17.1.1
     T1: typing.ClassVar[datetime.timedelta] = datetime.timedelta(milliseconds=500)
-    """
-    Retransmission time according to [RFC 3261 §17.1.1].
 
-    [RFC 3261 §17.1.1]: https://datatracker.ietf.org/doc/html/rfc3261#section-17.1.1
-    """
-
+    # https://datatracker.ietf.org/doc/html/rfc3261#section-17.1.2
     BYE_ACK_TIMEOUT: typing.ClassVar[datetime.timedelta] = 64 * T1
-    """Time to wait for a 200 OK after sending BYE (64×T1, [RFC 3261 §17.1.2]).
 
-    [RFC 3261 §17.1.2]: https://datatracker.ietf.org/doc/html/rfc3261#section-17.1.2
-    """
-
-    uac: SipUri | None = None
+    uac: SipUri = None
     call_id: str = dataclasses.field(
         default_factory=lambda: f"{uuid.uuid4()}@{socket.gethostname()}",
         compare=False,
@@ -103,38 +100,43 @@ class Dialog:
         }
 
     def call_received(self) -> None:
-        """Called when an inbound INVITE arrives.
+        """
+        Called when an INVITE is received from the remote party.
 
-        Override in subclasses to accept, ring, or reject the call using
-        [accept][voip.sip.dialog.Dialog.accept],
-        [ringing][voip.sip.dialog.Dialog.ringing], and
-        [reject][voip.sip.dialog.Dialog.reject].
-        The base implementation rejects with 486 Busy Here.
+        Override in subclasses to [accept][voip.sip.dialog.Dialog.accept],
+        [ring][voip.sip.dialog.Dialog.ringing],
+        or [reject][voip.sip.dialog.Dialog.reject] the call.
+
+        The base implementation rejects with a busy signal.
         """  # noqa: D401
         self.reject()
 
     def hangup_received(self) -> None:
-        """Called when the remote party sends a BYE.
+        """
+        Called when the remote party sends a BYE.
 
         Override in subclasses to perform teardown.
         """  # noqa: D401
 
     def ringing(self) -> None:
-        """Send a 180 Ringing provisional response [RFC 3261 §21.1.2].
+        """
+        Send the report party a ringing signal.
 
-        [RFC 3261 §21.1.2]: https://datatracker.ietf.org/doc/html/rfc3261#section-21.1.2
+        This is optional but recommended for good user experience.
+        If not called, the caller will hear silence until the call is accepted or rejected.
         """
         if self.invite_transaction is not None:
             self.invite_transaction.ringing()
 
-    def accept(
+    def answer(
         self, *, session_class: type[Session], **session_kwargs: typing.Any
     ) -> None:
-        """Accept the inbound call and answer with 200 OK.
+        """
+        Accept the inbound call and start a multimedia session.
 
         Args:
             session_class: Session subclass to create for this call.
-            **session_kwargs: Extra keyword arguments forwarded to `call_class`.
+            **session_kwargs: Extra keyword arguments forwarded to `session_class`.
         """
         if self.invite_transaction is not None:
             self.invite_transaction.answer(
@@ -142,7 +144,13 @@ class Dialog:
             )
 
     def reject(self, status_code: types.SIPStatus = types.SIPStatus.BUSY_HERE) -> None:
-        """Reject the inbound call.
+        """
+        Reject the inbound call with the given status code.
+
+        Common status codes include:
+            - [BUSY_HERE][voip.sip.types.SIPStatus.BUSY_HERE]: The remote party will hear a busy signal.
+            - [DECLINE][voip.sip.types.SIPStatus.DECLINE]: The remote party will hera a decline signal.
+            - [DOES_NOT_EXIST_ANYWHERE][voip.sip.types.SIPStatus.DOES_NOT_EXIST_ANYWHERE]: The remote party will hear a "The person you are trying to reach…" message.
 
         Args:
             status_code: SIP response status code (default: 486 Busy Here).
@@ -151,10 +159,7 @@ class Dialog:
             self.invite_transaction.reject(status_code)
 
     async def bye(self) -> None:
-        """Terminate the dialog by sending a SIP BYE request [RFC 3261 §15].
-
-        [RFC 3261 §15]: https://datatracker.ietf.org/doc/html/rfc3261#section-15
-        """
+        """End the call and terminate the dialog and multimedia session."""
         from voip.sip.transactions import ByeTransaction  # noqa: PLC0415
 
         try:
@@ -172,17 +177,18 @@ class Dialog:
 
     async def dial(
         self,
-        target: str,
+        target: SipUri,
         *,
         session_class: type[Session],
         **session_kwargs: typing.Any,
     ) -> None:
-        """Initiate an outbound call to *target* [RFC 3261 §13.1].
+        """
+        Initiate an outbound call to *target*.
 
         Args:
-            target: SIP URI of the callee (e.g. ``"sip:+15551234567@carrier.com"``).
+            target: SIP URI of the remote party (e.g. ``"sip:+15551234567@carrier.com"``).
             session_class: Session subclass to create for this call.
-            **session_kwargs: Extra keyword arguments forwarded to `call_class`.
+            **session_kwargs: Extra keyword arguments forwarded to `session_class`.
 
         [RFC 3261 §13.1]: https://datatracker.ietf.org/doc/html/rfc3261#section-13.1
         """

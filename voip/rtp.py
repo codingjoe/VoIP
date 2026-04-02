@@ -103,17 +103,17 @@ class Session:
 
     Attributes:
         rtp: Shared RTP multiplexer socket that delivers packets to this handler.
-        caller: Caller identifier as received in the SIP From header.
-        media: Negotiated SDP media description for this call leg.
-        srtp: Optional SRTP session for encrypting and decrypting media.
         dialog: SIP dialog state for this call leg.
+        media: Negotiated SDP media description for this call leg.
+        caller: Caller identifier as received in the SIP From header.
+        srtp: Optional SRTP session for encrypting and decrypting media.
     """
 
     rtp: RealtimeTransportProtocol
+    dialog: Dialog
     media: MediaDescription
     caller: CallerID
     srtp: SRTPSession | None = None
-    dialog: Dialog | None = None
 
     def packet_received(self, packet: RTPPacket, addr: NetworkAddress) -> None:
         """Handle a parsed RTP packet. Override in subclasses to process media.
@@ -138,7 +138,8 @@ class Session:
         self.rtp.send(data, addr)
 
     async def hang_up(self) -> None:
-        """Terminate the call by sending a SIP BYE request [RFC 3261 §15].
+        """
+        Terminate the call by sending a SIP BYE request [RFC 3261 §15].
 
         Deregisters this call from the RTP multiplexer, then delegates the
         BYE signaling to [Dialog.bye][voip.sip.dialog.Dialog.bye], which

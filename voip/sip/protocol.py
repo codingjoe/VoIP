@@ -49,37 +49,40 @@ class SessionInitiationProtocol(asyncio.Protocol):
     """
     SIP User Agent Client (UAC) over TLS/TCP [RFC 3261].
 
-    Handles incoming calls and, optionally, carrier registration with digest
-    authentication [RFC 3261 §22].  All signaling is sent over a single
-    persistent TLS/TCP connection.
+    Handles SIP message parsing, carrier registration, and transaction management.
 
-    Subclass [Dialog][voip.sip.dialog.Dialog] and override
-    [call_received][voip.sip.dialog.Dialog.call_received] to handle
-    inbound calls, then register it as `dialog_class`:
+    Example:
+        You can use the handler like any [asyncio.Protocol][asyncio.Protocol] in Python.
 
-    ```python
-    class MyDialog(Dialog):
-        def call_received(self) -> None:
-            self.ringing()
-            self.accept(call_class=MyCall)
+        ```python
+        import asyncio
 
-    class MySession(SessionInitiationProtocol):
-        dialog_class = MyDialog
-    ```
+        from voip.sip import SessionInitiationProtocol
 
-    For outbound calls, use
-    [Dialog.dial][voip.sip.dialog.Dialog.dial] from within
-    [on_registered][voip.sip.protocol.SessionInitiationProtocol.on_registered]:
+        async def main():
+            loop = asyncio.get_running_loop()
 
-    ```python
-    class MySession(SessionInitiationProtocol):
-        def on_registered(self) -> None:
-            dialog = MyDialog(sip=self)
-            asyncio.create_task(dialog.dial("sip:bob@biloxi.com", call_class=MyCall))
-    ```
+            transport, protocol = await loop.create_connection(
+                SessionInitiationProtocol,
+                '0.0.0.0', 5060)
+
+            try:
+                await asyncio.Future()
+            finally:
+                transport.close()
+
+
+        asyncio.run(main())
+        ```
+
+        However, this example is incomplete, since the protocol will require some
+        arguments, like a reference to the RTP protocol and an AOR.
+
+    > [!Note]
+    > The support is limited to UAC (client mode).
+    > This library currently does not implement server (UAS) functionality.
 
     [RFC 3261]: https://datatracker.ietf.org/doc/html/rfc3261
-    [RFC 3261 §22]: https://datatracker.ietf.org/doc/html/rfc3261#section-22
 
     Args:
         aor: SIP Address of Record (AOR) to register with the carrier.
@@ -138,7 +141,6 @@ class SessionInitiationProtocol(asyncio.Protocol):
             self.transport.write(PING)
 
     async def handle_registration(self, tx: RegistrationTransaction) -> None:
-        """Await carrier registration and invoke [on_registered][voip.sip.protocol.SessionInitiationProtocol.on_registered]."""
         await tx
         self.on_registered()
 

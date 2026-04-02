@@ -106,6 +106,22 @@ class Transaction(asyncio.Future):
             self.set_result(self.dialog)
 
     @classmethod
+    async def receive(
+        cls,
+        *,
+        request: Request,
+        sip: SessionInitiationProtocol,
+    ): ...
+
+    @classmethod
+    async def send(
+        cls,
+        *,
+        sip: SessionInitiationProtocol,
+        **kwargs: typing.Any,
+    ): ...
+
+    @classmethod
     def from_request(
         cls,
         *,
@@ -610,7 +626,7 @@ class InviteTransaction(Transaction):
         cls,
         *,
         sip: SessionInitiationProtocol,
-        target: str,
+        target: types.SipUri,
         dialog: Dialog,
         session_class: type[Session],
         **session_kwargs: typing.Any,
@@ -634,7 +650,6 @@ class InviteTransaction(Transaction):
             dialog.uac = sip.aor
         dialog.sip = sip
 
-        target_uri = types.SipUri.parse(target)
         tx = cls(
             sip=sip,
             method=SIPMethod.INVITE,
@@ -677,12 +692,12 @@ class InviteTransaction(Transaction):
         )
         tx.request = Request(
             method=SIPMethod.INVITE,
-            uri=target_uri,
+            uri=target,
             headers={
                 "Max-Forwards": "70",
                 **tx.headers,
                 "From": dialog.from_header,
-                "To": str(target_uri),
+                "To": str(target),
                 "Contact": sip.contact,
                 "Call-ID": dialog.call_id,
                 "Route": f"<sip:{str(rtp_public[0])}:5060;transport=tcp;lr>",

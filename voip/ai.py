@@ -51,11 +51,11 @@ class TranscribeCall(VoiceActivityCall):
         ```python
         class MySession(SessionInitiationProtocol):
             def call_received(self, request: Request) -> None:
-                self.answer(request=request, call_class=MyCall)
+                self.answer(request=request, session_class=MyCall)
         ```
 
         To share one model instance across multiple calls (recommended to avoid
-        loading it multiple times) pass a pre-loaded `WhisperModel`:
+        loading it multiple times) pass a preloaded `WhisperModel`:
 
         ```python
         shared_model = WhisperModel("base")

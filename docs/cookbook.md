@@ -33,7 +33,7 @@ class AutoAcceptDialog(Dialog):
 
     def call_received(self) -> None:
         self.ringing()
-        self.accept(session_class=PrintTranscribeCall)
+        self.answer(session_class=PrintTranscribeCall)
 
 
 async def main():
@@ -101,7 +101,7 @@ class MyCall(AgentCall):
 class MyDialog(Dialog):
     def call_received(self) -> None:
         self.ringing()
-        self.accept(session_class=MyCall)
+        self.answer(session_class=MyCall)
 
 
 class MySession(SIP):
@@ -252,7 +252,7 @@ class OneUtteranceCall(AudioCall):
 class MyDialog(Dialog):
     def call_received(self) -> None:
         self.ringing()
-        self.accept(session_class=OneUtteranceCall)
+        self.answer(session_class=OneUtteranceCall)
 
 
 class MySession(SIP):

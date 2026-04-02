@@ -440,7 +440,7 @@ class EchoCall(VoiceActivityCall):
         ```python
         class MySession(SessionInitiationProtocol):
             def call_received(self, request: Request) -> None:
-                self.answer(request=request, call_class=EchoCall)
+                self.answer(request=request, session_class=EchoCall)
         ```
     """
 

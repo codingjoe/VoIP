@@ -4,22 +4,21 @@ watch:
   - docs
   - voip
 nav:
-  - Home:
+  - Usage:
       - Quickstart: index.md
       - Cookbook: cookbook.md
+      - Sessions: sessions.md
+      - SIP: sip.md
+      - Codecs: codecs.md
   - Features:
       - Feature Roadmap: feature_roadmap.md
+      - Contributing: contributing.md
       - RFC Implementation Status: rfc_status.md
-  - API Reference:
-      - Sessions: sessions.md
-      - Codecs: codecs.md
-      - RTP: rtp.md
-      - SDP: sdp.md
-      - SIP: sip.md
   - Changelog: https://github.com/codingjoe/VoIP/releases
   - Community Support: https://github.com/codingjoe/VoIP/discussions
 plugins:
-  - autorefs
+  - autorefs:
+      resolve_closest: true
   - search
   - mkdocstrings:
       default_handler: python
@@ -27,12 +26,14 @@ plugins:
         python:
           load_external_modules: true
           options:
+            locale: en
             docstring_style: google
             show_root_heading: true
             heading_level: 3
           inventories:
             - https://docs.python.org/3/objects.inv
             - https://numpy.org/doc/stable/objects.inv
+            - https://pyav.org/docs/stable/objects.inv
 theme:
   name: material
   logo: images/icon.svg
