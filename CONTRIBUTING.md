@@ -9,7 +9,7 @@ curl -sSL https://raw.githubusercontent.com/codingjoe/naming-things/refs/heads/m
 
 To run the tests, use the following command:
 
-```bash
+```console
 uv run pytest
 ```
 
@@ -18,13 +18,13 @@ You may only mock transports to avoid network IO or to mimic network counterpart
 
 ## Testing with Extra Dependencies
 
-```bash
+```console
 uv run --extra=cli --extra=pygments --extra=audio pytest
 ```
 
 Before your first commit, ensure that the pre-commit hooks are installed by running:
 
-```bash
+```console
 uvx prek install
 ```
 
@@ -34,6 +34,6 @@ The documentation is built using [MkDocs](https://www.mkdocs.org/) with [mkdocst
 
 To serve the documentation locally for development, run:
 
-```bash
+```console
 uv run --group docs mkdocs serve --livereload
 ```
