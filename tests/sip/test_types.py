@@ -1,7 +1,7 @@
 import ipaddress
 
 import pytest
-from voip.sip import SipUri
+from voip.sip import SipUri, TelUri
 from voip.sip.messages import Response
 from voip.sip.types import CallerID
 
@@ -286,6 +286,10 @@ class TestSipUri:
         uri = SipUri.parse("sip:alice@example.com;ttl=30")
         assert uri.ttl == 30
 
+    def test_ttl__absent(self):
+        """Return None when the ttl parameter is absent."""
+        assert SipUri.parse("sip:alice@example.com").ttl is None
+
     def test_transport__sips_returns_tls(self):
         """Return 'TLS' for sips: URIs that have no transport parameter."""
         uri = SipUri.parse("sips:alice@example.com")
@@ -300,6 +304,64 @@ class TestSipUri:
         """Return explicit transport parameter value."""
         uri = SipUri.parse("sip:alice@example.com;transport=udp")
         assert uri.transport == "UDP"
+
+    def test_isinstance__str(self):
+        """SipUri instances are also plain str instances."""
+        assert isinstance(SipUri.parse("sip:alice@example.com"), str)
+
+
+class TestTelUri:
+    @pytest.mark.parametrize(
+        "uri_str, number, is_global",
+        [
+            ("tel:+15551234567", "+15551234567", True),
+            ("tel:1234", "1234", False),
+            ("tel:+1-202-555-0100", "+1-202-555-0100", True),
+        ],
+    )
+    def test_parse__valid(self, uri_str, number, is_global):
+        """Parse number and global flag from a valid tel: URI."""
+        uri = TelUri.parse(uri_str)
+        assert uri.number == number
+        assert uri.is_global is is_global
+
+    def test_parse__with_phone_context(self):
+        """Parse phone-context parameter from a local tel: URI."""
+        uri = TelUri.parse("tel:1234;phone-context=example.com")
+        assert uri.number == "1234"
+        assert uri.phone_context == "example.com"
+
+    def test_parse__phone_context_absent(self):
+        """Return None for phone_context when the parameter is absent."""
+        assert TelUri.parse("tel:+15551234567").phone_context is None
+
+    @pytest.mark.parametrize(
+        "uri_str",
+        [
+            "sip:alice@example.com",
+            "http://example.com",
+            "tel:",
+        ],
+    )
+    def test_parse__invalid(self, uri_str):
+        """Raise ValueError when parsing an invalid tel: URI."""
+        with pytest.raises(ValueError):
+            TelUri.parse(uri_str)
+
+    def test_str__global_number(self):
+        """Canonical string equals the original tel: URI for a global number."""
+        assert str(TelUri.parse("tel:+15551234567")) == "tel:+15551234567"
+
+    def test_str__with_parameters(self):
+        """Canonical string includes parameters."""
+        assert (
+            str(TelUri.parse("tel:1234;phone-context=example.com"))
+            == "tel:1234;phone-context=example.com"
+        )
+
+    def test_isinstance__str(self):
+        """TelUri instances are also plain str instances."""
+        assert isinstance(TelUri.parse("tel:+15551234567"), str)
 
 
 def _ok() -> Response:
@@ -369,6 +431,36 @@ class TestCallerID:
         """Show only masked user when there is no carrier domain."""
         masked = repr(CallerID("notasipuri"))
         assert "@" not in masked
+
+    def test_uri__sip(self):
+        """Extract a SipUri from a SIP CallerID."""
+        assert isinstance(CallerID("sip:alice@example.com").uri, SipUri)
+
+    def test_uri__sip_angle_brackets(self):
+        """Extract SipUri from a CallerID with angle-bracket notation."""
+        assert isinstance(
+            CallerID('"Alice" <sip:alice@example.com>;tag=abc').uri, SipUri
+        )
+
+    def test_uri__tel(self):
+        """Extract a TelUri from a tel: CallerID."""
+        assert isinstance(CallerID("tel:+15551234567").uri, TelUri)
+
+    def test_uri__absent(self):
+        """Return None when no URI is present."""
+        assert CallerID("plain string").uri is None
+
+    def test_uri__unparseable(self):
+        """Return None when the URI-like string is not valid for any parser."""
+        assert CallerID("sip:@invalid").uri is None
+
+    def test_user__tel_number(self):
+        """Return the tel number as user for a tel: CallerID."""
+        assert CallerID("tel:+15551234567").user == "+15551234567"
+
+    def test_host__tel_absent(self):
+        """Return None for host when the CallerID is a tel URI."""
+        assert CallerID("tel:+15551234567").host is None
 
 
 class TestMaskCaller:

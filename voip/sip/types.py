@@ -1,4 +1,3 @@
-import dataclasses
 import enum
 import ipaddress
 import re
@@ -8,6 +7,7 @@ __all__ = [
     "DigestAlgorithm",
     "DigestQoP",
     "SipUri",
+    "TelUri",
     "SIPStatus",
     "SIPMethod",
 ]
@@ -22,58 +22,49 @@ if typing.TYPE_CHECKING:
     pass
 
 
-@dataclasses.dataclass(slots=True, eq=True)
-class SipUri:
+class SipUri(str):
     """A parsed SIP or SIPS URI per [RFC 3261 §19.1].
 
     Format: ``sip:user:password@host:port;uri-parameters?headers``
 
-    The `parse` classmethod decodes a raw SIP URI string into structured
-    fields.  IPv6 addresses in the host part must be enclosed in square
-    brackets per [RFC 2732] (e.g. ``sip:alice@[::1]:5060``); the stored
-    `host` is the bare address without brackets.
+    Behaves as a plain ``str`` holding the canonical URI, so instances can be
+    stored in header dicts unchanged.  The `parse` classmethod decodes a raw
+    SIP URI string into structured fields.  IPv6 addresses in the host part
+    must be enclosed in square brackets per [RFC 2732]
+    (e.g. ``sip:alice@[::1]:5060``); the stored `host` is the bare address
+    without brackets.
 
     [RFC 3261 §19.1]: https://datatracker.ietf.org/doc/html/rfc3261#section-19.1
     [RFC 2732]: https://datatracker.ietf.org/doc/html/rfc2732
 
     Examples:
         >>> SipUri.parse("sip:alice@example.com")
-        SipUri(scheme='sip', user='alice', host='example.com', ...)
+        'sip:alice@example.com:5060'
         >>> SipUri.parse("sips:+15551234567@carrier.com:5061")
-        SipUri(scheme='sips', user='+15551234567', host='carrier.com', port=5061, ...)
+        'sips:%2B15551234567@carrier.com:5061'
         >>> SipUri.parse("sip:alice@[::1]:5060")
-        SipUri(scheme='sip', user='alice', host=IPv6Address('::1'), port=5060, ...)
+        'sip:alice@[::1]:5060'
 
     Args:
         scheme: URI scheme — `sip` or `sips`.
         host: Host as a bare string — no brackets for IPv6 addresses.
         user: SIP user part (phone number or username).
+        password: Optional password in the user-info component.
         port: Port number. 5061 for `sips:` and 5060 for `sip:`.
         parameters: URI parameters as a mapping of name → value (`None` for flag parameters).
         headers: SIP headers as a mapping of name → value.
 
     """
 
+    __slots__ = ("scheme", "host", "user", "password", "port", "parameters", "headers")
+
     scheme: str
     host: str | ipaddress.IPv6Address | ipaddress.IPv4Address
-    user: str | None = None
-    password: str | None = dataclasses.field(default=None, repr=False)
-    port: int | None = None
-    parameters: dict[str, str | None] = dataclasses.field(default_factory=dict)
-    headers: dict[str, str] = dataclasses.field(default_factory=dict)
-
-    def __post_init__(self):
-        self.port = (
-            self.port
-            if self.port is not None
-            else 5061
-            if self.scheme == "sips"
-            else 5060
-        )
-        try:
-            self.host = ipaddress.ip_address(self.host)
-        except ValueError:
-            pass
+    user: str | None
+    password: str | None
+    port: int
+    parameters: dict[str, str | None]
+    headers: dict[str, str]
 
     SIP_URL_PATTERN: typing.ClassVar[re.Pattern[str]] = re.compile(
         r"^(?P<scheme>sips?):"
@@ -84,6 +75,57 @@ class SipUri:
         r"(?P<headers>\?[^?]+)?$",
         re.IGNORECASE,
     )
+
+    def __new__(
+        cls,
+        scheme: str,
+        host: str | ipaddress.IPv6Address | ipaddress.IPv4Address,
+        user: str | None = None,
+        password: str | None = None,
+        port: int | None = None,
+        parameters: dict[str, str | None] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> SipUri:
+        try:
+            host = ipaddress.ip_address(host)
+        except ValueError:
+            pass
+        port = port if port is not None else (5061 if scheme == "sips" else 5060)
+        parameters = parameters or {}
+        headers = headers or {}
+        parts = [f"{scheme}:"]
+        if user:
+            parts.append(urllib.parse.quote(user))
+            if password:
+                parts.append(f":{urllib.parse.quote(password)}")
+            parts.append("@")
+        parts.append(
+            f"[{host}]" if isinstance(host, ipaddress.IPv6Address) else str(host)
+        )
+        parts.append(f":{port}")
+        for name, val in parameters.items():
+            parts.append(
+                f";{urllib.parse.quote(name)}={urllib.parse.quote(val)}"
+                if val is not None
+                else f";{urllib.parse.quote(name)}"
+            )
+        if headers:
+            parts.append("?")
+            parts.append(
+                "&".join(
+                    f"{urllib.parse.quote(name)}={urllib.parse.quote(val)}"
+                    for name, val in headers.items()
+                )
+            )
+        instance = super().__new__(cls, "".join(parts))
+        instance.scheme = scheme
+        instance.host = host
+        instance.user = user
+        instance.password = password
+        instance.port = port
+        instance.parameters = parameters
+        instance.headers = headers
+        return instance
 
     @classmethod
     def parse(cls, value: str) -> SipUri:
@@ -140,34 +182,6 @@ class SipUri:
             elif part:
                 yield urllib.parse.unquote(part), ""
 
-    def __str__(self) -> str:
-        parts = [f"{self.scheme}:"]
-        if self.user:
-            parts.append(urllib.parse.quote(self.user))
-            if self.password:
-                parts.append(f":{urllib.parse.quote(self.password)}")
-            parts.append("@")
-        parts.append(
-            f"[{str(self.host)}]"
-            if isinstance(self.host, ipaddress.IPv6Address)
-            else str(self.host)
-        )
-        parts.append(f":{self.port}")
-        for name, val in self.parameters.items():
-            if val is not None:
-                parts.append(f";{urllib.parse.quote(name)}={urllib.parse.quote(val)}")
-            else:
-                parts.append(f";{urllib.parse.quote(name)}")
-        if self.headers:
-            parts.append("?")
-            parts.append(
-                "&".join(
-                    f"{urllib.parse.quote(name)}={urllib.parse.quote(val)}"
-                    for name, val in self.headers.items()
-                )
-            )
-        return "".join(parts)
-
     @property
     def maddr(self) -> NetworkAddress:
         try:
@@ -189,6 +203,88 @@ class SipUri:
             if self.scheme == "sip"
             else "TLS"
         )
+
+
+class TelUri(str):
+    """A tel: URI per [RFC 3966].
+
+    Format: ``tel:phone-number;parameters``
+
+    Behaves as a plain ``str`` holding the canonical URI.  Global numbers
+    (E.164) start with ``+``.  Local numbers carry a ``phone-context``
+    parameter identifying the dialling context.
+
+    [RFC 3966]: https://datatracker.ietf.org/doc/html/rfc3966
+
+    Examples:
+        >>> TelUri.parse("tel:+15551234567")
+        'tel:+15551234567'
+        >>> TelUri.parse("tel:1234;phone-context=example.com")
+        'tel:1234;phone-context=example.com'
+
+    Args:
+        number: The phone number, including any visual separators.
+        parameters: URI parameters as a mapping of name → value (`None` for flag parameters).
+
+    """
+
+    __slots__ = ("number", "parameters")
+
+    number: str
+    parameters: dict[str, str | None]
+
+    TEL_URL_PATTERN: typing.ClassVar[re.Pattern[str]] = re.compile(
+        r"^tel:(?P<number>[+0-9A-F*#().,-]+)"
+        r"(?P<parameters>;.*)?$",
+        re.IGNORECASE,
+    )
+
+    def __new__(
+        cls,
+        number: str,
+        parameters: dict[str, str | None] | None = None,
+    ) -> TelUri:
+        parameters = parameters or {}
+        parts = [f"tel:{number}"]
+        for name, val in parameters.items():
+            parts.append(
+                f";{urllib.parse.quote(name)}={urllib.parse.quote(val)}"
+                if val is not None
+                else f";{urllib.parse.quote(name)}"
+            )
+        instance = super().__new__(cls, "".join(parts))
+        instance.number = number
+        instance.parameters = parameters
+        return instance
+
+    @classmethod
+    def parse(cls, value: str) -> TelUri:
+        """Parse a tel: URI string into a `TelUri` instance.
+
+        Returns:
+            Parsed `TelUri` instance.
+
+        Raises:
+            ValueError: When the URI is malformed or uses an unsupported scheme.
+        """
+        if match := cls.TEL_URL_PATTERN.fullmatch(value):
+            return cls(
+                number=match.group("number"),
+                parameters=dict(SipUri._parse_parameters(match.group("parameters")))
+                if match.group("parameters")
+                else {},
+            )
+        raise ValueError(f"Invalid tel URI: {value!r}")
+
+    @property
+    def is_global(self) -> bool:
+        """Whether this is a global (E.164) number, starting with `+`."""
+        return self.number.startswith("+")
+
+    @property
+    def phone_context(self) -> str | None:
+        """The `phone-context` parameter value, if present."""
+        return self.parameters.get("phone-context")
 
 
 class CallerID(str):
@@ -216,16 +312,39 @@ class CallerID(str):
         return None
 
     @property
+    def uri(self) -> SipUri | TelUri | None:
+        """Parsed SIP or tel URI embedded in the header value, if present."""
+        if not (m := re.search(r"<?((?:sips?|tel):[^>\s]+)>?", self)):
+            return None
+        raw = m.group(1)
+        try:
+            return SipUri.parse(raw)
+        except ValueError:
+            pass
+        try:
+            return TelUri.parse(raw)
+        except ValueError:
+            return None
+
+    @property
     def user(self) -> str | None:
-        """SIP user part (phone number or username)."""
-        m = re.search(r"sips?:([^@>;\s]+)@", self)
-        return m.group(1) if m else None
+        """SIP user part or telephone number."""
+        match self.uri:
+            case SipUri() as sip:
+                return sip.user
+            case TelUri() as tel:
+                return tel.number
+            case _:
+                return None
 
     @property
     def host(self) -> str | None:
         """Carrier domain extracted from the SIP URI."""
-        m = re.search(r"sips?:[^@>;\s]+@([^>;)\s,]+)", self)
-        return m.group(1) if m else None
+        match self.uri:
+            case SipUri() as sip:
+                return str(sip.host)
+            case _:
+                return None
 
     @property
     def tag(self) -> str | None:

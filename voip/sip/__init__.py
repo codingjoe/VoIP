@@ -7,11 +7,12 @@ Session Initiation Protocol (SIP) implementation of [RFC 3261].
 from .dialog import Dialog
 from .messages import Message, Request, Response
 from .protocol import SessionInitiationProtocol
-from .types import CallerID, SIPMethod, SIPStatus, SipUri
+from .types import CallerID, SIPMethod, SIPStatus, SipUri, TelUri
 
 __all__ = [
     "CallerID",
     "SipUri",
+    "TelUri",
     "SIPStatus",
     "SIPMethod",
     "Message",

@@ -20,6 +20,8 @@
 
 ::: voip.sip.SipUri
 
+::: voip.sip.TelUri
+
 ::: voip.sip.CallerID
 
 ::: voip.sip.SIPStatus
