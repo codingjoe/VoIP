@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 from voip.rtp import RTP, RealtimeTransportProtocol, RTPPacket, RTPPayloadType, Session
 from voip.sdp.types import MediaDescription, RTPPayloadFormat
+from voip.sip.dialog import Dialog
 from voip.sip.types import CallerID
 
 
@@ -23,6 +24,7 @@ def make_call(**kwargs) -> Session:
     """Create an RTPCall with mock rtp for unit testing."""
     defaults: dict = {
         "rtp": MagicMock(spec=RealtimeTransportProtocol),
+        "dialog": Dialog(),
         "media": make_media(),
         "caller": CallerID(""),
     }
@@ -160,7 +162,7 @@ class TestRealtimeTransportProtocol:
                 routed.append(packet)
 
         mux = RealtimeTransportProtocol()
-        handler = RecordCall(rtp=mux, media=make_media(), caller=CallerID(""))
+        handler = RecordCall(rtp=mux, dialog=Dialog(), media=make_media(), caller=CallerID(""))
         remote_addr = ("127.0.0.1", 5004)
         mux.register_call(remote_addr, handler)
         rtp_packet = make_rtp_packet(payload=b"audio")
@@ -185,7 +187,7 @@ class TestRealtimeTransportProtocol:
                 routed.append(packet)
 
         mux = RealtimeTransportProtocol()
-        handler = RecordCall(rtp=mux, media=make_media(), caller=CallerID(""))
+        handler = RecordCall(rtp=mux, dialog=Dialog(), media=make_media(), caller=CallerID(""))
         mux.register_call(("127.0.0.1", 5004), handler)
         # 5 bytes is shorter than the 12-byte minimum RTP header — must not raise.
         mux.datagram_received(b"\x80\x00\x00\x01\x00", ("127.0.0.1", 5004))
@@ -201,7 +203,7 @@ class TestRealtimeTransportProtocol:
 
         mux = RealtimeTransportProtocol()
         mux.connection_made(MagicMock(spec=asyncio.DatagramTransport))
-        handler = RecordCall(rtp=mux, media=make_media(), caller=CallerID(""))
+        handler = RecordCall(rtp=mux, dialog=Dialog(), media=make_media(), caller=CallerID(""))
         mux.register_call(None, handler)
         stun_bytes = b"\x01\x01" + b"\x00" * 18  # first byte = 1 (STUN range [0,3])
         mux.datagram_received(stun_bytes, ("127.0.0.1", 5004))
@@ -286,10 +288,10 @@ class TestRealtimeTransportProtocol:
         mux = RealtimeTransportProtocol()
         specific_addr = ("1.2.3.4", 5004)
         wildcard_handler = WildcardCall(
-            rtp=mux, media=make_media(), caller=CallerID("")
+            rtp=mux, dialog=Dialog(), media=make_media(), caller=CallerID("")
         )
         specific_handler = SpecificCall(
-            rtp=mux, media=make_media(), caller=CallerID("")
+            rtp=mux, dialog=Dialog(), media=make_media(), caller=CallerID("")
         )
         mux.register_call(None, wildcard_handler)
         mux.register_call(specific_addr, specific_handler)
@@ -310,7 +312,7 @@ class TestRealtimeTransportProtocol:
                 received.append(packet)
 
         mux = RealtimeTransportProtocol()
-        handler = WildcardCall(rtp=mux, media=make_media(), caller=CallerID(""))
+        handler = WildcardCall(rtp=mux, dialog=Dialog(), media=make_media(), caller=CallerID(""))
         mux.register_call(None, handler)
 
         rtp_packet = make_rtp_packet(payload=b"unmatched")
@@ -328,7 +330,7 @@ class TestRealtimeTransportProtocol:
                 received.append(packet)
 
         mux = RealtimeTransportProtocol()
-        handler = RecordCall(rtp=mux, media=make_media(), caller=CallerID(""))
+        handler = RecordCall(rtp=mux, dialog=Dialog(), media=make_media(), caller=CallerID(""))
         remote_addr = ("5.6.7.8", 5004)
         mux.register_call(remote_addr, handler)
         mux.unregister_call(remote_addr)
@@ -342,7 +344,7 @@ class TestRealtimeTransportProtocol:
         import logging  # noqa: PLC0415
 
         mux = RealtimeTransportProtocol()
-        handler = Session(rtp=mux, media=make_media(), caller=CallerID(""))
+        handler = Session(rtp=mux, dialog=Dialog(), media=make_media(), caller=CallerID(""))
         with caplog.at_level(logging.INFO, logger="voip.rtp"):
             mux.register_call(("1.2.3.4", 5004), handler)
         assert any("rtp_call_registered" in r.message for r in caplog.records)
@@ -353,7 +355,7 @@ class TestRealtimeTransportProtocol:
         import logging  # noqa: PLC0415
 
         mux = RealtimeTransportProtocol()
-        handler = Session(rtp=mux, media=make_media(), caller=CallerID(""))
+        handler = Session(rtp=mux, dialog=Dialog(), media=make_media(), caller=CallerID(""))
         addr = ("1.2.3.4", 5004)
         mux.register_call(addr, handler)
         with caplog.at_level(logging.INFO, logger="voip.rtp"):
@@ -370,7 +372,7 @@ class TestRealtimeTransportProtocol:
                 received.append((packet, addr))
 
         mux = RealtimeTransportProtocol()
-        handler = CapturingCall(rtp=mux, media=make_media(), caller=CallerID(""))
+        handler = CapturingCall(rtp=mux, dialog=Dialog(), media=make_media(), caller=CallerID(""))
         mux.register_call(None, handler)
         packet = make_rtp_packet()
         mux.packet_received(packet, ("1.2.3.4", 5004))
@@ -413,6 +415,7 @@ class TestSRTPIntegration:
         session = SRTPSession.generate()
         handler = SRTPCapture(
             rtp=mux,
+            dialog=Dialog(),
             media=make_media(),
             srtp=session,
             caller=CallerID(""),
@@ -444,6 +447,7 @@ class TestSRTPIntegration:
         session = SRTPSession.generate()
         handler = SRTPCapture(
             rtp=mux,
+            dialog=Dialog(),
             media=make_media(),
             srtp=session,
             caller=CallerID(""),
@@ -479,7 +483,7 @@ class TestSession:
     def test_rtp_stored_as_field(self):
         """Rtp back-reference is stored on the instance."""
         mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
-        call = Session(rtp=mock_rtp, media=make_media(), caller=CallerID(""))
+        call = Session(rtp=mock_rtp, dialog=Dialog(), media=make_media(), caller=CallerID(""))
         assert call.rtp is mock_rtp
 
     def test_packet_received__noop_by_default(self):
