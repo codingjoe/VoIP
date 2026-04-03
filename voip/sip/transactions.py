@@ -716,40 +716,21 @@ class InviteTransaction(Transaction):
             raise
 
     def response_received(self, response: Response) -> None:
-        """Handle responses to an outbound INVITE.
-
-        Dispatches provisional (1xx), successful (2xx), and failure (4xx–6xx)
-        responses.  On 200 OK the call setup is completed asynchronously via
-        `_accept_call`.
-
-        Args:
-            response: The parsed SIP response.
-        """
+        """Dispatch responses to an outbound INVITE."""
         match response.status_code // 100:
-            case 1:
+            case 1:  # trying/ringing
                 pass
-            case 2:
-                try:
-                    asyncio.get_running_loop().create_task(self._accept_call(response))
-                except RuntimeError:
-                    logger.debug(
-                        "response_received called outside of an async context; "
-                        "200 OK will not be processed"
-                    )
-            case _:
-                self.sip.transactions.pop(self.branch, None)
-                logger.warning(
-                    "Outbound call failed: %s %s",
-                    response.status_code,
-                    response.phrase,
-                )
+            case SIPStatus.OK:
+                self._start_call(response)
+                self.ack(response)
+            case _:  # any other terminal response
+                self.ack(response)
 
-    async def _accept_call(self, response: Response) -> None:
+    def _start_call(self, response: Response) -> None:
         """Complete call setup after a 200 OK is received.
 
         Negotiates the codec from the remote SDP answer, creates the call
-        handler, registers it with the RTP mux, updates the dialog, and
-        sends the ACK.
+        handler, registers it with the RTP mux, updates the dialog.
 
         Args:
             response: The 200 OK SIP response containing the remote SDP answer.
@@ -808,17 +789,22 @@ class InviteTransaction(Transaction):
             if remote_rtp_address is not None:
                 self.sip.rtp.send(b"\x00", remote_rtp_address)
 
-        # Update the dialog with remote tag from 200 OK then store it.
-        # The To-tag in the 200 OK is the callee's tag (remote).  The From-tag
-        # is our original local tag, which must become dialog.remote_tag so
-        # that subsequent in-dialog BYE lookups (keyed by
-        # (request.remote_tag, request.local_tag) = (our_tag, callee_tag))
-        # resolve correctly via `sip.dialogs[(dialog.remote_tag, dialog.local_tag)]`.
+        self.ack(response)
+        self.sip.transactions.pop(self.branch, None)
+        self.complete()
+
+    def ack(self, response: Response) -> None:
+        """
+        Send an ACK after receiving a terminal response.
+
+        Establish a dialog if the response is 200 OK.
+        """
         our_tag = response.local_tag
         callee_tag = response.remote_tag
         self.dialog.remote_tag = our_tag
         self.dialog.local_tag = callee_tag
-        self.sip.dialogs[(our_tag, callee_tag)] = self.dialog
+        if response.status == SIPStatus.OK:
+            self.sip.dialogs[(our_tag, callee_tag)] = self.dialog
 
         ack_branch = f"{Transaction.branch_prefix}-{uuid.uuid4()}"
         contact = response.headers.get("Contact")
@@ -859,7 +845,6 @@ class InviteTransaction(Transaction):
             )
         )
         self.sip.transactions.pop(self.branch, None)
-        self.complete()
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
