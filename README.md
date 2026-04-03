@@ -20,28 +20,30 @@ Async VoIP Python library for the AI age.
 
 ## Usage
 
-### CLI
+To get started, you will need a SIP account. One is usually included with ISP.
+Check your ISP's documentation or router for details.
 
-Answer calls and transcribe them live from the terminal:
+You will need a SIP AOR (URI), which looks like this:
 
-```console
-uvx 'voip[cli]' sip sips:alice:********@sip.example.com transcribe
+```INI
+sip:USER:PASSSWORD@SIP_SERVER;transport=TCP
 ```
 
-A simple echo server can be started with:
+> [!NOTE]
+> This library uses secure defaults (TLS transport on port 5061).
+> However, most SIP servers only support unencrypted connections.
+> Therefore, you will need to provide an explict transport parameter.
+
+### CLI
+
+A simple echo call can be started with:
 
 ```console
 uvx 'voip[cli]' sip sips:alice:********@sip.example.com echo
 ```
 
-Each command supports an optional `--dial TARGET` flag to initiate an
-outbound call instead of waiting for an inbound one:
-
-```console
-uvx 'voip[cli]' sip sips:alice:********@sip.example.com echo --dial sip:+15551234567@sip.example.com
-uvx 'voip[cli]' sip sips:alice:********@sip.example.com transcribe --dial sip:+15551234567@sip.example.com
-uvx 'voip[cli]' sip sips:alice:********@sip.example.com agent --dial sip:+15551234567@sip.example.com --initial-prompt "Hello, how can I help you?"
-```
+Each command supports an optional `--dial` argument to initiate an
+outbound call instead of waiting for an inbound one.
 
 To dial a number, say a message, and hang up automatically:
 
@@ -52,7 +54,7 @@ uvx 'voip[cli]' sip sips:alice:********@sip.example.com say sip:+15551234567@sip
 You can also talk to a local agent (needs [Ollama]):
 
 ```console
-uvx 'voip[cli]' sip sips:alice:********@sip.example.com agent
+uvx 'voip[cli]' sip sips:alice:********@sip.example.com agent --initial-prompt "Hi, I am looking for a Mr. Ron, first name Mo?"
 ```
 
 ### Python API
