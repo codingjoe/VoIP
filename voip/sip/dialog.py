@@ -7,7 +7,7 @@ import typing
 import uuid
 
 from voip.sip import messages, transactions, types
-from voip.sip.types import SipURI, TelURI
+from voip.sip.types import SipURI
 
 if typing.TYPE_CHECKING:
     from voip.rtp import Session
@@ -177,7 +177,7 @@ class Dialog:
 
     async def dial(
         self,
-        target: SipURI | TelURI,
+        target: SipURI,
         *,
         session_class: type[Session],
         **session_kwargs: typing.Any,

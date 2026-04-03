@@ -12,7 +12,7 @@ from voip.ai import SayCall
 from voip.rtp import RealtimeTransportProtocol, Session
 from voip.sip import dialog, messages
 from voip.sip.protocol import SessionInitiationProtocol
-from voip.sip.types import SipURI, TelURI
+from voip.sip.types import SipURI, parse_uri
 from voip.types import NetworkAddress
 
 try:
@@ -202,7 +202,7 @@ def _make_outbound_factory(
     verbose: int,
     aor: SipURI,
     rtp_protocol: RealtimeTransportProtocol,
-    target_uri: SipURI | TelURI,
+    target_uri: SipURI,
     session_class: type[Session],
     session_kwargs: dict,
 ) -> collections.abc.Callable[[], ConsoleMessageProtocol]:
@@ -214,7 +214,7 @@ def _make_outbound_factory(
 
     @dataclasses.dataclass(kw_only=True, slots=True)
     class OutboundProtocol(ConsoleMessageProtocol):
-        dial_target: SipURI | TelURI
+        dial_target: SipURI
 
         def on_registered(self) -> None:
             dialog = OutboundDialog(sip=self)
@@ -236,19 +236,6 @@ def _make_outbound_factory(
     return factory
 
 
-def _parse_dial_target(dial: str | None) -> SipURI | TelURI | None:
-    if dial is None:
-        return None
-    try:
-        return SipURI.parse(dial)
-    except ValueError:
-        pass
-    try:
-        return TelURI.parse(dial)
-    except ValueError as exc:
-        raise click.BadParameter(str(exc), param_hint="--dial") from exc
-
-
 @sip.command()
 @click.option(
     "--dial",
@@ -263,7 +250,6 @@ def echo(ctx, dial: str | None):
 
     obj = ctx.obj
     aor = obj["aor"]
-    target_uri = _parse_dial_target(dial)
 
     class EchoDialog(dialog.Dialog):
         def call_received(self) -> None:
@@ -275,7 +261,7 @@ def echo(ctx, dial: str | None):
             aor.maddr,
             obj["stun_server"],
         )
-        if target_uri is None:
+        if dial is None:
             await _connect_sip(
                 lambda: ConsoleMessageProtocol(
                     verbose=obj.get("verbose", 0),
@@ -293,7 +279,7 @@ def echo(ctx, dial: str | None):
                     verbose=obj.get("verbose", 0),
                     aor=aor,
                     rtp_protocol=rtp_protocol,
-                    target_uri=target_uri,
+                    target_uri=parse_uri(dial, aor),
                     session_class=EchoCall,
                     session_kwargs={},
                 ),
@@ -331,7 +317,6 @@ def transcribe(ctx, stt_model, dial: str | None):
 
     obj = ctx.obj
     aor = obj["aor"]
-    target_uri = _parse_dial_target(dial)
 
     @dataclasses.dataclass(kw_only=True, slots=True)
     class TranscribingCall(TranscribeCall):
@@ -353,7 +338,7 @@ def transcribe(ctx, stt_model, dial: str | None):
             aor.maddr,
             obj["stun_server"],
         )
-        if target_uri is None:
+        if dial is None:
             await _connect_sip(
                 lambda: ConsoleMessageProtocol(
                     verbose=obj.get("verbose", 0),
@@ -371,7 +356,7 @@ def transcribe(ctx, stt_model, dial: str | None):
                     verbose=obj.get("verbose", 0),
                     aor=aor,
                     rtp_protocol=rtp_protocol,
-                    target_uri=target_uri,
+                    target_uri=parse_uri(dial, aor),
                     session_class=TranscribingCall,
                     session_kwargs={"stt_model": WhisperModel(stt_model)},
                 ),
@@ -444,7 +429,6 @@ def agent(
 
     obj = ctx.obj
     aor = obj["aor"]
-    target_uri = _parse_dial_target(dial)
 
     @dataclasses.dataclass(kw_only=True, slots=True)
     class AgentCallWithOutput(AgentCall):
@@ -488,7 +472,7 @@ def agent(
             aor.maddr,
             obj["stun_server"],
         )
-        if target_uri is None:
+        if dial is None:
             await _connect_sip(
                 lambda: ConsoleMessageProtocol(
                     verbose=obj.get("verbose", 0),
@@ -506,7 +490,7 @@ def agent(
                     verbose=obj.get("verbose", 0),
                     aor=aor,
                     rtp_protocol=rtp_protocol,
-                    target_uri=target_uri,
+                    target_uri=parse_uri(dial, aor),
                     session_class=AgentCallWithOutput,
                     session_kwargs={
                         "stt_model": WhisperModel(stt_model),
@@ -543,14 +527,6 @@ def say(ctx, target: str, prompt: str, voice: str):
     obj = ctx.obj
     aor = obj["aor"]
 
-    try:
-        target_uri: SipURI | TelURI = SipURI.parse(target)
-    except ValueError:
-        try:
-            target_uri = TelURI.parse(target)
-        except ValueError as exc:
-            raise click.BadParameter(str(exc), param_hint="TARGET") from exc
-
     async def run():
         _, rtp_protocol = await _connect_rtp(
             aor.maddr,
@@ -561,7 +537,7 @@ def say(ctx, target: str, prompt: str, voice: str):
                 verbose=obj.get("verbose", 0),
                 aor=aor,
                 rtp_protocol=rtp_protocol,
-                target_uri=target_uri,
+                target_uri=parse_uri(target, aor),
                 session_class=SayCall,
                 session_kwargs={"text": prompt, "voice": voice},
             ),

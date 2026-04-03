@@ -20,8 +20,6 @@
 
 ::: voip.sip.SipURI
 
-::: voip.sip.TelURI
-
 ::: voip.sip.CallerID
 
 ::: voip.sip.SIPStatus

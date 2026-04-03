@@ -7,9 +7,9 @@ __all__ = [
     "DigestAlgorithm",
     "DigestQoP",
     "SipURI",
-    "TelURI",
     "SIPStatus",
     "SIPMethod",
+    "parse_uri",
 ]
 
 import typing
@@ -22,94 +22,24 @@ if typing.TYPE_CHECKING:
     pass
 
 
-class TelURI(str):
-    """A tel: URI per [RFC 3966].
-
-    Format: ``tel:phone-number;parameters``
-
-    Behaves as a plain ``str`` holding the canonical URI.  Global numbers
-    (E.164) start with ``+``.  Local numbers carry a ``phone-context``
-    parameter identifying the dialling context.
-
-    [RFC 3966]: https://datatracker.ietf.org/doc/html/rfc3966
-
-    Examples:
-        >>> TelURI.parse("tel:+15551234567")
-        'tel:+15551234567'
-        >>> TelURI.parse("tel:1234;phone-context=example.com")
-        'tel:1234;phone-context=example.com'
-
-    Args:
-        number: The phone number, including any visual separators.
-        parameters: URI parameters as a mapping of name → value (`None` for flag parameters).
-
-    """
-
-    __slots__ = ("number", "parameters")
-
-    number: str
-    parameters: dict[str, str | None]
-
-    TEL_URL_PATTERN: typing.ClassVar[re.Pattern[str]] = re.compile(
-        r"^tel:(?P<number>[+0-9A-F*#().,-]+)"
-        r"(?P<parameters>;.*)?$",
-        re.IGNORECASE,
-    )
-
-    def __new__(
-        cls,
-        number: str,
-        parameters: dict[str, str | None] | None = None,
-    ) -> TelURI:
-        parameters = parameters or {}
-        parts = [f"tel:{number}"]
-        for name, val in parameters.items():
-            parts.append(
-                f";{urllib.parse.quote(name)}={urllib.parse.quote(val)}"
-                if val is not None
-                else f";{urllib.parse.quote(name)}"
-            )
-        instance = super().__new__(cls, "".join(parts))
-        instance.number = number
-        instance.parameters = parameters
-        return instance
-
-    @classmethod
-    def parse(cls, value: str) -> TelURI:
-        """Parse a tel: URI string into a `TelUri` instance.
-
-        Returns:
-            Parsed `TelUri` instance.
-
-        Raises:
-            ValueError: When the URI is malformed or uses an unsupported scheme.
-        """
-        if match := cls.TEL_URL_PATTERN.fullmatch(value):
-            return cls(
-                number=match.group("number"),
-                parameters=dict(SipURI._parse_parameters(match.group("parameters")))
-                if match.group("parameters")
-                else {},
-            )
-        raise ValueError(f"Invalid tel URI: {value!r}")
-
-    @property
-    def is_global(self) -> bool:
-        """Whether this is a global (E.164) number, starting with `+`."""
-        return self.number.startswith("+")
-
-    @property
-    def phone_context(self) -> str | None:
-        """The `phone-context` parameter value, if present."""
-        return self.parameters.get("phone-context")
+def parse_uri(uri: str, aor: SipURI) -> SipURI:
+    """Parse a SIP or tel URI string into a `SipURI` with the AOR as context."""
+    scheme, body = uri.split(":", 1)
+    match scheme.lower():
+        case "sip" | "sips":
+            return SipURI.parse(uri)
+        case "tel":
+            return SipURI.parse(f"sip:{body}@{aor.host};user=phone")
+        case _:
+            raise ValueError(f"Invalid URI scheme: {uri[:3].lower()}")
 
 
 class SipURI(str):
     """A parsed SIP or SIPS URI per [RFC 3261 §19.1].
 
-    Format: ``sip:user:password@host:port;uri-parameters?headers``
+    Format: `sip:user:password@host:port;uri-parameters?headers`
 
-    Behaves as a plain ``str`` holding the canonical URI, so instances can be
+    Behaves as a plain `str` holding the canonical URI, so instances can be
     stored in header dicts unchanged.  The `parse` classmethod decodes a raw
     SIP URI string into structured fields.  IPv6 addresses in the host part
     must be enclosed in square brackets per [RFC 2732]
@@ -312,39 +242,20 @@ class CallerID(str):
         return None
 
     @property
-    def uri(self) -> SipURI | TelURI | None:
+    def uri(self) -> SipURI | None:
         """Parsed SIP or tel URI embedded in the header value, if present."""
-        if not (m := re.search(r"<?((?:sips?|tel):[^>\s]+)>?", self)):
-            return None
-        raw = m.group(1)
-        try:
-            return SipURI.parse(raw)
-        except ValueError:
-            pass
-        try:
-            return TelURI.parse(raw)
-        except ValueError:
-            return None
+        if m := re.search(r"<?((?:sips?|tel):[^>\s]+)>?", self):
+            return SipURI.parse(m.group(1))
 
     @property
     def user(self) -> str | None:
         """SIP user part or telephone number."""
-        match self.uri:
-            case SipURI() as sip:
-                return sip.user
-            case TelURI() as tel:
-                return tel.number
-            case _:
-                return None
+        return self.uri.user if self.uri else None
 
     @property
-    def host(self) -> str | None:
+    def host(self) -> str | ipaddress.IPv4Address | ipaddress.IPv6Address | None:
         """Carrier domain extracted from the SIP URI."""
-        match self.uri:
-            case SipURI() as sip:
-                return str(sip.host)
-            case _:
-                return None
+        return self.uri.host if self.uri else None
 
     @property
     def tag(self) -> str | None:
