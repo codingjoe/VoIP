@@ -713,14 +713,11 @@ class InviteTransaction(Transaction):
         """Dispatch responses to an outbound INVITE."""
         match response.status_code // 100:
             case 1:  # trying/ringing
-                pass
+                return
             case 2:  # OK
                 self._start_call(response)
-                self.ack(response)
-                self.complete()
-            case _:  # any other terminal response
-                self.ack(response)
-                self.complete()
+        self.ack(response)
+        self.complete()
 
     def _start_call(self, response: Response) -> None:
         """Complete call setup after a 200 OK is received.

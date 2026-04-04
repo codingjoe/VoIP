@@ -118,7 +118,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
         self.public_address = self.public_address or self.rtp.public_address
 
     def add_dialog(self, dialog: Dialog) -> None:
-        """Register *dialog* keyed by ``(local_tag, remote_tag)``."""
+        """Register *dialog* keyed by ``(dialog.local_tag, dialog.remote_tag)``."""
         self._dialogs[dialog.local_tag, dialog.remote_tag] = dialog
 
     def del_dialog(self, dialog: Dialog) -> None:
