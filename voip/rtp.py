@@ -13,13 +13,13 @@ import struct
 import typing
 from typing import TYPE_CHECKING
 
-from voip.sdp.types import MediaDescription
+from voip.sdp.types import MediaDescription, RTPPayloadFormat
 from voip.srtp import SRTPSession
 from voip.stun import STUNProtocol
 from voip.types import ByteSerializableObject, NetworkAddress
 
 if TYPE_CHECKING:
-    from voip.sip.protocol import SessionInitiationProtocol
+    from voip.sip.dialog import Dialog
     from voip.sip.types import CallerID
 
 __all__ = ["RTP", "Session", "RTPPacket", "RTPPayloadType", "RealtimeTransportProtocol"]
@@ -94,22 +94,23 @@ class Session:
     stream. Subclass and override `packet_received` to process incoming
     media, and use `send_packet` to transmit outbound media.
 
-    The `rtp` and `sip` back-references allow the handler to send data
-    back to the caller and to terminate the call via SIP BYE.
+    The `rtp` back-reference allows sending media; the `dialog` back-reference
+    carries the SIP dialog state and a reference to the SIP session
+    (``dialog.sip``) so that the transport can be closed when the call ends.
 
     Subclass `voip.audio.AudioCall` for audio calls with codec
     negotiation, buffering, and decoding.
 
     Attributes:
         rtp: Shared RTP multiplexer socket that delivers packets to this handler.
-        sip: SIP session that answered this call (used for BYE etc.).
-        caller: Caller identifier as received in the SIP From header.
+        dialog: SIP dialog state for this call leg.
         media: Negotiated SDP media description for this call leg.
+        caller: Caller identifier as received in the SIP From header.
         srtp: Optional SRTP session for encrypting and decrypting media.
     """
 
     rtp: RealtimeTransportProtocol
-    sip: SessionInitiationProtocol
+    dialog: Dialog
     media: MediaDescription
     caller: CallerID
     srtp: SRTPSession | None = None
@@ -137,13 +138,30 @@ class Session:
         self.rtp.send(data, addr)
 
     async def hang_up(self) -> None:
-        """Terminate the call by sending a SIP BYE request.
-
-        Raises:
-            NotImplementedError: Not yet implemented; the call_id and remote
-                SIP address need to be stored per call to make this work.
         """
-        raise NotImplementedError("hang_up is not yet implemented")
+        Terminate the call by sending a SIP BYE request [RFC 3261 §15].
+
+        Deregisters this call from the RTP multiplexer, then delegates the
+        BYE signaling to [Dialog.bye][voip.sip.Dialog.bye], which
+        constructs and sends the BYE request, removes the dialog from the
+        SIP session's registry, and awaits the 200 OK acknowledgment.
+
+        The method is a no-op when no dialog is associated with this call.
+
+        [RFC 3261 §15]: https://datatracker.ietf.org/doc/html/rfc3261#section-15
+        """
+        if self.dialog is None:
+            return
+        # Deregister the RTP handler for this call so no further media is
+        # dispatched while the BYE is in flight.
+        _not_found = object()
+        remote_addr = next(
+            (addr for addr, call in self.rtp.calls.items() if call is self),
+            _not_found,
+        )
+        if remote_addr is not _not_found:
+            self.rtp.unregister_call(remote_addr)
+        await self.dialog.bye()
 
     @classmethod
     def negotiate_codec(cls, remote_media: MediaDescription) -> MediaDescription:
@@ -167,6 +185,22 @@ class Session:
             "Override this classmethod in a subclass (e.g. AudioCall) to "
             "support codec negotiation."
         )
+
+    @classmethod
+    def sdp_formats(cls) -> list[RTPPayloadFormat]:
+        """Return the list of supported payload formats for outbound SDP offers.
+
+        Override in subclasses to advertise codec capabilities.
+        [AudioCall][voip.audio.AudioCall] overrides this to return all
+        supported codecs in priority order.
+
+        Returns:
+            List of [RTPPayloadFormat][voip.sdp.types.RTPPayloadFormat]
+            objects describing the supported codecs.
+        """
+        from voip.sdp.types import StaticPayloadType  # noqa: PLC0415
+
+        return [RTPPayloadFormat.from_pt(StaticPayloadType.PCMU.pt)]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)

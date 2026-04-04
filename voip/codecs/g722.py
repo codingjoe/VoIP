@@ -1,10 +1,10 @@
 """G.722 wideband codec implementation for RTP audio streams (RFC 3551).
 
-The [`G722`][voip.codecs.g722.G722] class handles the RFC 3551 clock-rate
+The [G722][voip.codecs.g722.G722] class handles the RFC 3551 clock-rate
 quirk: SDP advertises 8 000 Hz but the actual audio runs at 16 000 Hz.
 
-Use [`G722Decoder`][voip.codecs.g722.G722Decoder] (via
-[`G722.create_decoder`][voip.codecs.g722.G722.create_decoder]) for per-call
+Use [G722Decoder][voip.codecs.g722.G722Decoder] (via
+[G722.create_decoder][voip.codecs.g722.G722.create_decoder]) for per-call
 stateful decoding that preserves the ADPCM predictor state across consecutive
 RTP packets.
 
@@ -83,15 +83,15 @@ class G722(PyAVCodec):
     ) -> G722Decoder:
         """Create a stateful per-call G.722 decoder.
 
-        Returns a [`G722Decoder`][voip.codecs.g722.G722Decoder] that preserves
+        Returns a [G722Decoder][voip.codecs.g722.G722Decoder] that preserves
         the ADPCM predictor state across consecutive RTP packets.  Pass the
         returned decoder to
-        [`AudioCall`][voip.audio.AudioCall] (via the `create_decoder`
+        [AudioCall][voip.audio.AudioCall] (via the `create_decoder`
         factory) to avoid the per-packet state reset that causes robotic
         audio artefacts.
 
         The *input_rate_hz* parameter is accepted for API consistency with
-        [`RTPCodec.create_decoder`][voip.codecs.base.RTPCodec.create_decoder]
+        [RTPCodec.create_decoder][voip.codecs.base.RTPCodec.create_decoder]
         but is not used; G.722 always decodes at 16 000 Hz internally.
 
         Args:
@@ -99,7 +99,7 @@ class G722(PyAVCodec):
             input_rate_hz: Ignored.  G.722 always decodes at `sample_rate_hz`.
 
         Returns:
-            A new [`G722Decoder`][voip.codecs.g722.G722Decoder] instance.
+            A new [G722Decoder][voip.codecs.g722.G722Decoder] instance.
         """
         return G722Decoder(output_rate_hz)
 
@@ -109,13 +109,13 @@ class G722Decoder:
     """Stateful G.722 decoder that preserves ADPCM predictor state across packets.
 
     Creates a single persistent
-    [`av.CodecContext`](https://pyav.basswood-io.com/docs/stable/api/codec.html#av.codec.context.CodecContext)
+    [av.CodecContext](https://pyav.basswood-io.com/docs/stable/api/codec.html#av.codec.context.CodecContext)
     for the life of the decoder and feeds each incoming RTP packet to the
     same context.  This eliminates the per-packet predictor reset that causes
     robotic artefacts when decoding a G.722 stream with independent codec
     contexts.
 
-    Use [`G722.create_decoder`][voip.codecs.g722.G722.create_decoder] rather
+    Use [G722.create_decoder][voip.codecs.g722.G722.create_decoder] rather
     than instantiating this class directly.
 
     Attributes:

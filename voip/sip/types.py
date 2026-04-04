@@ -1,4 +1,3 @@
-import dataclasses
 import enum
 import ipaddress
 import re
@@ -7,9 +6,10 @@ __all__ = [
     "CallerID",
     "DigestAlgorithm",
     "DigestQoP",
-    "SipUri",
+    "SipURI",
     "SIPStatus",
     "SIPMethod",
+    "parse_uri",
 ]
 
 import typing
@@ -22,58 +22,44 @@ if typing.TYPE_CHECKING:
     pass
 
 
-@dataclasses.dataclass(slots=True, eq=True)
-class SipUri:
+def parse_uri(uri: str, aor: SipURI) -> SipURI:
+    """Parse a SIP or tel URI string into a `SipURI` with the AOR as context."""
+    scheme, body = uri.split(":", 1)
+    match scheme.lower():
+        case "sip" | "sips":
+            return SipURI.parse(uri)
+        case "tel":
+            return SipURI.parse(f"sip:{body}@{aor.host};user=phone")
+        case _:
+            raise ValueError(f"Invalid URI scheme: {uri[:3].lower()}")
+
+
+class SipURI(str):
     """A parsed SIP or SIPS URI per [RFC 3261 §19.1].
 
-    Format: ``sip:user:password@host:port;uri-parameters?headers``
+    Format: `sip:user:password@host:port;uri-parameters?headers`
 
-    The `parse` classmethod decodes a raw SIP URI string into structured
-    fields.  IPv6 addresses in the host part must be enclosed in square
-    brackets per [RFC 2732] (e.g. ``sip:alice@[::1]:5060``); the stored
-    `host` is the bare address without brackets.
+    Behaves as a plain `str` holding the canonical URI, so instances can be
+    stored in header dicts unchanged.  The `parse` classmethod decodes a raw
+    SIP URI string into structured fields.  IPv6 addresses in the host part
+    must be enclosed in square brackets per [RFC 2732]
+    (e.g. ``sip:alice@[::1]:5060``); the stored `host` is the bare address
+    without brackets.
 
     [RFC 3261 §19.1]: https://datatracker.ietf.org/doc/html/rfc3261#section-19.1
     [RFC 2732]: https://datatracker.ietf.org/doc/html/rfc2732
 
     Examples:
-        >>> SipUri.parse("sip:alice@example.com")
-        SipUri(scheme='sip', user='alice', host='example.com', ...)
-        >>> SipUri.parse("sips:+15551234567@carrier.com:5061")
-        SipUri(scheme='sips', user='+15551234567', host='carrier.com', port=5061, ...)
-        >>> SipUri.parse("sip:alice@[::1]:5060")
-        SipUri(scheme='sip', user='alice', host=IPv6Address('::1'), port=5060, ...)
-
-    Args:
-        scheme: URI scheme — `sip` or `sips`.
-        host: Host as a bare string — no brackets for IPv6 addresses.
-        user: SIP user part (phone number or username).
-        port: Port number. 5061 for `sips:` and 5060 for `sip:`.
-        parameters: URI parameters as a mapping of name → value (`None` for flag parameters).
-        headers: SIP headers as a mapping of name → value.
+        >>> SipURI.parse("sip:alice@example.com")
+        'sip:alice@example.com:5060'
+        >>> SipURI.parse("sips:+15551234567@carrier.com:5061")
+        'sips:%2B15551234567@carrier.com:5061'
+        >>> SipURI.parse("sip:alice@[::1]:5060")
+        'sip:alice@[::1]:5060'
 
     """
 
-    scheme: str
-    host: str | ipaddress.IPv6Address | ipaddress.IPv4Address
-    user: str | None = None
-    password: str | None = dataclasses.field(default=None, repr=False)
-    port: int | None = None
-    parameters: dict[str, str | None] = dataclasses.field(default_factory=dict)
-    headers: dict[str, str] = dataclasses.field(default_factory=dict)
-
-    def __post_init__(self):
-        self.port = (
-            self.port
-            if self.port is not None
-            else 5061
-            if self.scheme == "sips"
-            else 5060
-        )
-        try:
-            self.host = ipaddress.ip_address(self.host)
-        except ValueError:
-            pass
+    __slots__ = ("scheme", "host", "user", "password", "port", "parameters", "headers")
 
     SIP_URL_PATTERN: typing.ClassVar[re.Pattern[str]] = re.compile(
         r"^(?P<scheme>sips?):"
@@ -85,8 +71,59 @@ class SipUri:
         re.IGNORECASE,
     )
 
+    def __new__(
+        cls,
+        scheme: str,
+        host: str | ipaddress.IPv6Address | ipaddress.IPv4Address,
+        user: str | None = None,
+        password: str | None = None,
+        port: int | None = None,
+        parameters: dict[str, str | None] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> SipURI:
+        try:
+            host = ipaddress.ip_address(host)
+        except ValueError:
+            pass
+        port = port if port is not None else (5061 if scheme == "sips" else 5060)
+        parameters = parameters or {}
+        headers = headers or {}
+        parts = [f"{scheme}:"]
+        if user:
+            parts.append(urllib.parse.quote(user))
+            if password:
+                parts.append(f":{urllib.parse.quote(password)}")
+            parts.append("@")
+        parts.append(
+            f"[{host}]" if isinstance(host, ipaddress.IPv6Address) else str(host)
+        )
+        parts.append(f":{port}")
+        for name, val in parameters.items():
+            parts.append(
+                f";{urllib.parse.quote(name)}={urllib.parse.quote(val)}"
+                if val is not None
+                else f";{urllib.parse.quote(name)}"
+            )
+        if headers:
+            parts.append("?")
+            parts.append(
+                "&".join(
+                    f"{urllib.parse.quote(name)}={urllib.parse.quote(val)}"
+                    for name, val in headers.items()
+                )
+            )
+        instance = super().__new__(cls, "".join(parts))
+        instance.scheme = scheme
+        instance.host = host
+        instance.user = user
+        instance.password = password
+        instance.port = port
+        instance.parameters = parameters
+        instance.headers = headers
+        return instance
+
     @classmethod
-    def parse(cls, value: str) -> SipUri:
+    def parse(cls, value: str) -> SipURI:
         """
         Parse a SIP or SIPS URI string into a `SipUri` instance.
 
@@ -140,34 +177,6 @@ class SipUri:
             elif part:
                 yield urllib.parse.unquote(part), ""
 
-    def __str__(self) -> str:
-        parts = [f"{self.scheme}:"]
-        if self.user:
-            parts.append(urllib.parse.quote(self.user))
-            if self.password:
-                parts.append(f":{urllib.parse.quote(self.password)}")
-            parts.append("@")
-        parts.append(
-            f"[{str(self.host)}]"
-            if isinstance(self.host, ipaddress.IPv6Address)
-            else str(self.host)
-        )
-        parts.append(f":{self.port}")
-        for name, val in self.parameters.items():
-            if val is not None:
-                parts.append(f";{urllib.parse.quote(name)}={urllib.parse.quote(val)}")
-            else:
-                parts.append(f";{urllib.parse.quote(name)}")
-        if self.headers:
-            parts.append("?")
-            parts.append(
-                "&".join(
-                    f"{urllib.parse.quote(name)}={urllib.parse.quote(val)}"
-                    for name, val in self.headers.items()
-                )
-            )
-        return "".join(parts)
-
     @property
     def maddr(self) -> NetworkAddress:
         try:
@@ -216,16 +225,22 @@ class CallerID(str):
         return None
 
     @property
+    def uri(self) -> SipURI | None:
+        """Parsed SIP or tel URI embedded in the header value, if present."""
+        if m := re.search(r"<?((?:sips?|tel):[^>\s]+)>?", self):
+            return SipURI.parse(m.group(1))
+
+    @property
     def user(self) -> str | None:
         """SIP user part (phone number or username)."""
-        m = re.search(r"sips?:([^@>;\s]+)@", self)
-        return m.group(1) if m else None
+        if m := re.search(r"sips?:([^@>;\s]+)@", self):
+            return m.group(1)
 
     @property
     def host(self) -> str | None:
         """Carrier domain extracted from the SIP URI."""
-        m = re.search(r"sips?:[^@>;\s]+@([^>;)\s,]+)", self)
-        return m.group(1) if m else None
+        if m := re.search(r"sips?:[^@>;\s]+@([^>;)\s,]+)", self):
+            return m.group(1)
 
     @property
     def tag(self) -> str | None:
@@ -241,250 +256,166 @@ class CallerID(str):
 
 
 class SIPStatus(enum.IntEnum):
-    """
-    SIP Status Codes based on [RFC 3261].
+    """SIP Status Codes based on [RFC 3261].
 
     [RFC 3261]: https://datatracker.ietf.org/doc/html/rfc3261#section-21
     """
 
-    def __new__(cls, value, phrase, description=""):
+    def __new__(cls, value: int, phrase: str) -> SIPStatus:
         obj = int.__new__(cls, value)
         obj._value_ = value
         obj.phrase = phrase
-        obj.description = description
         return obj
 
-    TRYING = (
-        100,
-        "Trying",
-        "The request is being processed. No final response is available yet.",
-    )
-    RINGING = 180, "Ringing", "The called party is being alerted of the call."
-    CALL_IS_BEING_FORWARDED = (
-        181,
-        "Call Is Being Forwarded",
-        "The called party is being alerted of the call, but the call is not yet established.",
-    )
-    QUEUED = (
-        182,
-        "Queued",
-        "The called party is being alerted of the call, but the call is not yet established.",
-    )
-    SESSION_PROGRESS = (
-        183,
-        "Session Progress",
-        "The called party is being alerted of the call, but the call is not yet established.",
-    )
+    TRYING = 100, "Trying"
+    """The request is being processed. No final response is available yet."""
 
-    OK = 200, "OK", "The request has succeeded."
+    RINGING = 180, "Ringing"
+    """The called party is being alerted of the call."""
 
-    MULTIPLE_CHOICES = (
-        300,
-        "Multiple Choices",
-        "The requested resource has multiple representations, each with its own specific location.",
-    )
-    MOVED_PERMANENTLY = (
-        301,
-        "Moved Permanently",
-        "The requested resource has been assigned a new permanent URI and any future references to this resource ought to use one of the returned URIs.",
-    )
-    MOVED_TEMPORARILY = (
-        302,
-        "Moved Temporarily",
-        "The requested resource is temporarily unavailable and the server is asking the client to try again later.",
-    )
-    USE_PROXY = (
-        305,
-        "Use Proxy",
-        "The requested resource is available only through a proxy, the address for which is provided in the response.",
-    )
-    ALTERNATIVE_SERVICE = (
-        380,
-        "Alternative Service",
-        "The server has fulfilled a request for the service indicated by the URI.",
-    )
+    CALL_IS_BEING_FORWARDED = 181, "Call Is Being Forwarded"
+    """The called party is being alerted of the call, but the call is not yet established."""
 
-    BAD_REQUEST = (
-        400,
-        "Bad Request",
-        "The request has bad syntax or cannot be fulfilled due to bad syntax.",
-    )
-    UNAUTHORIZED = 401, "Unauthorized", "The request requires user authentication."
-    PAYMENT_REQUIRED = 402, "Payment Required", "Further action is required."
-    FORBIDDEN = (
-        403,
-        "Forbidden",
-        "The server understood the request but refuses to fulfill it.",
-    )
-    NOT_FOUND = 404, "Not Found", "The requested resource could not be found."
-    METHOD_NOT_ALLOWED = (
-        405,
-        "Method Not Allowed",
-        "The method specified in the Request-URI is not allowed for the resource identified by the request URI.",
-    )
-    NOT_ACCEPTABLE = (
-        406,
-        "Not Acceptable",
-        "The server cannot produce a response matching the Accept headers.",
-    )
-    PROXY_AUTHENTICATION_REQUIRED = (
-        407,
-        "Proxy Authentication Required",
-        "The client must authenticate itself with the proxy.",
-    )
-    REQUEST_TIMEOUT = (
-        408,
-        "Request Timeout",
-        "The server timed out waiting for the request.",
-    )
-    GONE = (
-        410,
-        "Gone",
-        "The requested resource is no longer available at the server and no longer exists.",
-    )
-    REQUEST_ENTITY_TOO_LARGE = (
-        413,
-        "Request Entity Too Large",
-        "The server will not accept the request, because the entity of the request is too large.",
-    )
-    REQUEST_URI_TOO_LONG = (
-        414,
-        "Request-URI Too Long",
-        "The server will not accept the request, because the Request-URI is too long.",
-    )
-    UNSUPPORTED_MEDIA_TYPE = (
-        415,
-        "Unsupported Media Type",
-        "The server will not accept the request, because the media type of the request is unsupported.",
-    )
-    UNSUPPORTED_URI_SCHEME = (
-        416,
-        "Unsupported URI Scheme",
-        "The server will not accept the request, because the URI scheme of the request is unsupported.",
-    )
-    BAD_EXTENSION = (
-        420,
-        "Bad Extension",
-        "This status code indicates that the server does not recognize the value of any of the parameters that it needs to understand in the request.",
-    )
-    EXTENSION_REQUIRED = (
-        421,
-        "Extension Required",
-        "This status code indicates that the server requires the client to identify itself (usually, using the Contact header field) before it will proceed with the request.",
-    )
-    INTERVAL_TOO_BRIEF = (
-        423,
-        "Interval Too Brief",
-        "This status code indicates that the server is unwilling to process the request because either an individual header field, or all the header fields collectively, are too large.",
-    )
-    TEMPORARILY_UNAVAILABLE = (
-        480,
-        "Temporarily Unavailable",
-        "This status code indicates that the server is currently unable to handle the request due to a temporary overloading or maintenance of the server.",
-    )
-    CALL_TRANSACTION_DOES_NOT_EXIST = (
-        481,
-        "Call/Transaction Does Not Exist",
-        "This status code indicates that the server has received a final response for the transaction which it is still attempting to complete.",
-    )
-    LOOP_DETECTED = (
-        482,
-        "Loop Detected",
-        "This status code indicates that the server has detected an infinite loop while processing the request.",
-    )
-    TOO_MANY_HOPS = (
-        483,
-        "Too Many Hops",
-        "This status code indicates that the server has exceeded the maximum number of hops allowed in the request URI.",
-    )
-    ADDRESS_INCOMPLETE = (
-        484,
-        "Address Incomplete",
-        "This status code indicates that the server has received a final response for the transaction which it is still attempting to complete, but has an invalid value for one or more of the header fields included in the request message.",
-    )
-    AMBIGUOUS = (
-        485,
-        "Ambiguous",
-        "This status code indicates that the server cannot decide on a response to the request because multiple responses are possible.",
-    )
-    BUSY_HERE = (
-        486,
-        "Busy Here",
-        "This status code indicates that the server is busy here.",
-    )
-    REQUEST_TERMINATED = (
-        487,
-        "Request Terminated",
-        "This status code indicates that the server has received a final response for the transaction which it is still attempting to complete, but has received a termination request for that transaction from the client.",
-    )
-    NOT_ACCEPTABLE_HERE = (
-        488,
-        "Not Acceptable Here",
-        "This status code indicates that the server is not able to produce a response which is acceptable to the client, according to the proactive negotiation header fields received in the request, and the server is unwilling to supply a default reason phrase.",
-    )
-    REQUEST_PENDING = (
-        491,
-        "Request Pending",
-        "This status code indicates that the server has received a final response for the transaction which it is still attempting to complete, but has not yet delivered that response to the client.",
-    )
-    UNDECIPHERABLE = (
-        493,
-        "Undecipherable",
-        "This status code indicates that the server was unable to decrypt a message after performing the necessary decryption(s).",
-    )
+    QUEUED = 182, "Queued"
+    """The called party is being alerted of the call, but the call is not yet established."""
 
-    SERVER_INTERNAL_ERROR = (
-        500,
-        "Server Internal Error",
-        "The server encountered an unexpected condition which prevented it from fulfilling the request.",
-    )
-    NOT_IMPLEMENTED = (
-        501,
-        "Not Implemented",
-        "The server does not support the functionality required to fulfill the request.",
-    )
-    BAD_GATEWAY = (
-        502,
-        "Bad Gateway",
-        "The server, while acting as a gateway or proxy, received an invalid response from the upstream server it accessed in attempting to fulfill the request.",
-    )
-    SERVICE_UNAVAILABLE = (
-        503,
-        "Service Unavailable",
-        "The server is currently unable to handle the request due to a temporary overloading or maintenance of the server.",
-    )
-    SERVER_TIME_OUT = (
-        504,
-        "Server Time-out",
-        "The server, while acting as a gateway or proxy, did not receive a timely response from the upstream server specified by the URI (e.g., HTTP, FTP, LDAP) or some other auxiliary server (e.g., DNS) it needed to access in attempting to complete the request.",
-    )
-    VERSION_NOT_SUPPORTED = (
-        505,
-        "Version Not Supported",
-        "The server does not support, or refuses to support, the protocol version that was used in the request message.",
-    )
-    MESSAGE_TOO_LARGE = (
-        513,
-        "Message Too Large",
-        "The server is unwilling to process the request because its header fields are too large.",
-    )
+    SESSION_PROGRESS = 183, "Session Progress"
+    """The called party is being alerted of the call, but the call is not yet established."""
 
-    BUSY_EVERYWHERE = (
-        600,
-        "Busy Everywhere",
-        "The server is not able to process the request because it is busy.  For example, this error might be given if a server is overloaded with requests and is unable to process one of the requests.",
-    )
-    DECLINE = 603, "Decline", "The call has been declined."
-    DOES_NOT_EXIST_ANYWHERE = (
-        604,
-        "Does Not Exist Anywhere",
-        "The server has received a final response for the transaction which it is still attempting to complete, but has received a termination request for that transaction from a server which it does not control.",
-    )
-    NOT_ACCEPTABLE_ANYWHERE = (
-        606,
-        "Not Acceptable",
-        "The server is not able to produce a response which is acceptable to the client, according to the proactive negotiation header fields received in the request, and the server is unwilling to supply a default reason phrase.",
-    )
+    OK = 200, "OK"
+    """The request has succeeded."""
+
+    MULTIPLE_CHOICES = 300, "Multiple Choices"
+    """The requested resource has multiple representations, each with its own specific location."""
+
+    MOVED_PERMANENTLY = 301, "Moved Permanently"
+    """The requested resource has been assigned a new permanent URI and any future references to this resource ought to use one of the returned URIs."""
+
+    MOVED_TEMPORARILY = 302, "Moved Temporarily"
+    """The requested resource is temporarily unavailable and the server is asking the client to try again later."""
+
+    USE_PROXY = 305, "Use Proxy"
+    """The requested resource is available only through a proxy, the address for which is provided in the response."""
+
+    ALTERNATIVE_SERVICE = 380, "Alternative Service"
+    """The server has fulfilled a request for the service indicated by the URI."""
+
+    BAD_REQUEST = 400, "Bad Request"
+    """The request has bad syntax or cannot be fulfilled due to bad syntax."""
+
+    UNAUTHORIZED = 401, "Unauthorized"
+    """The request requires user authentication."""
+
+    PAYMENT_REQUIRED = 402, "Payment Required"
+    """Further action is required."""
+
+    FORBIDDEN = 403, "Forbidden"
+    """The server understood the request but refuses to fulfill it."""
+
+    NOT_FOUND = 404, "Not Found"
+    """The requested resource could not be found."""
+
+    METHOD_NOT_ALLOWED = 405, "Method Not Allowed"
+    """The method specified in the Request-URI is not allowed for the resource identified by the request URI."""
+
+    NOT_ACCEPTABLE = 406, "Not Acceptable"
+    """The server cannot produce a response matching the Accept headers."""
+
+    PROXY_AUTHENTICATION_REQUIRED = 407, "Proxy Authentication Required"
+    """The client must authenticate itself with the proxy."""
+
+    REQUEST_TIMEOUT = 408, "Request Timeout"
+    """The server timed out waiting for the request."""
+
+    GONE = 410, "Gone"
+    """The requested resource is no longer available at the server and no longer exists."""
+
+    REQUEST_ENTITY_TOO_LARGE = 413, "Request Entity Too Large"
+    """The server will not accept the request, because the entity of the request is too large."""
+
+    REQUEST_URI_TOO_LONG = 414, "Request-URI Too Long"
+    """The server will not accept the request, because the Request-URI is too long."""
+
+    UNSUPPORTED_MEDIA_TYPE = 415, "Unsupported Media Type"
+    """The server will not accept the request, because the media type of the request is unsupported."""
+
+    UNSUPPORTED_URI_SCHEME = 416, "Unsupported URI Scheme"
+    """The server will not accept the request, because the URI scheme of the request is unsupported."""
+
+    BAD_EXTENSION = 420, "Bad Extension"
+    """This status code indicates that the server does not recognize the value of any of the parameters that it needs to understand in the request."""
+
+    EXTENSION_REQUIRED = 421, "Extension Required"
+    """This status code indicates that the server requires the client to identify itself (usually, using the Contact header field) before it will proceed with the request."""
+
+    INTERVAL_TOO_BRIEF = 423, "Interval Too Brief"
+    """This status code indicates that the server is unwilling to process the request because either an individual header field, or all the header fields collectively, are too large."""
+
+    TEMPORARILY_UNAVAILABLE = 480, "Temporarily Unavailable"
+    """This status code indicates that the server is currently unable to handle the request due to a temporary overloading or maintenance of the server."""
+
+    CALL_TRANSACTION_DOES_NOT_EXIST = 481, "Call/Transaction Does Not Exist"
+    """This status code indicates that the server has received a final response for the transaction which it is still attempting to complete."""
+
+    LOOP_DETECTED = 482, "Loop Detected"
+    """This status code indicates that the server has detected an infinite loop while processing the request."""
+
+    TOO_MANY_HOPS = 483, "Too Many Hops"
+    """This status code indicates that the server has exceeded the maximum number of hops allowed in the request URI."""
+
+    ADDRESS_INCOMPLETE = 484, "Address Incomplete"
+    """This status code indicates that the server has received a final response for the transaction which it is still attempting to complete, but has an invalid value for one or more of the header fields included in the request message."""
+
+    AMBIGUOUS = 485, "Ambiguous"
+    """This status code indicates that the server cannot decide on a response to the request because multiple responses are possible."""
+
+    BUSY_HERE = 486, "Busy Here"
+    """This status code indicates that the server is busy here."""
+
+    REQUEST_TERMINATED = 487, "Request Terminated"
+    """This status code indicates that the server has received a final response for the transaction which it is still attempting to complete, but has received a termination request for that transaction from the client."""
+
+    NOT_ACCEPTABLE_HERE = 488, "Not Acceptable Here"
+    """This status code indicates that the server is not able to produce a response which is acceptable to the client, according to the proactive negotiation header fields received in the request, and the server is unwilling to supply a default reason phrase."""
+
+    REQUEST_PENDING = 491, "Request Pending"
+    """This status code indicates that the server has received a final response for the transaction which it is still attempting to complete, but has not yet delivered that response to the client."""
+
+    UNDECIPHERABLE = 493, "Undecipherable"
+    """This status code indicates that the server was unable to decrypt a message after performing the necessary decryption(s)."""
+
+    SERVER_INTERNAL_ERROR = 500, "Server Internal Error"
+    """The server encountered an unexpected condition which prevented it from fulfilling the request."""
+
+    NOT_IMPLEMENTED = 501, "Not Implemented"
+    """The server does not support the functionality required to fulfill the request."""
+
+    BAD_GATEWAY = 502, "Bad Gateway"
+    """The server, while acting as a gateway or proxy, received an invalid response from the upstream server it accessed in attempting to fulfill the request."""
+
+    SERVICE_UNAVAILABLE = 503, "Service Unavailable"
+    """The server is currently unable to handle the request due to a temporary overloading or maintenance of the server."""
+
+    SERVER_TIME_OUT = 504, "Server Time-out"
+    """The server, while acting as a gateway or proxy, did not receive a timely response from the upstream server specified by the URI (e.g., HTTP, FTP, LDAP) or some other auxiliary server (e.g., DNS) it needed to access in attempting to complete the request."""
+
+    VERSION_NOT_SUPPORTED = 505, "Version Not Supported"
+    """The server does not support, or refuses to support, the protocol version that was used in the request message."""
+
+    MESSAGE_TOO_LARGE = 513, "Message Too Large"
+    """The server is unwilling to process the request because its header fields are too large."""
+
+    BUSY_EVERYWHERE = 600, "Busy Everywhere"
+    """The server is not able to process the request because it is busy. For example, this error might be given if a server is overloaded with requests and is unable to process one of the requests."""
+
+    DECLINE = 603, "Decline"
+    """The call has been declined."""
+
+    DOES_NOT_EXIST_ANYWHERE = 604, "Does Not Exist Anywhere"
+    """The server has received a final response for the transaction which it is still attempting to complete, but has received a termination request for that transaction from a server which it does not control."""
+
+    NOT_ACCEPTABLE_ANYWHERE = 606, "Not Acceptable"
+    """The server is not able to produce a response which is acceptable to the client, according to the proactive negotiation header fields received in the request, and the server is unwilling to supply a default reason phrase."""
 
 
 class SIPMethod(enum.StrEnum):

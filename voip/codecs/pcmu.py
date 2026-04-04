@@ -1,6 +1,6 @@
 """PCMU (G.711 mu-law) codec implementation for RTP audio streams (RFC 3551).
 
-The [`PCMU`][voip.codecs.pcmu.PCMU] class decodes and encodes mu-law RTP
+The [PCMU][voip.codecs.pcmu.PCMU] class decodes and encodes mu-law RTP
 payloads using a pure-NumPy implementation of ITU-T G.711 mu-law companding.
 No PyAV dependency is required.
 """

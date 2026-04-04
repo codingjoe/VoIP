@@ -1,6 +1,6 @@
 """PCMA (G.711 A-law) codec implementation for RTP audio streams (RFC 3551).
 
-The [`PCMA`][voip.codecs.pcma.PCMA] class decodes and encodes A-law RTP
+The [PCMA][voip.codecs.pcma.PCMA] class decodes and encodes A-law RTP
 payloads using a pure-NumPy implementation of the ITU-T G.711 A-law segmented
 companding algorithm.  No PyAV dependency is required.
 """

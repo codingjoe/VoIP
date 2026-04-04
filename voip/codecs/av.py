@@ -1,14 +1,14 @@
 """PyAV-backed RTP codec base class.
 
-[`PyAVCodec`][voip.codecs.av.PyAVCodec] extends
-[`RTPCodec`][voip.codecs.base.RTPCodec] with
-[`decode_pcm`][voip.codecs.av.PyAVCodec.decode_pcm] and
-[`encode_pcm`][voip.codecs.av.PyAVCodec.encode_pcm] helpers that use
+[PyAVCodec][voip.codecs.av.PyAVCodec] extends
+[RTPCodec][voip.codecs.base.RTPCodec] with
+[decode_pcm][voip.codecs.av.PyAVCodec.decode_pcm] and
+[encode_pcm][voip.codecs.av.PyAVCodec.encode_pcm] helpers that use
 [PyAV][] for container-aware decode and codec-aware encode.
 
 Requires the ``pyav`` extra: ``pip install voip[pyav]``.
 
-Concrete subclasses: [`Opus`][voip.codecs.Opus], [`G722`][voip.codecs.G722].
+Concrete subclasses: [Opus][voip.codecs.Opus], [G722][voip.codecs.G722].
 
 [PyAV]: https://pyav.basswood-io.com/
 """
@@ -28,8 +28,8 @@ __all__ = ["PyAVCodec"]
 class PyAVCodec(RTPCodec):
     """RTP codec that decodes and encodes audio via [PyAV][].
 
-    Concrete implementations: [`Opus`][voip.codecs.Opus],
-    [`G722`][voip.codecs.G722].
+    Concrete implementations: [Opus][voip.codecs.Opus],
+    [G722][voip.codecs.G722].
 
     [PyAV]: https://pyav.basswood-io.com/
     """
