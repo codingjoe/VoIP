@@ -7,7 +7,6 @@ See also: https://datatracker.ietf.org/doc/html/rfc3261
 import asyncio
 import dataclasses
 import datetime
-import ipaddress
 import logging
 import typing
 
@@ -101,7 +100,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
     keepalive_interval: datetime.timedelta = datetime.timedelta(seconds=30)
 
     keepalive_task: asyncio.Task | None = dataclasses.field(init=False, default=None)
-    local_address: NetworkAddress = dataclasses.field(init=False)
+    public_address: NetworkAddress = None
     dialogs: dict[tuple[str, str], Dialog] = dataclasses.field(
         init=False, default_factory=dict
     )
@@ -115,13 +114,12 @@ class SessionInitiationProtocol(asyncio.Protocol):
     is_secure: bool = dataclasses.field(init=False, default=False)
     recv_buffer: bytearray = dataclasses.field(init=False, default_factory=bytearray)
 
+    def __post_init__(self):
+        self.public_address = self.public_address or self.rtp.public_address
+
     def connection_made(self, transport: asyncio.Transport) -> None:  # type: ignore[override]
         """Store the TLS/TCP transport and start RTP mux + carrier registration."""
         self.transport = transport
-        # IPv6 sockets return a 4-tuple (host, port, flowinfo, scope_id);
-        # we only need the first two elements.
-        host, port = transport.get_extra_info("sockname")[:2]
-        self.local_address = NetworkAddress(ipaddress.ip_address(host), port)
         self.is_secure = transport.get_extra_info("ssl_object") is not None
         try:
             loop = asyncio.get_running_loop()
@@ -137,7 +135,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
             await asyncio.sleep(self.keepalive_interval.total_seconds())
             if self.transport is None:
                 return
-            logger.info("PING", extra={"addr": self.local_address})
+            logger.info("PING", extra={"addr": self.public_address})
             self.transport.write(PING)
 
     async def handle_registration(self, tx: RegistrationTransaction) -> None:
@@ -192,7 +190,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
         elif frame == PING:
             logger.info("PING", extra={"addr": peer})
             if self.transport:
-                logger.info("PONG", extra={"addr": self.local_address})
+                logger.info("PONG", extra={"addr": self.public_address})
                 self.transport.write(PONG)
         else:
             match Message.parse(bytes(frame)):
@@ -343,9 +341,9 @@ class SessionInitiationProtocol(asyncio.Protocol):
         [RFC 5626 §5]: https://datatracker.ietf.org/doc/html/rfc5626#section-5
         """
         address = (
-            f"{self.aor.user}@{self.local_address}"
+            f"{self.aor.user}@{self.public_address}"
             if self.aor.user
-            else str(self.local_address)
+            else str(self.public_address)
         )
         ob_uri_param = ";ob"
         if self.aor.scheme == "sips":

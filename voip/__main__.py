@@ -38,12 +38,12 @@ class ConsoleMessageProtocol(SessionInitiationProtocol):
     verbose: int = 0
 
     def request_received(self, request: messages.Request):
-        super().request_received(request)
         self.pprint(request)
+        super().request_received(request)
 
     def response_received(self, response: messages.Response):
-        super().response_received(response)
         self.pprint(response)
+        super().response_received(response)
 
     def send(self, message) -> None:
         """Send a message and print it to stdout."""
