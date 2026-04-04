@@ -101,10 +101,10 @@ class SessionInitiationProtocol(asyncio.Protocol):
 
     keepalive_task: asyncio.Task | None = dataclasses.field(init=False, default=None)
     public_address: NetworkAddress = None
-    dialogs: dict[tuple[str, str], Dialog] = dataclasses.field(
+    _dialogs: dict[tuple[str, str], Dialog] = dataclasses.field(
         init=False, default_factory=dict
     )
-    transactions: dict[str, Transaction] = dataclasses.field(
+    _transactions: dict[str, Transaction] = dataclasses.field(
         init=False, default_factory=dict
     )
     disconnected_event: asyncio.Event = dataclasses.field(
@@ -117,6 +117,22 @@ class SessionInitiationProtocol(asyncio.Protocol):
     def __post_init__(self):
         self.public_address = self.public_address or self.rtp.public_address
 
+    def add_dialog(self, dialog: Dialog) -> None:
+        """Register *dialog* keyed by ``(local_tag, remote_tag)``."""
+        self._dialogs[dialog.local_tag, dialog.remote_tag] = dialog
+
+    def del_dialog(self, dialog: Dialog) -> None:
+        """Remove *dialog* from the registry."""
+        self._dialogs.pop((dialog.local_tag, dialog.remote_tag), None)
+
+    def add_transaction(self, tx: Transaction) -> None:
+        """Register *tx* by its branch parameter."""
+        self._transactions[tx.branch] = tx
+
+    def del_transaction(self, tx: Transaction) -> None:
+        """Remove *tx* from the registry."""
+        self._transactions.pop(tx.branch, None)
+
     def connection_made(self, transport: asyncio.Transport) -> None:  # type: ignore[override]
         """Store the TLS/TCP transport and start RTP mux + carrier registration."""
         self.transport = transport
@@ -124,7 +140,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
         try:
             loop = asyncio.get_running_loop()
             tx = RegistrationTransaction(sip=self, method=SIPMethod.REGISTER)
-            self.transactions[tx.branch] = tx
+            self._transactions[tx.branch] = tx
             loop.create_task(self.handle_registration(tx))
             self.keepalive_task = loop.create_task(self.send_keepalive())
         except RuntimeError:
@@ -269,16 +285,22 @@ class SessionInitiationProtocol(asyncio.Protocol):
                     InviteTransaction.receive(request=request, sip=self)
                 )
             case SIPMethod.ACK:
+                # For non-2xx ACKs the INVITE tx is still present; route by branch.
+                tx = self._transactions.get(request.branch)
+                if isinstance(tx, InviteTransaction):
+                    tx.ack_received(request)
+                    return
+                # For 2xx ACKs the tx is gone; route by established dialog.
                 try:
-                    dialog = self.dialogs[request.remote_tag, request.local_tag]
+                    dialog = self._dialogs[request.remote_tag, request.local_tag]
                     dialog.invite_transaction.ack_received(request)
-                except KeyError, AttributeError:
+                except (KeyError, AttributeError):
                     logger.warning("ACK for unknown dialog: %r", request)
             case SIPMethod.BYE:
                 asyncio.create_task(ByeTransaction.receive(request=request, sip=self))
             case SIPMethod.CANCEL:
                 try:
-                    tx = self.transactions[request.branch]
+                    tx = self._transactions[request.branch]
                 except KeyError:
                     self.send(
                         Response.from_request(
@@ -308,7 +330,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
             response: The parsed SIP response.
         """
         try:
-            tx = self.transactions[response.branch]
+            tx = self._transactions[response.branch]
         except KeyError:
             logger.warning(
                 "Received response with unknown branch %r: %r",

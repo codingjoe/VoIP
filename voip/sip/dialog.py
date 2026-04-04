@@ -173,7 +173,7 @@ class Dialog:
                 self.call_id,
                 self.BYE_ACK_TIMEOUT,
             )
-        self.sip.dialogs.pop((self.remote_tag, self.local_tag), None)
+        self.sip.del_dialog(self)
 
     async def dial(
         self,
@@ -207,8 +207,8 @@ class Dialog:
         """Create a dialog from a request, extracting relevant headers."""
         return cls(
             call_id=request.headers["Call-ID"],
-            local_tag=request.local_tag,
-            remote_tag=request.remote_tag or str(uuid.uuid4()),
+            local_tag=request.remote_tag or str(uuid.uuid4()),
+            remote_tag=request.local_tag,
             remote_contact=request.headers.get("Contact"),
             **kwargs,
         )
