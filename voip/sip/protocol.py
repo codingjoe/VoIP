@@ -294,7 +294,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 try:
                     dialog = self._dialogs[request.remote_tag, request.local_tag]
                     dialog.invite_transaction.ack_received(request)
-                except (KeyError, AttributeError):
+                except KeyError, AttributeError:
                     logger.warning("ACK for unknown dialog: %r", request)
             case SIPMethod.BYE:
                 asyncio.create_task(ByeTransaction.receive(request=request, sip=self))

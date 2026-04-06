@@ -530,7 +530,9 @@ class InviteTransaction(Transaction):
         use_srtp = negotiated_media.proto == "RTP/SAVP"
         srtp_session = SRTPSession.generate() if use_srtp else None
 
-        self.dialog.local_party = f"{self.request.headers['To']};tag={self.dialog.local_tag}"
+        self.dialog.local_party = (
+            f"{self.request.headers['To']};tag={self.dialog.local_tag}"
+        )
         self.dialog.remote_party = str(self.request.headers["From"])
         self.dialog.route_set = list(self.request.headers.getlist("Record-Route"))
         self.sip.add_dialog(self.dialog)
