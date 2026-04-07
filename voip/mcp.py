@@ -52,7 +52,7 @@ class MCPAgentCall(TTSMixin, TranscribeCall):
     system_prompt: str = ""
     initial_prompt: str = ""
     mcp_session: ServerSession
-    conversation: list[dict]
+    conversation: list[dict[str, str]]
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -141,7 +141,7 @@ class MCPCallProtocol(SessionInitiationProtocol):
     system_prompt: str
     initial_prompt: str
     mcp_session: ServerSession
-    conversation: list[dict]
+    conversation: list[dict[str, str]]
 
     def on_registered(self) -> None:
         """Initiate the outbound call after successful SIP registration."""
@@ -291,7 +291,7 @@ class VoIPServer:
         """
         target_uri = parse_uri(target, self._sip_aor)
         _, rtp = await self._create_rtp()
-        conversation: list[dict] = []
+        conversation: list[dict[str, str]] = []
         mcp_session = ctx.session
         await self._connect_once(
             lambda: MCPCallProtocol(

@@ -214,7 +214,7 @@ class TestMCPCallProtocol:
         mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
         mock_rtp.public_address = None
         target = SipURI.parse("sip:bob@192.0.2.1:5060")
-        conversation: list[dict] = []
+        conversation: list[dict[str, str]] = []
         mock_session = AsyncMock()
         protocol = MCPCallProtocol(
             aor=SipURI.parse("sip:alice@192.168.1.1:5060;transport=TCP"),
