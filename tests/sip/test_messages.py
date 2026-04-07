@@ -2,8 +2,55 @@
 
 import pytest
 from voip.sdp.messages import SessionDescription
-from voip.sip.messages import Dialog, Message, Request, Response
-from voip.sip.types import CallerID, SipUri
+from voip.sip import messages
+from voip.sip.dialog import Dialog
+from voip.sip.types import SipURI
+
+
+class TestSIPHeaderDict:
+    def test_init(self):
+        """Initialize a HeaderMap with a dictionary of headers."""
+        headers = messages.SIPHeaderDict(
+            {"From": "Alice", "Route": "sip:proxy.example.com"}
+        )
+        assert headers["From"] == "Alice"
+        assert headers["Route"] == "sip:proxy.example.com"
+
+    def test_init__empty(self):
+        """Initialize an empty HeaderMap."""
+        headers = messages.SIPHeaderDict()
+        assert headers == {}
+
+    def test__str__(self):
+        """String representation of a HeaderMap."""
+        headers = messages.SIPHeaderDict()
+        headers["From"] = "Alice"
+        headers.add("Route", "sip:proxy.example.com")
+        headers.add("Route", "sip:example.com")
+        assert str(headers) == (
+            "From: Alice\r\nRoute: sip:proxy.example.com\r\nRoute: sip:example.com\r\n"
+        )
+
+    def test__bytes__(self):
+        """Byte representation of a HeaderMap."""
+        headers = messages.SIPHeaderDict()
+        headers["From"] = "Alice"
+        headers.add("Route", "sip:proxy.example.com")
+        headers.add("Route", "sip:example.com")
+        assert bytes(headers) == (
+            b"From: Alice\r\nRoute: sip:proxy.example.com\r\nRoute: sip:example.com\r\n"
+        )
+
+    def test_parse(self):
+        """Parse headers from bytes."""
+        data = b"From: Alice\r\nRoute: sip:proxy.example.com\r\nRoute: sip:example.com"
+        headers = messages.SIPHeaderDict.parse(data)
+        assert headers["From"] == "Alice"
+        assert headers.getlist("Route") == ["sip:proxy.example.com", "sip:example.com"]
+
+    def test_parse__empty(self):
+        with pytest.raises(ValueError, match="Invalid header: ''"):
+            messages.SIPHeaderDict.parse(b"")
 
 
 class TestMessage:
@@ -14,8 +61,8 @@ class TestMessage:
             b"Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds\r\n"
             b"\r\n"
         )
-        result = Message.parse(data)
-        assert isinstance(result, Request)
+        result = messages.Message.parse(data)
+        assert isinstance(result, messages.Request)
         assert result.method == "INVITE"
         assert result.uri == "sip:bob@biloxi.com"
         assert result.version == "SIP/2.0"
@@ -32,15 +79,15 @@ class TestMessage:
             b"Content-Type: application/sdp\r\n"
             b"\r\n" + sdp
         )
-        result = Message.parse(data)
-        assert isinstance(result, Request)
+        result = messages.Message.parse(data)
+        assert isinstance(result, messages.Request)
         assert isinstance(result.body, SessionDescription)
 
     def test_parse__request__without_sdp_content_type(self):
         """Return None body when Content-Type is not application/sdp."""
         data = b"INVITE sip:bob@biloxi.com SIP/2.0\r\nContent-Length: 4\r\n\r\ntest"
-        result = Message.parse(data)
-        assert isinstance(result, Request)
+        result = messages.Message.parse(data)
+        assert isinstance(result, messages.Request)
         assert result.body is None
 
     def test_parse__response(self):
@@ -50,8 +97,8 @@ class TestMessage:
             b"Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds\r\n"
             b"\r\n"
         )
-        result = Message.parse(data)
-        assert isinstance(result, Response)
+        result = messages.Message.parse(data)
+        assert isinstance(result, messages.Response)
         assert result.status_code == 200
         assert result.phrase == "OK"
         assert result.version == "SIP/2.0"
@@ -64,49 +111,27 @@ class TestMessage:
         """Parse a SIP response with an SDP body from bytes."""
         sdp = b"v=0\r\ns=-\r\nt=0 0\r\n"
         data = b"SIP/2.0 200 OK\r\nContent-Type: application/sdp\r\n\r\n" + sdp
-        result = Message.parse(data)
-        assert isinstance(result, Response)
+        result = messages.Message.parse(data)
+        assert isinstance(result, messages.Response)
         assert isinstance(result.body, SessionDescription)
 
     def test_parse__roundtrip_request(self):
         """Round-trip a SIP request through parse and bytes."""
-        request = Request(
+        request = messages.Request(
             method="REGISTER",
             uri="sip:registrar.biloxi.com",
             headers={"From": "sip:bob@biloxi.com"},
         )
-        assert Message.parse(bytes(request)) == request
+        assert messages.Message.parse(bytes(request)) == request
 
     def test_parse__roundtrip_response(self):
         """Round-trip a SIP response through parse and bytes."""
-        response = Response(
+        response = messages.Response(
             status_code=404,
             phrase="Not Found",
             headers={"From": "sip:bob@biloxi.com"},
         )
-        assert Message.parse(bytes(response)) == response
-
-    def test_parse__skips_header_line_without_colon(self):
-        """Skip header lines that contain no colon separator."""
-        data = b"REGISTER sip:example.com SIP/2.0\r\nInvalidHeaderLine\r\n\r\n"
-        result = Message.parse(data)
-        assert isinstance(result, Request)
-        assert "InvalidHeaderLine" not in result.headers
-
-    def test_parse__from_header__is_caller_id(self):
-        """From header is parsed as a CallerID instance."""
-        data = (
-            b"INVITE sip:bob@biloxi.com SIP/2.0\r\nFrom: sip:alice@atlanta.com\r\n\r\n"
-        )
-        result = Message.parse(data)
-        assert isinstance(result.headers["From"], CallerID)
-        assert result.headers["From"] == "sip:alice@atlanta.com"
-
-    def test_parse__to_header__is_caller_id(self):
-        """To header is parsed as a CallerID instance."""
-        data = b"INVITE sip:bob@biloxi.com SIP/2.0\r\nTo: sip:bob@biloxi.com\r\n\r\n"
-        result = Message.parse(data)
-        assert isinstance(result.headers["To"], CallerID)
+        assert messages.Message.parse(bytes(response)) == response
 
     def test_parse__from_header__roundtrip_preserves_raw_value(self):
         """str(CallerID) equals the original header string, so serialization is unchanged."""
@@ -115,17 +140,22 @@ class TestMessage:
             b'From: "08001234567" <sip:08001234567@telefonica.de>;tag=abc\r\n'
             b"\r\n"
         )
-        result = Message.parse(data)
+        result = messages.Message.parse(data)
         assert bytes(result) == data
 
     def test_parse__raises_value_error_on_invalid_first_line(self):
         """Raise ValueError when the first line cannot be parsed as a request."""
-        with pytest.raises(ValueError, match="Invalid SIP message"):
-            Message.parse(b"TOOSHORT\r\n\r\n")
+        with pytest.raises(ValueError, match="Invalid header"):
+            messages.Message.parse(b"TOOSHORT\r\n\r\n")
+
+    def test_parse__raises_value_error_on_malformed_request_line(self):
+        """Raise ValueError when the request first line has too few parts."""
+        with pytest.raises(ValueError, match="Invalid SIP message first line"):
+            messages.Message.parse(b"INVITE sip:bob\r\nContent-Length: 0\r\n\r\n")
 
     def test___str____returns_decoded_bytes(self):
         """Return the string representation of a request as decoded bytes."""
-        request = Request(
+        request = messages.Request(
             method="REGISTER",
             uri="sip:registrar.biloxi.com",
             headers={"From": "sip:bob@biloxi.com"},
@@ -139,7 +169,7 @@ class TestMessage:
             b"Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bKabc\r\n"
             b"\r\n"
         )
-        request = Message.parse(data)
+        request = messages.Message.parse(data)
         assert request.branch == "z9hG4bKabc"
 
     def test_remote_tag__with_tag(self):
@@ -150,7 +180,7 @@ class TestMessage:
             b"To: sip:bob@biloxi.com;tag=to-tag-1\r\n"
             b"\r\n"
         )
-        request = Message.parse(data)
+        request = messages.Message.parse(data)
         assert request.remote_tag == "to-tag-1"
 
     def test_local_tag__with_tag(self):
@@ -161,7 +191,7 @@ class TestMessage:
             b"From: sip:alice@atlanta.com;tag=from-tag-1\r\n"
             b"\r\n"
         )
-        request = Message.parse(data)
+        request = messages.Message.parse(data)
         assert request.local_tag == "from-tag-1"
 
     def test_sequence__returns_cseq_number(self):
@@ -172,14 +202,14 @@ class TestMessage:
             b"CSeq: 42 INVITE\r\n"
             b"\r\n"
         )
-        request = Message.parse(data)
+        request = messages.Message.parse(data)
         assert request.sequence == 42
 
 
 class TestRequest:
     def test___bytes__(self):
         """Serialize a SIP request to bytes."""
-        request = Request(
+        request = messages.Request(
             method="INVITE",
             uri="sip:bob@biloxi.com",
             headers={"Via": "SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds"},
@@ -193,7 +223,7 @@ class TestRequest:
     def test___bytes____with_sdp_body(self):
         """Serialize a SIP request with an SDP body to bytes."""
         sdp = SessionDescription()
-        request = Request(
+        request = messages.Request(
             method="INVITE",
             uri="sip:bob@biloxi.com",
             body=sdp,
@@ -204,7 +234,7 @@ class TestRequest:
 
     def test_branch__with_branch(self):
         """Branch returns the branch parameter from the Via header."""
-        request = Request(
+        request = messages.Request(
             method="INVITE",
             uri="sip:bob@biloxi.com",
             headers={"Via": "SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bKabc123"},
@@ -214,11 +244,11 @@ class TestRequest:
     def test_from_dialog__merges_dialog_headers(self):
         """Merge the provided headers with the dialog's headers."""
         dialog = Dialog(
-            uac=SipUri.parse("sips:alice@example.com"),
+            uac=SipURI.parse("sips:alice@example.com"),
             local_tag="local-tag",
             remote_tag="remote-tag",
         )
-        request = Request.from_dialog(
+        request = messages.Request.from_dialog(
             dialog=dialog,
             headers={"Via": "SIP/2.0/TLS example.com;branch=z9hG4bK123"},
             method="REGISTER",
@@ -232,7 +262,7 @@ class TestRequest:
 class TestResponse:
     def test___bytes__(self):
         """Serialize a SIP response to bytes."""
-        response = Response(
+        response = messages.Response(
             status_code=200,
             phrase="OK",
             headers={"Via": "SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds"},
@@ -246,7 +276,7 @@ class TestResponse:
     def test___bytes____with_sdp_body(self):
         """Serialize a SIP response with an SDP body to bytes."""
         sdp = SessionDescription()
-        response = Response(status_code=200, phrase="OK", body=sdp)
+        response = messages.Response(status_code=200, phrase="OK", body=sdp)
         serialized = bytes(response)
         assert b"Content-Length:" in serialized
         assert b"v=0" in serialized
@@ -254,10 +284,10 @@ class TestResponse:
     def test___bytes____with_sdp_body__auto_content_length(self):
         """Auto-calculate Content-Length when SDP body is present and header is not set."""
         sdp = SessionDescription()
-        response = Response(status_code=200, phrase="OK", body=sdp)
+        response = messages.Response(status_code=200, phrase="OK", body=sdp)
         serialized = bytes(response)
         assert b"Content-Length:" in serialized
-        parsed = Message.parse(serialized)
+        parsed = messages.Message.parse(serialized)
         assert parsed.body is None
 
     def test_from_request__with_dialog_remote_tag(self):
@@ -271,12 +301,12 @@ class TestResponse:
             b"CSeq: 1 INVITE\r\n"
             b"\r\n"
         )
-        request = Message.parse(data)
+        request = messages.Message.parse(data)
         dialog = Dialog(
-            uac=SipUri.parse("sip:alice@atlanta.com"),
+            uac=SipURI.parse("sip:alice@atlanta.com"),
             remote_tag="server-tag",
         )
-        response = Response.from_request(
+        response = messages.Response.from_request(
             request, dialog=dialog, status_code=200, phrase="OK"
         )
         assert "server-tag" in str(response.headers["To"])
@@ -292,57 +322,6 @@ class TestResponse:
             b"CSeq: 1 OPTIONS\r\n"
             b"\r\n"
         )
-        request = Message.parse(data)
-        response = Response.from_request(request, status_code=200, phrase="OK")
+        request = messages.Message.parse(data)
+        response = messages.Response.from_request(request, status_code=200, phrase="OK")
         assert response.headers["To"] == request.headers["To"]
-
-
-class TestDialog:
-    def test_from_header__contains_local_tag(self):
-        """from_header includes the local_tag parameter."""
-        dialog = Dialog(
-            uac=SipUri.parse("sips:alice@example.com"),
-            local_tag="my-local-tag",
-        )
-        assert "my-local-tag" in dialog.from_header
-
-    def test_to_header__without_remote_tag(self):
-        """to_header omits the tag parameter when remote_tag is None."""
-        dialog = Dialog(
-            uac=SipUri.parse("sip:bob@biloxi.com:5060"),
-            remote_tag=None,
-        )
-        assert ";tag=" not in dialog.to_header
-
-    def test_to_header__with_remote_tag(self):
-        """to_header includes the remote_tag parameter."""
-        dialog = Dialog(
-            uac=SipUri.parse("sip:bob@biloxi.com:5060"),
-            remote_tag="their-tag",
-        )
-        assert "their-tag" in dialog.to_header
-
-    def test_headers__returns_required_keys(self):
-        """Headers property returns From, To, and Call-ID keys."""
-        dialog = Dialog(uac=SipUri.parse("sips:alice@example.com"))
-        headers = dialog.headers
-        assert "From" in headers
-        assert "To" in headers
-        assert "Call-ID" in headers
-
-    def test_from_request__extracts_call_id_and_tags(self):
-        """from_request creates a Dialog with the correct call_id and tags."""
-        data = (
-            b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
-            b"Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bKabc\r\n"
-            b"From: sip:alice@atlanta.com;tag=from-tag-99\r\n"
-            b"To: sip:bob@biloxi.com\r\n"
-            b"Call-ID: call-99@atlanta.com\r\n"
-            b"CSeq: 1 INVITE\r\n"
-            b"\r\n"
-        )
-        request = Message.parse(data)
-        dialog = Dialog.from_request(request)
-        assert dialog.call_id == "call-99@atlanta.com"
-        assert dialog.local_tag == "from-tag-99"
-        assert dialog.remote_tag is not None

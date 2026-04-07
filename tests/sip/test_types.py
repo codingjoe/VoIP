@@ -1,70 +1,70 @@
 import ipaddress
 
 import pytest
-from voip.sip import SipUri
+from voip.sip import SipURI
 from voip.sip.messages import Response
 from voip.sip.types import CallerID
 
 
-class TestSipUri:
+class TestSipURI:
     @pytest.mark.parametrize(
         "uri_str, expected_uri_obj",
         [
             # domain
             (
                 "sip:alice@example.com",
-                SipUri(scheme="sip", user="alice", host="example.com", port=5060),
+                SipURI(scheme="sip", user="alice", host="example.com", port=5060),
             ),
             (
                 "sips:alice@example.com",
-                SipUri(scheme="sips", user="alice", host="example.com", port=5061),
+                SipURI(scheme="sips", user="alice", host="example.com", port=5061),
             ),
             (
                 "sip:alice@example.com:4050",
-                SipUri(scheme="sip", user="alice", host="example.com", port=4050),
+                SipURI(scheme="sip", user="alice", host="example.com", port=4050),
             ),
             (
                 "sips:alice@example.com:4051",
-                SipUri(scheme="sips", user="alice", host="example.com", port=4051),
+                SipURI(scheme="sips", user="alice", host="example.com", port=4051),
             ),
             # ipv4
             (
                 "sip:alice@192.168.1.1",
-                SipUri(scheme="sip", user="alice", host="192.168.1.1", port=5060),
+                SipURI(scheme="sip", user="alice", host="192.168.1.1", port=5060),
             ),
             (
                 "sips:alice@192.168.1.1",
-                SipUri(scheme="sips", user="alice", host="192.168.1.1", port=5061),
+                SipURI(scheme="sips", user="alice", host="192.168.1.1", port=5061),
             ),
             (
                 "sip:alice@192.168.1.1:4050",
-                SipUri(scheme="sip", user="alice", host="192.168.1.1", port=4050),
+                SipURI(scheme="sip", user="alice", host="192.168.1.1", port=4050),
             ),
             (
                 "sips:alice@192.168.1.1:4051",
-                SipUri(scheme="sips", user="alice", host="192.168.1.1", port=4051),
+                SipURI(scheme="sips", user="alice", host="192.168.1.1", port=4051),
             ),
             # ipv6
             (
                 "sip:alice@[::1]",
-                SipUri(scheme="sip", user="alice", host="::1", port=5060),
+                SipURI(scheme="sip", user="alice", host="::1", port=5060),
             ),
             (
                 "sips:alice@[::1]",
-                SipUri(scheme="sips", user="alice", host="::1", port=5061),
+                SipURI(scheme="sips", user="alice", host="::1", port=5061),
             ),
             (
                 "sip:alice@[::1]:4050",
-                SipUri(scheme="sip", user="alice", host="::1", port=4050),
+                SipURI(scheme="sip", user="alice", host="::1", port=4050),
             ),
             (
                 "sips:alice@[::1]:4051",
-                SipUri(scheme="sips", user="alice", host="::1", port=4051),
+                SipURI(scheme="sips", user="alice", host="::1", port=4051),
             ),
             # uri-parameters
             (
                 "sip:alice@example.com;transport=tcp",
-                SipUri(
+                SipURI(
                     scheme="sip",
                     user="alice",
                     host="example.com",
@@ -74,7 +74,7 @@ class TestSipUri:
             ),
             (
                 "sip:alice@example.com;transport=udp;ttl=15",
-                SipUri(
+                SipURI(
                     scheme="sip",
                     user="alice",
                     host="example.com",
@@ -85,7 +85,7 @@ class TestSipUri:
             # headers
             (
                 "sip:alice@example.com?foo=bar",
-                SipUri(
+                SipURI(
                     scheme="sip",
                     user="alice",
                     host="example.com",
@@ -95,7 +95,7 @@ class TestSipUri:
             ),
             (
                 "sip:alice@example.com?tag=12345&foo=bar",
-                SipUri(
+                SipURI(
                     scheme="sip",
                     user="alice",
                     host="example.com",
@@ -105,7 +105,7 @@ class TestSipUri:
             ),
             (
                 r"sip:%61lice@atlanta.com;transport=TCP",
-                SipUri(
+                SipURI(
                     scheme="sip",
                     user="alice",
                     host="atlanta.com",
@@ -115,7 +115,7 @@ class TestSipUri:
             ),
             (
                 r"sip:atlanta.com;method=REGISTER?to=alice%40atlanta.com",
-                SipUri(
+                SipURI(
                     scheme="sip",
                     user=None,
                     host="atlanta.com",
@@ -128,7 +128,7 @@ class TestSipUri:
     )
     def test_parse_valid(self, uri_str, expected_uri_obj):
         """Parse scheme, user, host and optional port from a valid SIP URI."""
-        assert SipUri.parse(uri_str) == expected_uri_obj
+        assert SipURI.parse(uri_str) == expected_uri_obj
 
     @pytest.mark.parametrize(
         "uri_str",
@@ -141,17 +141,17 @@ class TestSipUri:
     def test_parse_invalid(self, uri_str):
         """Raise ValueError when parsing an invalid SIP URI."""
         with pytest.raises(ValueError):
-            SipUri.parse(uri_str)
+            SipURI.parse(uri_str)
 
     @pytest.mark.parametrize(
         "uri_obj, expected_uri_str",
         [
             (
-                SipUri(scheme="sip", user="alice", host="example.com", port=5061),
+                SipURI(scheme="sip", user="alice", host="example.com", port=5061),
                 "sip:alice@example.com:5061",
             ),
             (
-                SipUri(
+                SipURI(
                     scheme="sip",
                     user="alice",
                     host="example.com",
@@ -161,7 +161,7 @@ class TestSipUri:
                 "sip:alice@example.com:5060;transport=TCP",
             ),
             (
-                SipUri(
+                SipURI(
                     scheme="sip",
                     user="alice",
                     host="example.com",
@@ -171,7 +171,7 @@ class TestSipUri:
                 "sip:alice@example.com:5060?foo=bar",
             ),
             (
-                SipUri(
+                SipURI(
                     scheme="sip",
                     user="alice",
                     host="example.com",
@@ -183,11 +183,11 @@ class TestSipUri:
             ),
             # IPv6
             (
-                SipUri(scheme="sip", user="alice", host="::1", port=5060),
+                SipURI(scheme="sip", user="alice", host="::1", port=5060),
                 "sip:alice@[::1]:5060",
             ),
             (
-                SipUri(
+                SipURI(
                     scheme="sip",
                     user="alice",
                     host=ipaddress.IPv6Address("::1"),
@@ -197,11 +197,11 @@ class TestSipUri:
             ),
             # IPv4
             (
-                SipUri(scheme="sip", user="alice", host="127.0.0.1", port=5060),
+                SipURI(scheme="sip", user="alice", host="127.0.0.1", port=5060),
                 "sip:alice@127.0.0.1:5060",
             ),
             (
-                SipUri(
+                SipURI(
                     scheme="sip",
                     user="alice",
                     host=ipaddress.IPv4Address("127.0.0.1"),
@@ -211,7 +211,7 @@ class TestSipUri:
             ),
             # password in user-info
             (
-                SipUri(
+                SipURI(
                     scheme="sip",
                     user="alice",
                     password="secret",  # noqa: S106
@@ -222,7 +222,7 @@ class TestSipUri:
             ),
             # flag URI parameter (value=None) in __str__
             (
-                SipUri(
+                SipURI(
                     scheme="sip",
                     user="alice",
                     host="example.com",
@@ -243,7 +243,7 @@ class TestSipUri:
             # flag URI parameter (;lr with no value)
             (
                 "sip:alice@example.com;lr",
-                SipUri(
+                SipURI(
                     scheme="sip",
                     user="alice",
                     host="example.com",
@@ -254,7 +254,7 @@ class TestSipUri:
             # header without '=' value
             (
                 "sip:alice@example.com?Subject",
-                SipUri(
+                SipURI(
                     scheme="sip",
                     user="alice",
                     host="example.com",
@@ -268,38 +268,46 @@ class TestSipUri:
         self, uri_str, expected_uri_obj
     ):
         """Parse flag URI parameters and valueless headers."""
-        assert SipUri.parse(uri_str) == expected_uri_obj
+        assert SipURI.parse(uri_str) == expected_uri_obj
 
     def test_maddr__with_parameter(self):
         """Parse NetworkAddress from maddr URI parameter."""
-        uri = SipUri.parse("sip:alice@example.com;maddr=192.0.2.1:5060")
+        uri = SipURI.parse("sip:alice@example.com;maddr=192.0.2.1:5060")
         assert uri.maddr == (ipaddress.IPv4Address("192.0.2.1"), 5060)
 
     def test_maddr__without_parameter(self):
         """Fall back to host:port when maddr parameter is absent."""
-        uri = SipUri.parse("sip:alice@192.0.2.2:5060")
+        uri = SipURI.parse("sip:alice@192.0.2.2:5060")
         result = uri.maddr
         assert result.port == 5060
 
     def test_ttl__returns_value(self):
         """Return the ttl URI parameter value as a string."""
-        uri = SipUri.parse("sip:alice@example.com;ttl=30")
+        uri = SipURI.parse("sip:alice@example.com;ttl=30")
         assert uri.ttl == 30
+
+    def test_ttl__absent(self):
+        """Return None when the ttl parameter is absent."""
+        assert SipURI.parse("sip:alice@example.com").ttl is None
 
     def test_transport__sips_returns_tls(self):
         """Return 'TLS' for sips: URIs that have no transport parameter."""
-        uri = SipUri.parse("sips:alice@example.com")
+        uri = SipURI.parse("sips:alice@example.com")
         assert uri.transport == "TLS"
 
     def test_transport__sip_without_parameter_returns_none(self):
         """Return None for a plain sip: URI without transport parameter."""
-        uri = SipUri.parse("sip:alice@example.com")
+        uri = SipURI.parse("sip:alice@example.com")
         assert uri.transport == "TLS"
 
     def test_transport__explicit_parameter(self):
         """Return explicit transport parameter value."""
-        uri = SipUri.parse("sip:alice@example.com;transport=udp")
+        uri = SipURI.parse("sip:alice@example.com;transport=udp")
         assert uri.transport == "UDP"
+
+    def test_isinstance__str(self):
+        """SipUri instances are also plain str instances."""
+        assert isinstance(SipURI.parse("sip:alice@example.com"), str)
 
 
 def _ok() -> Response:
@@ -369,6 +377,29 @@ class TestCallerID:
         """Show only masked user when there is no carrier domain."""
         masked = repr(CallerID("notasipuri"))
         assert "@" not in masked
+
+    def test_uri__sip(self):
+        """Extract a SipUri from a SIP CallerID."""
+        assert isinstance(CallerID("sip:alice@example.com").uri, SipURI)
+
+    def test_uri__sip_angle_brackets(self):
+        """Extract SipUri from a CallerID with angle-bracket notation."""
+        assert isinstance(
+            CallerID('"Alice" <sip:alice@example.com>;tag=abc').uri, SipURI
+        )
+
+    def test_uri__absent(self):
+        """Return None when no URI is present."""
+        assert CallerID("plain string").uri is None
+
+    def test_uri__unparseable(self):
+        """Return None when the URI-like string is not valid for any parser."""
+        with pytest.raises(ValueError):
+            assert CallerID("sip:@invalid").uri
+
+    def test_host__tel_absent(self):
+        """Return None for host when the CallerID is a tel URI."""
+        assert CallerID("tel:+15551234567").host is None
 
 
 class TestMaskCaller:

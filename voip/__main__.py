@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import asyncio
+import collections.abc
 import dataclasses
 import ipaddress
 import logging
@@ -7,11 +8,11 @@ import socket
 import ssl
 import time
 
-from voip.rtp import RealtimeTransportProtocol
-from voip.sip import messages
+from voip.ai import SayCall
+from voip.rtp import RealtimeTransportProtocol, Session
+from voip.sip import dialog, messages
 from voip.sip.protocol import SessionInitiationProtocol
-from voip.sip.transactions import InviteTransaction
-from voip.sip.types import SipUri
+from voip.sip.types import SipURI, parse_uri
 from voip.types import NetworkAddress
 
 try:
@@ -46,8 +47,8 @@ class ConsoleMessageProtocol(SessionInitiationProtocol):
 
     def send(self, message) -> None:
         """Send a message and print it to stdout."""
-        self.pprint(message)
         super().send(message)
+        self.pprint(message)
 
     def pprint(self, msg):
         """Pretty print the message.
@@ -115,7 +116,7 @@ def sip(ctx, aor, stun_server, no_verify_tls):
     """Session Initiation Protocol (SIP)."""
     ctx.ensure_object(dict)
     try:
-        parsed_aor = SipUri.parse(aor)
+        parsed_aor = SipURI.parse(aor)
     except ValueError as exc:
         raise click.BadParameter(str(exc), param_hint="AOR") from exc
 
@@ -174,36 +175,118 @@ async def _connect_sip(
         backoff_secs = min(backoff_secs * 2, 60)
 
 
+async def _connect_sip_once(
+    session_factory: collections.abc.Callable[[], SessionInitiationProtocol],
+    proxy_addr: NetworkAddress,
+    use_tls: bool,
+    no_verify_tls: bool,
+) -> None:
+    loop = asyncio.get_running_loop()
+    ssl_context: ssl.SSLContext | None = None
+    if use_tls:
+        ssl_context = ssl.create_default_context()
+        if no_verify_tls:
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+    _, protocol = await loop.create_connection(
+        session_factory,
+        host=str(proxy_addr[0]),
+        port=proxy_addr[1],
+        ssl=ssl_context,
+    )
+    await protocol.disconnected_event.wait()
+
+
+def _make_outbound_factory(
+    *,
+    verbose: int,
+    aor: SipURI,
+    rtp_protocol: RealtimeTransportProtocol,
+    target_uri: SipURI,
+    session_class: type[Session],
+    session_kwargs: dict,
+) -> collections.abc.Callable[[], ConsoleMessageProtocol]:
+
+    class OutboundDialog(dialog.Dialog):
+        def hangup_received(self) -> None:
+            if self.sip is not None:
+                self.sip.close()
+
+    @dataclasses.dataclass(kw_only=True, slots=True)
+    class OutboundProtocol(ConsoleMessageProtocol):
+        dial_target: SipURI
+
+        def on_registered(self) -> None:
+            dialog = OutboundDialog(sip=self)
+            asyncio.create_task(
+                dialog.dial(
+                    self.dial_target, session_class=session_class, **session_kwargs
+                )
+            )
+
+    def factory() -> ConsoleMessageProtocol:
+        return OutboundProtocol(
+            verbose=verbose,
+            dialog_class=OutboundDialog,
+            aor=aor,
+            rtp=rtp_protocol,
+            dial_target=target_uri,
+        )
+
+    return factory
+
+
 @sip.command()
+@click.option(
+    "--dial",
+    metavar="TARGET",
+    default=None,
+    help="Dial TARGET (a SIP URI) instead of waiting for an inbound call.",
+)
 @click.pass_context
-def echo(ctx):
+def echo(ctx, dial: str | None):
     """Echo the caller's speech back after they finish speaking."""
     from .audio import EchoCall  # noqa: PLC0415
 
     obj = ctx.obj
     aor = obj["aor"]
 
-    class EchoInviteTransaction(InviteTransaction):
-        def invite_received(self, request: messages.Request) -> None:
+    class EchoDialog(dialog.Dialog):
+        def call_received(self) -> None:
             self.ringing()
-            self.answer(call_class=EchoCall)
+            self.answer(session_class=EchoCall)
 
     async def run():
         _, rtp_protocol = await _connect_rtp(
             aor.maddr,
             obj["stun_server"],
         )
-        await _connect_sip(
-            lambda: ConsoleMessageProtocol(
-                verbose=obj.get("verbose", 0),
-                transaction_class=EchoInviteTransaction,
-                aor=aor,
-                rtp=rtp_protocol,
-            ),
-            aor.maddr,
-            aor.transport == "TLS",
-            obj["no_verify_tls"],
-        )
+        if dial is None:
+            await _connect_sip(
+                lambda: ConsoleMessageProtocol(
+                    verbose=obj.get("verbose", 0),
+                    dialog_class=EchoDialog,
+                    aor=aor,
+                    rtp=rtp_protocol,
+                ),
+                aor.maddr,
+                aor.transport == "TLS",
+                obj["no_verify_tls"],
+            )
+        else:
+            await _connect_sip_once(
+                _make_outbound_factory(
+                    verbose=obj.get("verbose", 0),
+                    aor=aor,
+                    rtp_protocol=rtp_protocol,
+                    target_uri=parse_uri(dial, aor),
+                    session_class=EchoCall,
+                    session_kwargs={},
+                ),
+                aor.maddr,
+                aor.transport == "TLS",
+                obj["no_verify_tls"],
+            )
 
     try:
         asyncio.run(run())
@@ -219,8 +302,14 @@ def echo(ctx):
     show_default=True,
     help="Whisper model size.",
 )
+@click.option(
+    "--dial",
+    metavar="TARGET",
+    default=None,
+    help="Dial TARGET (a SIP URI) instead of waiting for an inbound call.",
+)
 @click.pass_context
-def transcribe(ctx, stt_model):
+def transcribe(ctx, stt_model, dial: str | None):
     """Transcribe incoming call audio."""
     from faster_whisper import WhisperModel
 
@@ -236,11 +325,11 @@ def transcribe(ctx, stt_model):
         def transcription_received(self, text: str) -> None:
             click.echo(click.style(text, fg="green", bold=True))
 
-    class TranscribeInviteTransaction(InviteTransaction):
-        def invite_received(self, request: messages.Request) -> None:
+    class TranscribeDialog(dialog.Dialog):
+        def call_received(self) -> None:
             self.ringing()
             self.answer(
-                call_class=TranscribingCall,
+                session_class=TranscribingCall,
                 stt_model=WhisperModel(stt_model),
             )
 
@@ -249,17 +338,32 @@ def transcribe(ctx, stt_model):
             aor.maddr,
             obj["stun_server"],
         )
-        await _connect_sip(
-            lambda: ConsoleMessageProtocol(
-                verbose=obj.get("verbose", 0),
-                transaction_class=TranscribeInviteTransaction,
-                aor=aor,
-                rtp=rtp_protocol,
-            ),
-            aor.maddr,
-            aor.transport == "TLS",
-            obj["no_verify_tls"],
-        )
+        if dial is None:
+            await _connect_sip(
+                lambda: ConsoleMessageProtocol(
+                    verbose=obj.get("verbose", 0),
+                    dialog_class=TranscribeDialog,
+                    aor=aor,
+                    rtp=rtp_protocol,
+                ),
+                aor.maddr,
+                aor.transport == "TLS",
+                obj["no_verify_tls"],
+            )
+        else:
+            await _connect_sip_once(
+                _make_outbound_factory(
+                    verbose=obj.get("verbose", 0),
+                    aor=aor,
+                    rtp_protocol=rtp_protocol,
+                    target_uri=parse_uri(dial, aor),
+                    session_class=TranscribingCall,
+                    session_kwargs={"stt_model": WhisperModel(stt_model)},
+                ),
+                aor.maddr,
+                aor.transport == "TLS",
+                obj["no_verify_tls"],
+            )
 
     try:
         asyncio.run(run())
@@ -299,8 +403,25 @@ def transcribe(ctx, stt_model):
     envvar="LLM_SYSTEM_PROMPT",
     help=("System prompt for the language model."),
 )
+@click.option(
+    "--salutation",
+    default="Hi!",
+    envvar="LLM_SALUTATION",
+    help=(
+        "Initial message the agent says when the call connects.  "
+        "Works for both inbound and outbound calls."
+    ),
+)
+@click.option(
+    "--dial",
+    metavar="TARGET",
+    default=None,
+    help="Dial TARGET (a SIP URI) instead of waiting for an inbound call.",
+)
 @click.pass_context
-def agent(ctx, stt_model, llm_model, voice, system_prompt):
+def agent(
+    ctx, stt_model, llm_model, voice, system_prompt, salutation, dial: str | None
+):
     """Register with a SIP carrier and handle calls with an AI voice agent."""
     from faster_whisper import WhisperModel
 
@@ -334,15 +455,16 @@ def agent(ctx, stt_model, llm_model, voice, system_prompt):
             self.msg_count = len(self._messages)
             await super().respond()
 
-    class AgentInviteTransaction(InviteTransaction):
-        def invite_received(self, request: messages.Request) -> None:
+    class AgentDialog(dialog.Dialog):
+        def call_received(self) -> None:
             self.ringing()
             self.answer(
-                call_class=AgentCallWithOutput,
+                session_class=AgentCallWithOutput,
                 stt_model=WhisperModel(stt_model),
                 llm_model=llm_model,
                 voice=voice,
                 system_prompt=system_prompt,
+                salutation=salutation,
             )
 
     async def run():
@@ -350,12 +472,74 @@ def agent(ctx, stt_model, llm_model, voice, system_prompt):
             aor.maddr,
             obj["stun_server"],
         )
-        await _connect_sip(
-            lambda: ConsoleMessageProtocol(
+        if dial is None:
+            await _connect_sip(
+                lambda: ConsoleMessageProtocol(
+                    verbose=obj.get("verbose", 0),
+                    dialog_class=AgentDialog,
+                    aor=aor,
+                    rtp=rtp_protocol,
+                ),
+                aor.maddr,
+                aor.transport == "TLS",
+                obj["no_verify_tls"],
+            )
+        else:
+            await _connect_sip_once(
+                _make_outbound_factory(
+                    verbose=obj.get("verbose", 0),
+                    aor=aor,
+                    rtp_protocol=rtp_protocol,
+                    target_uri=parse_uri(dial, aor),
+                    session_class=AgentCallWithOutput,
+                    session_kwargs={
+                        "stt_model": WhisperModel(stt_model),
+                        "llm_model": llm_model,
+                        "voice": voice,
+                        "system_prompt": system_prompt,
+                        "salutation": salutation,
+                    },
+                ),
+                aor.maddr,
+                aor.transport == "TLS",
+                obj["no_verify_tls"],
+            )
+
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        pass
+
+
+@sip.command()
+@click.argument("target")
+@click.argument("prompt")
+@click.option(
+    "--voice",
+    default="marius",
+    envvar="TTS_VOICE",
+    show_default=True,
+    help="Pocket TTS voice name or path to a conditioning audio file.",
+)
+@click.pass_context
+def say(ctx, target: str, prompt: str, voice: str):
+    """Dial TARGET, say PROMPT using TTS, and hang up."""
+    obj = ctx.obj
+    aor = obj["aor"]
+
+    async def run():
+        _, rtp_protocol = await _connect_rtp(
+            aor.maddr,
+            obj["stun_server"],
+        )
+        await _connect_sip_once(
+            _make_outbound_factory(
                 verbose=obj.get("verbose", 0),
-                transaction_class=AgentInviteTransaction,
                 aor=aor,
-                rtp=rtp_protocol,
+                rtp_protocol=rtp_protocol,
+                target_uri=parse_uri(target, aor),
+                session_class=SayCall,
+                session_kwargs={"text": prompt, "voice": voice},
             ),
             aor.maddr,
             aor.transport == "TLS",

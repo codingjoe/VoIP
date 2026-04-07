@@ -7,7 +7,6 @@ See also: https://datatracker.ietf.org/doc/html/rfc3261
 import asyncio
 import dataclasses
 import datetime
-import ipaddress
 import logging
 import typing
 
@@ -15,8 +14,14 @@ from voip.rtp import RealtimeTransportProtocol
 
 from ..types import NetworkAddress
 from . import types
-from .messages import Dialog, Message, Request, Response
-from .transactions import InviteTransaction, RegistrationTransaction, Transaction
+from .dialog import Dialog
+from .messages import USER_AGENT, Message, Request, Response
+from .transactions import (
+    ByeTransaction,
+    InviteTransaction,
+    RegistrationTransaction,
+    Transaction,
+)
 from .types import (
     SIPMethod,
     SIPStatus,
@@ -43,60 +48,63 @@ class SessionInitiationProtocol(asyncio.Protocol):
     """
     SIP User Agent Client (UAC) over TLS/TCP [RFC 3261].
 
-    Handles incoming calls and, optionally, carrier registration with digest
-    authentication [RFC 3261 §22].  All signaling is sent over a single
-    persistent TLS/TCP connection.
+    Handles SIP message parsing, carrier registration, and transaction management.
 
-    ```python
-    class MyTransaction(Transaction):
-        def call_received(self, request: Request) -> None:
-            asyncio.create_task(self.answer(call_class=MyCall))
+    Example:
+        You can use the handler like any [asyncio.Protocol][asyncio.Protocol] in Python.
 
-    class MySession(SessionInitiationProtocol):
-        transaction_class = MyTransaction
-    ```
+        ```python
+        import asyncio
 
-    To register with a carrier on startup, pass the registration parameters:
+        from voip.sip import SessionInitiationProtocol
 
-    ```python
-    session = SessionInitiationProtocol(
-        aor="sips:alice@example.com",
-        username="alice",
-        password="secret",
-    )
-    ```
+        async def main():
+            loop = asyncio.get_running_loop()
+
+            transport, protocol = await loop.create_connection(
+                SessionInitiationProtocol,
+                '0.0.0.0', 5060)
+
+            try:
+                await asyncio.Future()
+            finally:
+                transport.close()
+
+
+        asyncio.run(main())
+        ```
+
+        However, this example is incomplete, since the protocol will require some
+        arguments, like a reference to the RTP protocol and an AOR.
+
+    > [!Note]
+    > The support is limited to UAC (client mode).
+    > This library currently does not implement server (UAS) functionality.
 
     [RFC 3261]: https://datatracker.ietf.org/doc/html/rfc3261
-    [RFC 3261 §22]: https://datatracker.ietf.org/doc/html/rfc3261#section-22
-
-    Attributes:
-        VIA_BRANCH_PREFIX:
-            RFC 3261 §8.1.1.7 Via branch magic cookie (indicates RFC 3261 compliance).
 
     Args:
-        aor: SIP Address of Record (AOR) to register with the carrier, e.g.
-        rtp: Shared RTP mux for call media.  When provided, call handlers can register
-            their RTP addresses with the mux to receive media packets.
-        transaction_class: Transaction subclass to handle SIP transactions.
-        registration_class: Transaction subclass to handle registration transactions.
+        aor: SIP Address of Record (AOR) to register with the carrier.
+        rtp: Shared RTP mux for call media.
+        dialog_class: [Dialog][voip.sip.Dialog] subclass used to
+            create dialogs for incoming calls.  Defaults to the base
+            [Dialog][voip.sip.Dialog] which rejects all calls with
+            ``486 Busy Here``.
         keepalive_interval: Keep-alive ping interval. Should be between 30 and 90 seconds.
 
     """
 
-    VIA_BRANCH_PREFIX: typing.ClassVar[str] = "z9hG4bK"
-
-    aor: types.SipUri
+    aor: types.SipURI
     rtp: RealtimeTransportProtocol
-    transaction_class: type[InviteTransaction]
-    registration_class: type[RegistrationTransaction] = RegistrationTransaction
+    dialog_class: type[Dialog] = dataclasses.field(default=Dialog)
     keepalive_interval: datetime.timedelta = datetime.timedelta(seconds=30)
 
     keepalive_task: asyncio.Task | None = dataclasses.field(init=False, default=None)
-    local_address: NetworkAddress = dataclasses.field(init=False)
-    dialogs: dict[tuple[str, str], Dialog] = dataclasses.field(
+    public_address: NetworkAddress = None
+    _dialogs: dict[tuple[str, str], Dialog] = dataclasses.field(
         init=False, default_factory=dict
     )
-    transactions: dict[str, Transaction] = dataclasses.field(
+    _transactions: dict[str, Transaction] = dataclasses.field(
         init=False, default_factory=dict
     )
     disconnected_event: asyncio.Event = dataclasses.field(
@@ -106,18 +114,46 @@ class SessionInitiationProtocol(asyncio.Protocol):
     is_secure: bool = dataclasses.field(init=False, default=False)
     recv_buffer: bytearray = dataclasses.field(init=False, default_factory=bytearray)
 
+    def __post_init__(self):
+        self.public_address = self.public_address or self.rtp.public_address
+
+    def register_dialog(self, dialog: Dialog) -> None:
+        """Register *dialog* keyed by ``(dialog.local_tag, dialog.remote_tag)``."""
+        if dialog.remote_tag is None:
+            logger.warning("Dialog without remote tag cannot be registered: %r", dialog)
+        else:
+            self._dialogs[dialog.local_tag, dialog.remote_tag] = dialog
+
+    def drop_dialog(self, dialog: Dialog) -> None:
+        """Remove *dialog* from the registry."""
+        if dialog.remote_tag is None:
+            logger.warning("Dialog without remote tag cannot be removed: %r", dialog)
+        else:
+            try:
+                del self._dialogs[dialog.local_tag, dialog.remote_tag]
+            except KeyError:
+                logger.warning("Dialog not found for removal: %r", dialog)
+
+    def register_transaction(self, tx: Transaction) -> None:
+        """Register *tx* by its branch parameter."""
+        self._transactions[tx.branch] = tx
+
+    def drop_transaction(self, tx: Transaction) -> None:
+        """Remove *tx* from the registry."""
+        try:
+            del self._transactions[tx.branch]
+        except KeyError:
+            logger.warning("Transaction not found for removal: %r", tx)
+
     def connection_made(self, transport: asyncio.Transport) -> None:  # type: ignore[override]
         """Store the TLS/TCP transport and start RTP mux + carrier registration."""
         self.transport = transport
-        # IPv6 sockets return a 4-tuple (host, port, flowinfo, scope_id);
-        # we only need the first two elements.
-        host, port = transport.get_extra_info("sockname")[:2]
-        self.local_address = NetworkAddress(ipaddress.ip_address(host), port)
         self.is_secure = transport.get_extra_info("ssl_object") is not None
         try:
             loop = asyncio.get_running_loop()
             tx = RegistrationTransaction(sip=self, method=SIPMethod.REGISTER)
-            self.transactions[tx.branch] = tx
+            self.register_transaction(tx)
+            loop.create_task(self.handle_registration(tx))
             self.keepalive_task = loop.create_task(self.send_keepalive())
         except RuntimeError:
             pass  # no running loop in synchronous test setups
@@ -127,8 +163,12 @@ class SessionInitiationProtocol(asyncio.Protocol):
             await asyncio.sleep(self.keepalive_interval.total_seconds())
             if self.transport is None:
                 return
-            logger.info("PING", extra={"addr": self.local_address})
+            logger.info("PING", extra={"addr": self.public_address})
             self.transport.write(PING)
+
+    async def handle_registration(self, tx: RegistrationTransaction) -> None:
+        await tx
+        self.on_registered()
 
     def data_received(self, data: bytes) -> None:
         self.recv_buffer.extend(data)
@@ -178,7 +218,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
         elif frame == PING:
             logger.info("PING", extra={"addr": peer})
             if self.transport:
-                logger.info("PONG", extra={"addr": self.local_address})
+                logger.info("PONG", extra={"addr": self.public_address})
                 self.transport.write(PONG)
         else:
             match Message.parse(bytes(frame)):
@@ -200,6 +240,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
     def send(self, message: Response | Request) -> None:
         """Serialize and send a SIP message over the TLS/TCP connection."""
         logger.debug("Sending %r", message)
+        message.headers.setdefault("User-Agent", USER_AGENT)
         if self.transport is not None:
             self.transport.write(bytes(message))
 
@@ -210,23 +251,15 @@ class SessionInitiationProtocol(asyncio.Protocol):
 
     @property
     def allowed_methods(self) -> frozenset[SIPMethod]:
-        """SIP methods supported by this UA.
-
-        A method is included when the class defines a ``<method_lower>_received``
-        handler (e.g. ``register_received`` enables REGISTER).
-
-        Returns:
-            Frozenset of [`SIPMethod`][voip.sip.types.SIPMethod] values.
-        """
+        """SIP methods supported by this UA."""
         return frozenset(
-            (
-                *(
-                    m
-                    for m in SIPMethod
-                    if hasattr(self.transaction_class, f"{m.lower()}_received")
-                ),
+            {
+                SIPMethod.INVITE,
+                SIPMethod.ACK,
+                SIPMethod.BYE,
+                SIPMethod.CANCEL,
                 SIPMethod.OPTIONS,
-            )
+            }
         )
 
     @property
@@ -257,11 +290,31 @@ class SessionInitiationProtocol(asyncio.Protocol):
         )
 
     def request_received(self, request: Request) -> None:
-        """Dispatch request to transaction methods."""
+        """Dispatch an incoming SIP request to the appropriate transaction."""
         match request.method:
+            case SIPMethod.INVITE:
+                asyncio.create_task(
+                    InviteTransaction.receive(request=request, sip=self)
+                )
+            case SIPMethod.ACK:
+                # For non-2xx ACKs the INVITE tx is still present; route by branch.
+                try:
+                    tx = self._transactions[request.branch]
+                except KeyError:
+                    self.send(
+                        Response.from_request(
+                            request,
+                            status_code=SIPStatus.GONE,
+                            phrase=SIPStatus.GONE.phrase,
+                        )
+                    )
+                else:
+                    tx.ack_received(request)
+            case SIPMethod.BYE:
+                asyncio.create_task(ByeTransaction.receive(request=request, sip=self))
             case SIPMethod.CANCEL:
                 try:
-                    tx = self.transactions[request.branch]
+                    tx = self._transactions[request.branch]
                 except KeyError:
                     self.send(
                         Response.from_request(
@@ -271,6 +324,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
                         )
                     )
                     return
+                tx.cancel_received(request)
             case SIPMethod.OPTIONS:
                 self.send(
                     Response.from_request(
@@ -280,17 +334,8 @@ class SessionInitiationProtocol(asyncio.Protocol):
                         headers={"Allow": self.allow_header},
                     )
                 )
-                return
             case _:
-                tx = self.transaction_class.from_request(request=request, sip=self)
-                self.transactions[request.branch] = tx
-        try:
-            handler: typing.Callable[[Request], Response | None] = getattr(
-                tx, f"{request.method.lower()}_received"
-            )
-        except AttributeError:
-            handler = self.method_not_allowed
-        handler(request)
+                self.method_not_allowed(request)
 
     def response_received(self, response: Response) -> None:
         """Delegate REGISTER responses to the registration transaction.
@@ -299,7 +344,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
             response: The parsed SIP response.
         """
         try:
-            tx = self.transactions[response.branch]
+            tx = self._transactions[response.branch]
         except KeyError:
             logger.warning(
                 "Received response with unknown branch %r: %r",
@@ -308,6 +353,13 @@ class SessionInitiationProtocol(asyncio.Protocol):
             )
         else:
             tx.response_received(response)
+
+    def on_registered(self) -> None:
+        """Handle successful carrier registration.
+
+        Override in subclasses to initiate outbound calls or start other
+        post-registration activity. The base implementation is a no-op.
+        """
 
     @property
     def contact(self) -> str:
@@ -325,14 +377,14 @@ class SessionInitiationProtocol(asyncio.Protocol):
         [RFC 5626 §5]: https://datatracker.ietf.org/doc/html/rfc5626#section-5
         """
         address = (
-            f"{self.aor.user}@{self.local_address}"
+            f"{self.aor.user}@{self.public_address}"
             if self.aor.user
-            else str(self.local_address)
+            else str(self.public_address)
         )
         ob_uri_param = ";ob"
         if self.aor.scheme == "sips":
             return f"<sips:{address}{ob_uri_param}>"
-        tls_param = ";transport=tls" if self.is_secure else ""
+        tls_param = ";transport=tls" if self.is_secure else ";transport=tcp"
         return f"<sip:{address}{tls_param}{ob_uri_param}>"
 
     def connection_lost(self, exc: Exception | None) -> None:

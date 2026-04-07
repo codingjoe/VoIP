@@ -1,5 +1,6 @@
 """SIP transaction layer (RFC 3261 §17)."""
 
+import asyncio
 import dataclasses
 import datetime
 import hashlib
@@ -24,7 +25,7 @@ from voip.srtp import SRTPSession
 
 from ..types import NetworkAddress
 from . import messages, types
-from .messages import Dialog, Request, Response
+from .messages import Request, Response, SIPHeaderDict
 from .types import (
     CallerID,
     DigestAlgorithm,
@@ -34,26 +35,30 @@ from .types import (
 )
 
 if typing.TYPE_CHECKING:
+    from .dialog import Dialog
     from .protocol import SessionInitiationProtocol
 
 logger = logging.getLogger("voip.sip")
 
 __all__ = [
+    "ByeTransaction",
     "InviteTransaction",
     "RegistrationTransaction",
 ]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
-class Transaction:
+class Transaction(asyncio.Future):
     """
     Initiated by a request, completed by any number of responses.
+
+    Transactions are awaitable: ``await tx`` suspends until the transaction
+    reaches its terminal state and resolves to the dialog.
 
     Args:
         dialog: The SIP dialog this transaction belongs to.
         branch: Unique identifier for the transaction, must start with "z9hG4bK".
-        cseq: The CSeq number for this transaction, starting at 1 and incremented
-            for each new request sent within the transaction.
+        cseq: The CSeq sequence number for this transaction.
     """
 
     branch_prefix: typing.ClassVar[str] = "z9hG4bK"
@@ -75,6 +80,7 @@ class Transaction:
     )
 
     def __post_init__(self):
+        asyncio.Future.__init__(self)
         if not self.branch.startswith(self.branch_prefix):
             raise ValueError(f"Branch parameter must start with {self.branch_prefix!r}")
 
@@ -82,7 +88,7 @@ class Transaction:
     def headers(self) -> dict[str, str]:
         """Return a dict of headers for this transaction."""
         return {
-            "Via": f"SIP/2.0/{self.sip.aor.transport} {self.sip.local_address};rport;branch={self.branch}",
+            "Via": f"SIP/2.0/{self.sip.aor.transport} {self.sip.public_address};rport;branch={self.branch}",
             "CSeq": f"{self.cseq} {self.method}",
         }
 
@@ -93,6 +99,27 @@ class Transaction:
         """Send a response to this transaction."""
         self.sip.send(response)
 
+    def complete(self) -> None:
+        """Resolve the transaction with its dialog if not already complete."""
+        if not self.done():
+            self.set_result(self.dialog)
+
+    @classmethod
+    async def receive(
+        cls,
+        *,
+        request: Request,
+        sip: SessionInitiationProtocol,
+    ): ...
+
+    @classmethod
+    async def send(
+        cls,
+        *,
+        sip: SessionInitiationProtocol,
+        **kwargs: typing.Any,
+    ): ...
+
     @classmethod
     def from_request(
         cls,
@@ -101,9 +128,9 @@ class Transaction:
         sip: SessionInitiationProtocol,
     ):
         try:
-            dialog = sip.dialogs[request.remote_tag, request.local_tag]
+            dialog = sip._dialogs[request.remote_tag, request.local_tag]
         except KeyError:
-            dialog = Dialog.from_request(request)
+            dialog = sip.dialog_class.from_request(request)
         return cls(
             sip=sip,
             dialog=dialog,
@@ -134,6 +161,8 @@ class RegistrationTransaction(Transaction):
 
     def __post_init__(self):
         super().__post_init__()
+        from .dialog import Dialog
+
         self.dialog = self.dialog or Dialog(uac=self.sip.aor)
         headers = (
             self.headers
@@ -152,7 +181,7 @@ class RegistrationTransaction(Transaction):
         self.request = Request.from_dialog(
             dialog=self.dialog,
             method=SIPMethod.REGISTER,
-            uri=types.SipUri(host=self.sip.aor.host, scheme=self.sip.aor.scheme),
+            uri=types.SipURI(host=self.sip.aor.host, scheme=self.sip.aor.scheme),
             headers=headers,
         )
 
@@ -164,10 +193,11 @@ class RegistrationTransaction(Transaction):
         Args:
             response: The parsed SIP response.
         """
-        self.sip.transactions.pop(self.branch)
+        self.sip.drop_transaction(self)
         match response.status_code:
             case SIPStatus.OK:
                 logger.info("Registration successful")
+                self.set_result(self.dialog)
                 return
             case SIPStatus.UNAUTHORIZED | SIPStatus.PROXY_AUTHENTICATION_REQUIRED:
                 logger.debug(
@@ -230,11 +260,22 @@ class RegistrationTransaction(Transaction):
                         method=self.method,
                         authorization=auth_value,
                     )
-                self.sip.transactions[tx.branch] = tx
+                self.sip.register_transaction(tx)
+                tx.add_done_callback(self.forward_result)
             case _:
                 raise NotImplementedError(
                     f"Unknown SIP status code: {response.status_code}"
                 )
+
+    def forward_result(self, fut: asyncio.Future) -> None:
+        """Forward the result of *fut* to this transaction (used for auth retry chaining)."""
+        if not self.done():
+            if fut.cancelled():
+                self.cancel()
+            elif exc := fut.exception():
+                self.set_exception(exc)
+            else:
+                self.set_result(fut.result())
 
     @staticmethod
     def parse_auth_challenge(header: str) -> dict[str, str]:
@@ -316,83 +357,83 @@ class RegistrationTransaction(Transaction):
 
 @dataclasses.dataclass(kw_only=True, slots=True)
 class InviteTransaction(Transaction):
-    """SIP INVITE server transaction [RFC 3261 §17.2].
+    """SIP INVITE transaction for inbound and outbound calls [RFC 3261 §17].
 
-    Encapsulates the state and behavior of a single INVITE dialog.
-    The SIP layer creates one instance per incoming INVITE, keyed by
-    Via branch (RFC 3261 §17.1.3).
+    Handles the SIP signaling state machine for a single INVITE dialog.  The
+    SIP layer creates one instance per incoming INVITE, keyed by Via branch
+    (RFC 3261 §17.1.3).
 
-    Override `call_received` in a subclass to react to the call without
-    subclassing
-    [`SessionInitiationProtocol`][voip.sip.protocol.SessionInitiationProtocol]:
+    For inbound call handling, subclass [Dialog][voip.sip.Dialog]
+    and override [call_received][voip.sip.Dialog.call_received]:
 
     ```python
-    class MyTransaction(Transaction):
+    class MyDialog(Dialog):
         def call_received(self) -> None:
-            asyncio.create_task(self.answer(call_class=MyCall))
-    ```
+            self.ringing()
+            self.accept(session_class=MyCall)
 
-    Register the subclass on the session:
-
-    ```python
     class MySession(SessionInitiationProtocol):
-        transaction_class = MyTransaction
+        dialog_class = MyDialog
     ```
 
-    [RFC 3261 §17.2]: https://datatracker.ietf.org/doc/html/rfc3261#section-17.2
+    [RFC 3261 §17]: https://datatracker.ietf.org/doc/html/rfc3261#section-17
     """
 
-    def invite_received(self, request: Request) -> None:
-        """Handle the incoming call.
+    pending_call_class: type[Session] | None = dataclasses.field(
+        default=None, repr=False
+    )
+    pending_call_kwargs: dict[str, typing.Any] = dataclasses.field(
+        default_factory=dict, repr=False
+    )
 
-        Override in subclasses to decide whether to answer, ring, or reject.
-        Implementations are expected to produce a response by calling
-        `ringing`, `answer`, or `reject`. The base implementation is a no-op.
+    @classmethod
+    async def receive(
+        cls,
+        *,
+        request: Request,
+        sip: SessionInitiationProtocol,
+    ) -> Dialog:
+        """Handle an incoming INVITE [RFC 3261 §13.3].
+
+        Registers the transaction, notifies the dialog, and resolves when the
+        ACK is received.
 
         Args:
-            request: The SIP INVITE request.
+            request: The incoming SIP INVITE request.
+            sip: The SIP session receiving the request.
+
+        Returns:
+            The dialog once the call is established (ACK received).
+
+        [RFC 3261 §13.3]: https://datatracker.ietf.org/doc/html/rfc3261#section-13.3
         """
+        tx = cls.from_request(request=request, sip=sip)
+        sip.register_transaction(tx)
+        tx.dialog.invite_transaction = tx
+        tx.dialog.sip = sip
+        tx.dialog.call_received()
+        return await tx
 
     def ack_received(self, request: Request) -> None:
         """Handle an ACK confirming dialog establishment (RFC 3261 §17.2.1).
 
-        Removes the INVITE server transaction from the registry.  Override
-        in subclasses to react to the ACK.
+        Removes the INVITE server transaction from the registry and resolves
+        the transaction future with the dialog.
 
         Args:
             request: The SIP ACK request.
         """
-        self.sip.transactions.pop(self.branch)
-
-    def bye_received(self, request: Request) -> None:
-        """Handle a BYE terminating a dialog.
-
-        Override in subclasses to tear down the call.
-
-        Args:
-            request: The SIP BYE request.
-        """
-        self.sip.dialogs.pop((self.dialog.remote_tag, self.dialog.local_tag))
-        self.send_response(
-            Response.from_request(
-                request,
-                dialog=self.dialog,
-                status_code=SIPStatus.OK,
-                phrase=SIPStatus.OK.phrase,
-            )
-        )
+        self.sip.drop_transaction(self)
+        self.complete()
 
     def cancel_received(self, request: Request) -> None:
         """Handle a CANCEL request for a pending INVITE.
 
-        Override in subclasses to react to caller cancellation before the call
-        is answered.
-
         Args:
             request: The SIP CANCEL request.
         """
-        self.sip.transactions.pop(self.branch)
-        self.sip.dialogs.pop((self.dialog.remote_tag, self.dialog.local_tag))
+        self.sip.drop_transaction(self)
+        self.sip.drop_dialog(self.dialog)
         self.send_response(
             Response.from_request(
                 request,
@@ -401,6 +442,8 @@ class InviteTransaction(Transaction):
                 phrase=SIPStatus.OK.phrase,
             )
         )
+        if not self.done():
+            self.cancel()
 
     def ringing(self) -> None:
         """Send a 180 Ringing provisional response [RFC 3261 §21.1.2].
@@ -436,20 +479,24 @@ class InviteTransaction(Transaction):
             )
         )
 
-    def answer(self, *, call_class: type[Session], **call_kwargs: typing.Any) -> None:
+    def answer(
+        self, *, session_class: type[Session], **session_kwargs: typing.Any
+    ) -> None:
         """Answer the call by setting up RTP and sending 200 OK with SDP.
 
         Example:
-            Call from within `call_received`:
+            Call from within [Dialog.call_received][voip.sip.Dialog.call_received]
+            via [Dialog.accept][voip.sip.Dialog.accept]:
 
             ```python
-            def call_received(self) -> None:
-                asyncio.create_task(self.answer(call_class=MyCall))
+            class MyDialog(Dialog):
+                def call_received(self) -> None:
+                    self.accept(call_class=MyCall)
             ```
 
         Args:
-            call_class: Session implementation that will be initialized.
-            **call_kwargs: Additional keyword arguments forwarded to the
+            session_class: Session implementation that will be initialized.
+            **session_kwargs: Additional keyword arguments forwarded to the
                 call class constructor.
 
         Raises:
@@ -471,7 +518,7 @@ class InviteTransaction(Transaction):
             None,
         )
         if remote_audio is not None:
-            negotiated_media = call_class.negotiate_codec(remote_audio)
+            negotiated_media = session_class.negotiate_codec(remote_audio)
         else:
             negotiated_media = MediaDescription(
                 media="audio",
@@ -483,13 +530,20 @@ class InviteTransaction(Transaction):
         use_srtp = negotiated_media.proto == "RTP/SAVP"
         srtp_session = SRTPSession.generate() if use_srtp else None
 
-        call_handler = call_class(
+        self.dialog.local_party = (
+            f"{self.request.headers['To']};tag={self.dialog.local_tag}"
+        )
+        self.dialog.remote_party = str(self.request.headers["From"])
+        self.dialog.route_set = list(self.request.headers.getlist("Record-Route"))
+        self.sip.register_dialog(self.dialog)
+
+        call_handler = session_class(
             rtp=self.sip.rtp,
-            sip=self.sip,
             caller=caller,
             media=negotiated_media,
             srtp=srtp_session,
-            **call_kwargs,
+            dialog=self.dialog,
+            **session_kwargs,
         )
         if remote_audio is not None and remote_audio.port != 0:
             media_connection = remote_audio.connection
@@ -513,18 +567,16 @@ class InviteTransaction(Transaction):
 
         record_route = self.request.headers.get("Record-Route")
         session_id = str(secrets.randbelow(2**32) + 1)
-        rtp_public = self.sip.rtp.public_address
+        rtp_public = self.sip.public_address
         sdp_media_attributes = [Attribute(name="sendrecv")]
         if srtp_session is not None:
             sdp_media_attributes.append(
                 Attribute(name="crypto", value=srtp_session.sdes_attribute)
             )
-        dialog = Dialog.from_request(self.request)
-        self.sip.dialogs[dialog.remote_tag, dialog.local_tag] = dialog
         self.send_response(
             Response.from_request(
                 request=self.request,
-                dialog=dialog,
+                dialog=self.dialog,
                 status_code=SIPStatus.OK,
                 phrase=SIPStatus.OK.phrase,
                 headers={
@@ -566,22 +618,327 @@ class InviteTransaction(Transaction):
             )
         )
 
-    async def make_call(
-        self,
-        target: str,
+    @classmethod
+    async def send(
+        cls,
         *,
-        call_class: type[Session],
-        **call_kwargs: typing.Any,
-    ) -> Request:
-        """Initiate an outgoing call to `target`.
+        sip: SessionInitiationProtocol,
+        target: types.SipURI,
+        dialog: Dialog,
+        session_class: type[Session],
+        **session_kwargs: typing.Any,
+    ) -> Dialog:
+        """Initiate an outgoing call to *target* [RFC 3261 §13.1].
 
         Args:
-            target: SIP URI of the callee (e.g. ``"sip:bob@example.com"``).
-            call_class: Session implementation that will be initialized for the call.
-            **call_kwargs: Additional keyword arguments forwarded to the
+            sip: The SIP session to send from.
+            target: SIP or tel URI of the callee (e.g. ``"sip:+15551234567@carrier.com"`` or ``"tel:+15551234567"``).
+            dialog: The dialog to associate with this call.
+            session_class: Session implementation that will be initialized for the call.
+            **session_kwargs: Additional keyword arguments forwarded to the
                 call class constructor.
 
-        Raises:
-            NotImplementedError: Not yet implemented.
+        Returns:
+            The dialog once the call is established (ACK sent).
+
+        [RFC 3261 §13.1]: https://datatracker.ietf.org/doc/html/rfc3261#section-13.1
         """
-        raise NotImplementedError("make_call is not yet implemented")
+        if dialog.uac is None:
+            dialog.uac = sip.aor
+        dialog.sip = sip
+
+        tx = cls(
+            sip=sip,
+            method=SIPMethod.INVITE,
+            cseq=dialog.outbound_cseq,
+            dialog=dialog,
+        )
+        tx.pending_call_class = session_class
+        tx.pending_call_kwargs = session_kwargs
+
+        rtp_public = sip.rtp.public_address
+        session_id = str(secrets.randbelow(2**32) + 1)
+        sdp_offer = SessionDescription(
+            origin=Origin(
+                username="-",
+                sess_id=session_id,
+                sess_version=session_id,
+                nettype="IN",
+                addrtype=(
+                    "IP6" if isinstance(rtp_public[0], ipaddress.IPv6Address) else "IP4"
+                ),
+                unicast_address=str(rtp_public[0]),
+            ),
+            timings=[Timing(start_time=0, stop_time=0)],
+            connection=ConnectionData(
+                nettype="IN",
+                addrtype=(
+                    "IP6" if isinstance(rtp_public[0], ipaddress.IPv6Address) else "IP4"
+                ),
+                connection_address=str(rtp_public[0]),
+            ),
+            media=[
+                MediaDescription(
+                    media="audio",
+                    port=rtp_public[1],
+                    proto="RTP/AVP",
+                    fmt=session_class.sdp_formats(),
+                    attributes=[Attribute(name="sendrecv")],
+                )
+            ],
+        )
+        tx.request = Request(
+            method=SIPMethod.INVITE,
+            uri=target,
+            headers={
+                "Max-Forwards": "70",
+                **tx.headers,
+                "From": dialog.from_header,
+                "To": str(target),
+                "Contact": sip.contact,
+                "Call-ID": dialog.call_id,
+                "Route": f"<sip:{str(rtp_public[0])}:5060;transport=tcp;lr>",
+                "Allow": sip.allow_header,
+                "Content-Type": "application/sdp",
+            },
+            body=sdp_offer,
+        )
+        sip.register_transaction(tx)
+        sip.send(tx.request)
+        try:
+            return await tx
+        except asyncio.CancelledError:
+            sip.drop_transaction(tx)
+            raise
+
+    def response_received(self, response: Response) -> None:
+        """Dispatch responses to an outbound INVITE."""
+        match response.status_code // 100:
+            case 1:  # trying/ringing
+                return
+            case 2:  # OK
+                self._start_call(response)
+        self.ack(response)
+        self.complete()
+
+    def _start_call(self, response: Response) -> None:
+        """Complete call setup after a 200 OK is received.
+
+        Negotiates the codec from the remote SDP answer, creates the call
+        handler, registers it with the RTP mux, updates the dialog.
+
+        Args:
+            response: The 200 OK SIP response containing the remote SDP answer.
+        """
+        peer = (
+            self.sip.transport.get_extra_info("peername")
+            if self.sip.transport
+            else None
+        )
+        remote_audio = next(
+            (
+                m
+                for m in (response.body.media if response.body else [])
+                if m.media == "audio"
+            ),
+            None,
+        )
+        if remote_audio is not None and self.pending_call_class is not None:
+            negotiated_media = self.pending_call_class.negotiate_codec(remote_audio)
+        else:
+            negotiated_media = MediaDescription(
+                media="audio",
+                port=0,
+                proto="RTP/AVP",
+                fmt=[RTPPayloadFormat.from_pt(0)],
+            )
+
+        if self.pending_call_class is not None:
+            call_handler = self.pending_call_class(
+                rtp=self.sip.rtp,
+                caller=CallerID(str(self.sip.aor)),
+                media=negotiated_media,
+                srtp=None,
+                dialog=self.dialog,
+                **self.pending_call_kwargs,
+            )
+            if remote_audio is not None and remote_audio.port != 0:
+                media_connection = remote_audio.connection
+                session_connection = response.body.connection if response.body else None
+                connection = media_connection or session_connection
+                remote_ip = (
+                    connection.connection_address
+                    if connection is not None
+                    else peer[0]
+                    if peer
+                    else None
+                )
+                remote_rtp_address: NetworkAddress | None = (
+                    NetworkAddress(remote_ip, remote_audio.port)
+                    if remote_ip is not None
+                    else None
+                )
+            else:
+                remote_rtp_address = None
+            self.sip.rtp.register_call(remote_rtp_address, call_handler)
+            if remote_rtp_address is not None:
+                self.sip.rtp.send(b"\x00", remote_rtp_address)
+
+    def ack(self, response: Response) -> None:
+        """Send an ACK after receiving a terminal response.
+
+        For 2xx responses, establishes the dialog and registers it with the
+        protocol.
+        """
+        if response.status_code // 100 == 2:
+            self.dialog.remote_tag = response.remote_tag
+            self.dialog.local_party = str(response.headers["From"])
+            self.dialog.remote_party = str(response.headers["To"])
+            self.dialog.outbound_cseq = self.cseq + 1
+            # RFC 3261 §12.1.2: UAC route set is Record-Route in reverse order.
+            self.dialog.route_set = list(
+                reversed(list(response.headers.getlist("Record-Route")))
+            )
+            self.sip.register_dialog(self.dialog)
+        self.sip.drop_transaction(self)
+
+        ack_branch = f"{Transaction.branch_prefix}-{uuid.uuid4()}"
+        contact = response.headers.get("Contact")
+        ack_uri = (
+            contact.split(";")[0].strip("<>") if contact else str(self.request.uri)
+        )
+        self.dialog.remote_contact = ack_uri
+        ack_headers: SIPHeaderDict = SIPHeaderDict(
+            {
+                "Via": (
+                    f"SIP/2.0/{self.sip.aor.transport}"
+                    f" {self.sip.public_address};rport;branch={ack_branch};alias"
+                ),
+                "Max-Forwards": "70",
+                "From": response.headers["From"],
+                "To": response.headers["To"],
+                "Call-ID": self.dialog.call_id,
+                "CSeq": f"{self.cseq} {SIPMethod.ACK}",
+                "Content-Length": "0",
+            }
+        )
+        for route in self.dialog.route_set:
+            ack_headers.add("Route", route)
+        self.sip.send(
+            Request(
+                method=SIPMethod.ACK,
+                uri=ack_uri,
+                headers=ack_headers,
+            )
+        )
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class ByeTransaction(Transaction):
+    """BYE transaction for terminating a dialog [RFC 3261 §15, §17.1.2].
+
+    Use [send][voip.sip.transactions.ByeTransaction.send] to terminate a
+    dialog from the local side, or
+    [receive][voip.sip.transactions.ByeTransaction.receive] to handle a
+    BYE sent by the remote party.
+
+    [RFC 3261 §15]: https://datatracker.ietf.org/doc/html/rfc3261#section-15
+    [RFC 3261 §17.1.2]: https://datatracker.ietf.org/doc/html/rfc3261#section-17.1.2
+    """
+
+    method: SIPMethod = SIPMethod.BYE
+
+    @classmethod
+    async def send(
+        cls,
+        *,
+        sip: SessionInitiationProtocol,
+        dialog: Dialog,
+    ) -> Dialog:
+        """Send a BYE request and wait for the 200 OK [RFC 3261 §15.1.1].
+
+        Args:
+            sip: The SIP session to send from.
+            dialog: The dialog to terminate.
+
+        Returns:
+            The dialog once the BYE is acknowledged.
+
+        [RFC 3261 §15.1.1]: https://datatracker.ietf.org/doc/html/rfc3261#section-15.1.1
+        """
+        cseq = dialog.outbound_cseq
+        dialog.outbound_cseq += 1
+        tx = cls(sip=sip, dialog=dialog, cseq=cseq)
+        request_uri = str(dialog.remote_contact).strip("<>").split(";")[0]
+        headers: SIPHeaderDict = SIPHeaderDict(
+            {
+                "Via": (
+                    f"SIP/2.0/{sip.aor.transport}"
+                    f' {sip.rtp.public_address};oc-algo="loss";oc;rport;branch={tx.branch}'
+                ),
+                "Max-Forwards": "70",
+                "From": dialog.local_party,
+                "To": dialog.remote_party,
+                "Call-ID": dialog.call_id,
+                "CSeq": f"{cseq} {SIPMethod.BYE}",
+                "Content-Length": "0",
+            }
+        )
+        for route in dialog.route_set:
+            headers.add("Route", route)
+        tx.request = Request(method=SIPMethod.BYE, uri=request_uri, headers=headers)
+        sip.register_transaction(tx)
+        sip.send(tx.request)
+        try:
+            return await tx
+        except asyncio.CancelledError:
+            sip.drop_transaction(tx)
+            raise
+
+    @classmethod
+    async def receive(
+        cls,
+        *,
+        request: Request,
+        sip: SessionInitiationProtocol,
+    ) -> Dialog:
+        """Handle an incoming BYE from the remote party [RFC 3261 §15.1.2].
+
+        Sends 200 OK, removes the dialog, and notifies the application via
+        [hangup_received][voip.sip.Dialog.hangup_received].
+
+        Args:
+            request: The incoming SIP BYE request.
+            sip: The SIP session receiving the request.
+
+        Returns:
+            The terminated dialog.
+
+        [RFC 3261 §15.1.2]: https://datatracker.ietf.org/doc/html/rfc3261#section-15.1.2
+        """
+        tx = cls.from_request(request=request, sip=sip)
+        sip.drop_dialog(tx.dialog)
+        tx.send_response(
+            Response.from_request(
+                request,
+                dialog=tx.dialog,
+                status_code=SIPStatus.OK,
+                phrase=SIPStatus.OK.phrase,
+            )
+        )
+        tx.dialog.hangup_received()
+        tx.set_result(tx.dialog)
+        return await tx
+
+    def response_received(self, response: Response) -> None:
+        """Handle the 200 OK for an outgoing BYE [RFC 3261 §15.1.1].
+
+        Args:
+            response: The parsed SIP response to our BYE request.
+        """
+        if response.status_code >= 200:
+            self.sip.drop_transaction(self)
+            self.complete()
+            logger.debug(
+                "BYE acknowledged: %s %s", response.status_code, response.phrase
+            )

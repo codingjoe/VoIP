@@ -1,14 +1,14 @@
 """Audio codec implementations for RTP streams.
 
-Provides the [`RTPCodec`][voip.codecs.base.RTPCodec] base class and concrete
+Provides the [RTPCodec][voip.codecs.base.RTPCodec] base class and concrete
 implementations for all supported RTP audio codecs:
 
-- [`PCMA`][voip.codecs.PCMA] — G.711 A-law (RFC 3551), PT 8 *(pure NumPy)*
-- [`PCMU`][voip.codecs.PCMU] — G.711 mu-law (RFC 3551), PT 0 *(pure NumPy)*
-- [`G722`][voip.codecs.G722] — G.722 (RFC 3551), PT 9 *(requires* ``pyav`` *extra)*
-- [`Opus`][voip.codecs.Opus] — Opus (RFC 7587), PT 111 *(requires* ``pyav`` *extra)*
+- [PCMA][voip.codecs.PCMA] — G.711 A-law (RFC 3551), PT 8 *(pure NumPy)*
+- [PCMU][voip.codecs.PCMU] — G.711 mu-law (RFC 3551), PT 0 *(pure NumPy)*
+- [G722][voip.codecs.G722] — G.722 (RFC 3551), PT 9 *(requires* ``pyav`` *extra)*
+- [Opus][voip.codecs.Opus] — Opus (RFC 7587), PT 111 *(requires* ``pyav`` *extra)*
 
-Use [`get`][voip.codecs.get] to look up a codec class by its SDP encoding
+Use [get][voip.codecs.get] to look up a codec class by its SDP encoding
 name (case-insensitive).
 
 When the ``pyav`` extra is not installed only PCMA and PCMU are registered.

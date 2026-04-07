@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 from voip.rtp import RTP, RealtimeTransportProtocol, RTPPacket, RTPPayloadType, Session
 from voip.sdp.types import MediaDescription, RTPPayloadFormat
+from voip.sip.dialog import Dialog
 from voip.sip.types import CallerID
 
 
@@ -20,10 +21,10 @@ def make_media() -> MediaDescription:
 
 
 def make_call(**kwargs) -> Session:
-    """Create an RTPCall with mock rtp/sip for unit testing."""
+    """Create an RTPCall with mock rtp for unit testing."""
     defaults: dict = {
         "rtp": MagicMock(spec=RealtimeTransportProtocol),
-        "sip": MagicMock(),
+        "dialog": Dialog(),
         "media": make_media(),
         "caller": CallerID(""),
     }
@@ -162,7 +163,7 @@ class TestRealtimeTransportProtocol:
 
         mux = RealtimeTransportProtocol()
         handler = RecordCall(
-            rtp=mux, sip=MagicMock(), media=make_media(), caller=CallerID("")
+            rtp=mux, dialog=Dialog(), media=make_media(), caller=CallerID("")
         )
         remote_addr = ("127.0.0.1", 5004)
         mux.register_call(remote_addr, handler)
@@ -189,7 +190,7 @@ class TestRealtimeTransportProtocol:
 
         mux = RealtimeTransportProtocol()
         handler = RecordCall(
-            rtp=mux, sip=MagicMock(), media=make_media(), caller=CallerID("")
+            rtp=mux, dialog=Dialog(), media=make_media(), caller=CallerID("")
         )
         mux.register_call(("127.0.0.1", 5004), handler)
         # 5 bytes is shorter than the 12-byte minimum RTP header — must not raise.
@@ -207,7 +208,7 @@ class TestRealtimeTransportProtocol:
         mux = RealtimeTransportProtocol()
         mux.connection_made(MagicMock(spec=asyncio.DatagramTransport))
         handler = RecordCall(
-            rtp=mux, sip=MagicMock(), media=make_media(), caller=CallerID("")
+            rtp=mux, dialog=Dialog(), media=make_media(), caller=CallerID("")
         )
         mux.register_call(None, handler)
         stun_bytes = b"\x01\x01" + b"\x00" * 18  # first byte = 1 (STUN range [0,3])
@@ -293,10 +294,10 @@ class TestRealtimeTransportProtocol:
         mux = RealtimeTransportProtocol()
         specific_addr = ("1.2.3.4", 5004)
         wildcard_handler = WildcardCall(
-            rtp=mux, sip=MagicMock(), media=make_media(), caller=CallerID("")
+            rtp=mux, dialog=Dialog(), media=make_media(), caller=CallerID("")
         )
         specific_handler = SpecificCall(
-            rtp=mux, sip=MagicMock(), media=make_media(), caller=CallerID("")
+            rtp=mux, dialog=Dialog(), media=make_media(), caller=CallerID("")
         )
         mux.register_call(None, wildcard_handler)
         mux.register_call(specific_addr, specific_handler)
@@ -318,7 +319,7 @@ class TestRealtimeTransportProtocol:
 
         mux = RealtimeTransportProtocol()
         handler = WildcardCall(
-            rtp=mux, sip=MagicMock(), media=make_media(), caller=CallerID("")
+            rtp=mux, dialog=Dialog(), media=make_media(), caller=CallerID("")
         )
         mux.register_call(None, handler)
 
@@ -338,7 +339,7 @@ class TestRealtimeTransportProtocol:
 
         mux = RealtimeTransportProtocol()
         handler = RecordCall(
-            rtp=mux, sip=MagicMock(), media=make_media(), caller=CallerID("")
+            rtp=mux, dialog=Dialog(), media=make_media(), caller=CallerID("")
         )
         remote_addr = ("5.6.7.8", 5004)
         mux.register_call(remote_addr, handler)
@@ -354,7 +355,7 @@ class TestRealtimeTransportProtocol:
 
         mux = RealtimeTransportProtocol()
         handler = Session(
-            rtp=mux, sip=MagicMock(), media=make_media(), caller=CallerID("")
+            rtp=mux, dialog=Dialog(), media=make_media(), caller=CallerID("")
         )
         with caplog.at_level(logging.INFO, logger="voip.rtp"):
             mux.register_call(("1.2.3.4", 5004), handler)
@@ -367,7 +368,7 @@ class TestRealtimeTransportProtocol:
 
         mux = RealtimeTransportProtocol()
         handler = Session(
-            rtp=mux, sip=MagicMock(), media=make_media(), caller=CallerID("")
+            rtp=mux, dialog=Dialog(), media=make_media(), caller=CallerID("")
         )
         addr = ("1.2.3.4", 5004)
         mux.register_call(addr, handler)
@@ -386,7 +387,7 @@ class TestRealtimeTransportProtocol:
 
         mux = RealtimeTransportProtocol()
         handler = CapturingCall(
-            rtp=mux, sip=MagicMock(), media=make_media(), caller=CallerID("")
+            rtp=mux, dialog=Dialog(), media=make_media(), caller=CallerID("")
         )
         mux.register_call(None, handler)
         packet = make_rtp_packet()
@@ -430,7 +431,7 @@ class TestSRTPIntegration:
         session = SRTPSession.generate()
         handler = SRTPCapture(
             rtp=mux,
-            sip=MagicMock(),
+            dialog=Dialog(),
             media=make_media(),
             srtp=session,
             caller=CallerID(""),
@@ -462,7 +463,7 @@ class TestSRTPIntegration:
         session = SRTPSession.generate()
         handler = SRTPCapture(
             rtp=mux,
-            sip=MagicMock(),
+            dialog=Dialog(),
             media=make_media(),
             srtp=session,
             caller=CallerID(""),
@@ -495,15 +496,13 @@ class TestSession:
         media = make_media()
         assert make_call(media=media).media is media
 
-    def test_rtp_and_sip_stored_as_fields(self):
-        """Rtp and sip back-references are stored on the instance."""
+    def test_rtp_stored_as_field(self):
+        """Rtp back-reference is stored on the instance."""
         mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
-        mock_sip = MagicMock()
         call = Session(
-            rtp=mock_rtp, sip=mock_sip, media=make_media(), caller=CallerID("")
+            rtp=mock_rtp, dialog=Dialog(), media=make_media(), caller=CallerID("")
         )
         assert call.rtp is mock_rtp
-        assert call.sip is mock_sip
 
     def test_packet_received__noop_by_default(self):
         """packet_received is a no-op in the base class."""
@@ -540,8 +539,3 @@ class TestSession:
         """negotiate_codec raises NotImplementedError in the base class."""
         with pytest.raises(NotImplementedError):
             Session.negotiate_codec(MagicMock())
-
-    async def test_hang_up__raises_not_implemented(self):
-        """hang_up raises NotImplementedError in the base class."""
-        with pytest.raises(NotImplementedError):
-            await make_call().hang_up()

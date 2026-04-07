@@ -1,9 +1,28 @@
 # Session Initiation Protocol (SIP)
 
-::: voip.sip
+::: voip.sip.Dialog
+    options:
+      heading_level: 2
+      members:
+        - call_received
+        - hangup_received
+        - ringing
+        - answer
+        - reject
+        - dial
+        - bye
 
-## Transactions
+::: voip.sip.SessionInitiationProtocol
+    options:
+      heading_level: 2
+      members: false
 
-::: voip.sip.transactions.InviteTransaction
+## Types
 
-::: voip.sip.transactions.RegistrationTransaction
+::: voip.sip.SipURI
+
+::: voip.sip.CallerID
+
+::: voip.sip.SIPStatus
+
+::: voip.sdp.types

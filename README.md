@@ -20,25 +20,41 @@ Async VoIP Python library for the AI age.
 
 ## Usage
 
-### CLI
+To get started, you will need a SIP account. One is usually included with ISP.
+Check your ISP's documentation or router for details.
 
-Answer calls and transcribe them live from the terminal:
+You will need a SIP AOR (URI), which looks like this:
 
-```console
-uvx 'voip[cli]' sip sips:alice:********@sip.example.com transcribe
+```INI
+sip:USER:PASSWORD@SIP_SERVER;transport=TCP
 ```
 
-A simple echo server can be started with:
+> [!NOTE]
+> This library uses secure defaults (TLS transport on port 5061).
+> However, most SIP servers only support unencrypted connections.
+> Therefore, you will need to provide an explict transport parameter.
 
-````console
+### CLI
+
+A simple echo call can be started with:
+
 ```console
 uvx 'voip[cli]' sip sips:alice:********@sip.example.com echo
-````
+```
+
+Each command supports an optional `--dial` argument to initiate an
+outbound call instead of waiting for an inbound one.
+
+To dial a number, say a message, and hang up automatically:
+
+```console
+uvx 'voip[cli]' sip sips:alice:********@sip.example.com say sip:+15551234567@sip.example.com "Your package has arrived."
+```
 
 You can also talk to a local agent (needs [Ollama]):
 
 ```console
-uvx 'voip[cli]' sip sips:alice:********@sip.example.com agent
+uvx 'voip[cli]' sip sips:alice:********@sip.example.com agent --initial-prompt "Hi, I am looking for a Mr. Ron, first name Mo?"
 ```
 
 ### Python API
@@ -48,7 +64,7 @@ uv add voip[audio,ai,pygments]
 ```
 
 Subclass `TranscribeCall` and override `transcription_received` to handle results.
-Pass it as `call_class` when answering an incoming call:
+Pass it as `session_class` when answering an incoming call:
 
 ```python
 import asyncio
@@ -56,7 +72,7 @@ import dataclasses
 import ssl
 from voip.ai import TranscribeCall
 from voip.sip.protocol import SIP
-from voip.sip.types import SipUri
+from voip.sip.types import SipURI
 from voip.sip.transactions import InviteTransaction
 from voip.rtp import RealtimeTransportProtocol
 from faster_whisper import WhisperModel
@@ -72,7 +88,7 @@ class TranscribeInviteTransaction(InviteTransaction):
     def invite_received(self, request) -> None:
         self.ringing()
         self.answer(
-            call_class=TranscribingCall,
+            session_class=TranscribingCall,
             stt_model=WhisperModel("kyutai/stt-1b-en_fr-trfs", device="cuda"),
         )
 
@@ -87,7 +103,7 @@ async def main():
     await loop.create_connection(
         lambda: SIP(
             rtp=rtp_protocol,
-            aor=SipUri.parse("sips:alice:********@example.com"),
+            aor=SipURI.parse("sips:alice:********@example.com"),
             transaction_class=TranscribeInviteTransaction,
         ),
         host="sip.example.com",

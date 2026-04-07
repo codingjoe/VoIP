@@ -87,7 +87,7 @@ write_to = "voip/_version.py"
 
 [tool.pytest.ini_options]
 minversion = "6.0"
-addopts = "--cov --strict-markers --cov-report=xml --cov-report=term"
+addopts = "--cov --strict-markers --cov-report=xml --cov-report=term --doctest-modules"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [

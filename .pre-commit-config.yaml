@@ -1,3 +1,5 @@
+default_language_version:
+  python: python3.14
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -36,6 +38,7 @@ repos:
           - mdformat-footnote
           - mdformat-gfm
           - mdformat-gfm-alerts
+          - mdformat-mkdocs>=5.2.0b1
           - mdformat-ruff
         exclude: ^\.github/agents/.*\.agent\.md$
   - repo: https://github.com/astral-sh/ruff-pre-commit
