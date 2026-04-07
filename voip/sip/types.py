@@ -78,7 +78,7 @@ class SipURI(str):
         user: str | None = None,
         password: str | None = None,
         port: int | None = None,
-        parameters: dict[str, str | None] | None = None,
+        parameters: dict[str, str] = None,
         headers: dict[str, str] | None = None,
     ) -> SipURI:
         try:

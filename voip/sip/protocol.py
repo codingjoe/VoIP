@@ -298,16 +298,18 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 )
             case SIPMethod.ACK:
                 # For non-2xx ACKs the INVITE tx is still present; route by branch.
-                tx = self._transactions[request.branch]
-                if isinstance(tx, InviteTransaction):
-                    tx.ack_received(request)
-                    return
-                # For 2xx ACKs the tx is gone; route by established dialog.
                 try:
-                    dialog = self._dialogs[request.remote_tag, request.local_tag]
-                    dialog.invite_transaction.ack_received(request)
-                except KeyError, AttributeError:
-                    logger.warning("ACK for unknown dialog: %r", request)
+                    tx = self._transactions[request.branch]
+                except KeyError:
+                    self.send(
+                        Response.from_request(
+                            request,
+                            status_code=SIPStatus.GONE,
+                            phrase=SIPStatus.GONE.phrase,
+                        )
+                    )
+                else:
+                    tx.ack_received(request)
             case SIPMethod.BYE:
                 asyncio.create_task(ByeTransaction.receive(request=request, sip=self))
             case SIPMethod.CANCEL:

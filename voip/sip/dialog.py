@@ -149,7 +149,7 @@ class Dialog:
 
         Common status codes include:
             - [BUSY_HERE][voip.sip.types.SIPStatus.BUSY_HERE]: The remote party will hear a busy signal.
-            - [DECLINE][voip.sip.types.SIPStatus.DECLINE]: The remote party will hera a decline signal.
+            - [DECLINE][voip.sip.types.SIPStatus.DECLINE]: The remote party will hear a decline signal.
             - [DOES_NOT_EXIST_ANYWHERE][voip.sip.types.SIPStatus.DOES_NOT_EXIST_ANYWHERE]: The remote party will hear a "The person you are trying to reach…" message.
 
         Args:

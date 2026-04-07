@@ -111,7 +111,7 @@ class Message(ByteSerializableObject, abc.ABC):
         )
 
     @property
-    def branch(self) -> str | None:
+    def branch(self) -> str:
         """Branch parameter from the top Via header (RFC 3261 §20.42)."""
         _, uri = self.headers["Via"].split()
         return SipURI.parse(f"sip:{uri}").parameters["branch"]
