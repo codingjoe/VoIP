@@ -11,6 +11,7 @@ from voip.sip.types import SipURI
 
 if typing.TYPE_CHECKING:
     from voip.rtp import Session
+    from voip.sip.protocol import SessionInitiationProtocol
 
 logger = logging.getLogger("voip.sip")
 
@@ -66,7 +67,7 @@ class Dialog:
     local_party: str | None = dataclasses.field(default=None, compare=False)
     remote_party: str | None = dataclasses.field(default=None, compare=False)
     outbound_cseq: int = dataclasses.field(default=1, compare=False)
-    sip: transactions.SessionInitiationProtocol | None = dataclasses.field(
+    sip: SessionInitiationProtocol | None = dataclasses.field(
         default=None, compare=False, repr=False
     )
     invite_transaction: transactions.InviteTransaction | None = dataclasses.field(
@@ -203,7 +204,7 @@ class Dialog:
         )
 
     @classmethod
-    def from_request(cls, request: messages.Request, **kwargs) -> Dialog:
+    def from_request(cls, request: messages.Request, **kwargs) -> typing.Self:
         """Create a dialog from a request, extracting relevant headers."""
         return cls(
             call_id=request.headers["Call-ID"],

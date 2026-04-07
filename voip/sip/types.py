@@ -80,7 +80,7 @@ class SipURI(str):
         port: int | None = None,
         parameters: dict[str, str] = None,
         headers: dict[str, str] | None = None,
-    ) -> SipURI:
+    ) -> typing.Self:
         try:
             host = ipaddress.ip_address(host)
         except ValueError:
@@ -123,7 +123,7 @@ class SipURI(str):
         return instance
 
     @classmethod
-    def parse(cls, value: str) -> SipURI:
+    def parse(cls, value: str) -> typing.Self:
         """
         Parse a SIP or SIPS URI string into a `SipUri` instance.
 
@@ -261,7 +261,7 @@ class SIPStatus(enum.IntEnum):
     [RFC 3261]: https://datatracker.ietf.org/doc/html/rfc3261#section-21
     """
 
-    def __new__(cls, value: int, phrase: str) -> SIPStatus:
+    def __new__(cls, value: int, phrase: str) -> typing.Self:
         obj = int.__new__(cls, value)
         obj._value_ = value
         obj.phrase = phrase
@@ -431,7 +431,7 @@ class SIPMethod(enum.StrEnum):
     [RFC 3311]: https://tools.ietf.org/html/rfc3311
     """
 
-    def __new__(cls, value: str, description: str = "") -> SIPMethod:
+    def __new__(cls, value: str, description: str = "") -> typing.Self:
         obj = str.__new__(cls, value)
         obj._value_ = value
         obj.description = description

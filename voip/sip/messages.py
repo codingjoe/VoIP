@@ -39,7 +39,7 @@ class SIPHeaderDict(ByteSerializableObject, HTTPHeaderDict):
         return b"".join(f"{name}: {value}\r\n".encode() for name, value in self.items())
 
     @classmethod
-    def parse(cls, data: bytes) -> SIPHeaderDict:
+    def parse(cls, data: bytes) -> typing.Self:
         self = SIPHeaderDict()
         for line in data.decode().split("\r\n"):
             name, sep, value = line.partition(":")
@@ -150,7 +150,7 @@ class Request(Message):
         return f"{self.method} {self.uri} {self.version}"
 
     @classmethod
-    def from_dialog(cls, *, dialog: Dialog, headers, **kwargs) -> Request:
+    def from_dialog(cls, *, dialog: Dialog, headers, **kwargs) -> typing.Self:
         """Create a request from a dialog, copying relevant headers."""
         return cls(
             headers=headers | dialog.headers,
@@ -175,7 +175,7 @@ class Response(Message):
     @classmethod
     def from_request(
         cls, request: Request, *, headers=None, dialog: Dialog = None, **kwargs
-    ) -> Response:
+    ) -> typing.Self:
         """Create a response from a request, copying relevant headers."""
         headers = {
             "Via": request.headers["Via"],

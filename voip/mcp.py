@@ -55,7 +55,7 @@ class MCPAgentCall(TTSMixin, TranscribeCall):
     conversation: list[dict[str, str]]
 
     def __post_init__(self) -> None:
-        super().__post_init__()
+        super().__post_init__()  # noqa: UP008
         if self.initial_prompt:
             self.conversation.append(
                 {"role": "assistant", "content": self.initial_prompt}

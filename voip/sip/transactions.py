@@ -160,7 +160,7 @@ class RegistrationTransaction(Transaction):
     cseq: int = 1
 
     def __post_init__(self):
-        super().__post_init__()
+        super().__post_init__()  # noqa: UP008
         from .dialog import Dialog
 
         self.dialog = self.dialog or Dialog(uac=self.sip.aor)

@@ -2,6 +2,7 @@
 
 import dataclasses
 import enum
+import typing
 from collections.abc import Generator
 from typing import ClassVar, NamedTuple, Protocol, runtime_checkable
 
@@ -87,7 +88,7 @@ class Origin(ByteSerializableObject):
         ).encode()
 
     @classmethod
-    def parse(cls, data: bytes | str) -> Origin:
+    def parse(cls, data: bytes | str) -> typing.Self:
         value = data.decode() if isinstance(data, bytes) else data
         username, sess_id, sess_version, nettype, addrtype, unicast_address = (
             value.split(" ", 5)
@@ -119,7 +120,7 @@ class ConnectionData(ByteSerializableObject):
         return f"{self.nettype} {self.addrtype} {self.connection_address}".encode()
 
     @classmethod
-    def parse(cls, data: bytes | str) -> ConnectionData:
+    def parse(cls, data: bytes | str) -> typing.Self:
         value = data.decode() if isinstance(data, bytes) else data
         nettype, addrtype, connection_address = value.split(" ", 2)
         return cls(
@@ -145,7 +146,7 @@ class Bandwidth(ByteSerializableObject):
         return f"{self.bwtype}:{self.bandwidth}".encode()
 
     @classmethod
-    def parse(cls, data: bytes | str) -> Bandwidth:
+    def parse(cls, data: bytes | str) -> typing.Self:
         value = data.decode() if isinstance(data, bytes) else data
         bwtype, _, bandwidth = value.partition(":")
         return cls(bwtype=bwtype, bandwidth=int(bandwidth))
@@ -167,7 +168,7 @@ class Timing(ByteSerializableObject):
         return f"{self.start_time} {self.stop_time}".encode()
 
     @classmethod
-    def parse(cls, data: bytes | str) -> Timing:
+    def parse(cls, data: bytes | str) -> typing.Self:
         value = data.decode() if isinstance(data, bytes) else data
         start_time, stop_time = value.split(" ", 1)
         return cls(start_time=int(start_time), stop_time=int(stop_time))
@@ -193,7 +194,7 @@ class Attribute(ByteSerializableObject):
                 return f"{self.name}:{self.value}".encode()
 
     @classmethod
-    def parse(cls, data: bytes | str) -> Attribute:
+    def parse(cls, data: bytes | str) -> typing.Self:
         value = data.decode() if isinstance(data, bytes) else data
         name, _, attr_value = value.partition(":")
         return cls(name=name, value=attr_value or None)
@@ -253,7 +254,7 @@ class StaticPayloadType(PayloadTypeSpec, enum.Enum):
     H263 = PayloadTypeSpec(34, 90000, "H263")
 
     @classmethod
-    def from_pt(cls, pt: int) -> StaticPayloadType:
+    def from_pt(cls, pt: int) -> typing.Self:
         """Look up a static payload type by its PT number."""
         for member in cls:
             if member.value.pt == pt:
@@ -297,7 +298,7 @@ class RTPPayloadFormat(ByteSerializableObject):
                 return f"{base}/{self.channels}".encode()
 
     @classmethod
-    def parse(cls, data: bytes | str) -> RTPPayloadFormat:
+    def parse(cls, data: bytes | str) -> typing.Self:
         value = data.decode() if isinstance(data, bytes) else data
         fmt, _, rest = value.partition(" ")
         parts = rest.split("/")
@@ -311,7 +312,7 @@ class RTPPayloadFormat(ByteSerializableObject):
         )
 
     @classmethod
-    def from_pt(cls, pt: int) -> RTPPayloadFormat:
+    def from_pt(cls, pt: int) -> typing.Self:
         """Create an `RTPPayloadFormat` from a payload type number."""
         return cls(payload_type=pt)
 
@@ -406,7 +407,7 @@ class MediaDescription(ByteSerializableObject):
         return "\r\n".join(self._lines()).encode()
 
     @classmethod
-    def parse(cls, data: bytes | str) -> MediaDescription:
+    def parse(cls, data: bytes | str) -> typing.Self:
         value = data.decode() if isinstance(data, bytes) else data
         lines = value.splitlines()
         first = lines[0].rstrip("\r").removeprefix("m=")

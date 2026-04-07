@@ -16,6 +16,7 @@ import dataclasses
 import hmac as _hmac_stdlib
 import os
 import struct
+import typing
 
 from cryptography.hazmat.primitives import hashes, hmac
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -92,7 +93,7 @@ class SRTPSession:
         self._session_salt = _prf(self.master_key, 0x02, self.master_salt, _SALT_SIZE)
 
     @classmethod
-    def generate(cls) -> SRTPSession:
+    def generate(cls) -> typing.Self:
         """Generate a new SRTP session with a cryptographically random key and salt."""
         return cls(
             master_key=os.urandom(_KEY_SIZE),

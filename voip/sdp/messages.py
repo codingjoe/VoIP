@@ -1,6 +1,7 @@
 """SDP message parsing and serialization as defined by RFC 4566."""
 
 import dataclasses
+import typing
 from collections.abc import Generator
 
 from voip.types import ByteSerializableObject
@@ -67,7 +68,7 @@ class SessionDescription(ByteSerializableObject):
     media: list[MediaDescription] = dataclasses.field(default_factory=list)
 
     @classmethod
-    def parse(cls, data: bytes | str) -> SessionDescription:
+    def parse(cls, data: bytes | str) -> typing.Self:
         text = data.decode() if isinstance(data, bytes) else data
         sdp = cls()
         current_media: MediaDescription | None = None

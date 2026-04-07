@@ -119,7 +119,7 @@ class TTSMixin:
     )
 
     def __post_init__(self) -> None:
-        super().__post_init__()
+        super().__post_init__()  # noqa: UP008
         self._voice_state = self.tts_model.get_state_for_audio_prompt(self.voice)
 
     async def send_speech(self, text: str) -> None:
@@ -144,7 +144,7 @@ class SayCall(TTSMixin, AudioCall):
     text: str
 
     def __post_init__(self) -> None:
-        super().__post_init__()
+        super().__post_init__()  # noqa: UP008
         asyncio.create_task(self.send_speech(self.text))
 
     def on_audio_sent(self) -> None:
@@ -203,7 +203,7 @@ class AgentCall(TTSMixin, TranscribeCall):
     )
 
     def __post_init__(self) -> None:
-        super().__post_init__()
+        super().__post_init__()  # noqa: UP008
         self._messages = [
             {
                 "role": "system",

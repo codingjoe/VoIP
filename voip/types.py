@@ -58,7 +58,7 @@ class NetworkAddress(typing.NamedTuple):
         return f"{self.host}:{self.port}"
 
     @classmethod
-    def parse(cls, data: str) -> NetworkAddress:
+    def parse(cls, data: str) -> typing.Self:
         if match := NETLOC_PATTERN.match(data):
             host, port = match.group("host").strip("[]"), match.group("port")
             try:

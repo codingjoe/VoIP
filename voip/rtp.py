@@ -57,7 +57,7 @@ class RTPPacket(ByteSerializableObject):
     header_size: typing.ClassVar[int] = 12
 
     @classmethod
-    def parse(cls, data: bytes) -> RTPPacket:
+    def parse(cls, data: bytes) -> typing.Self:
         if len(data) < cls.header_size:
             raise ValueError(f"RTP packet too short: {len(data)} bytes")
         payload_type = data[1] & 0x7F
