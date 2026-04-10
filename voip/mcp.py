@@ -1,13 +1,8 @@
 """MCP server for VoIP actions.
 
 This module exposes two MCP tools — [`say`][voip.mcp.say] and [`call`][voip.mcp.call] —
-and two public transport factory functions — [`connect_rtp`][voip.mcp.connect_rtp] and
-[`connect_sip`][voip.mcp.connect_sip] — that can be used independently to build custom
-VoIP integrations.
-
-The factory functions follow the same *start-and-block* pattern as
-[`mcp.run`][fastmcp.FastMCP.run]: call them with the desired parameters and they handle
-connection setup, the call lifecycle, and teardown internally.
+and a [`run`][voip.mcp.run] helper that handles all transport setup in one call,
+mirroring the start-and-block pattern of [`mcp.run`][fastmcp.FastMCP.run].
 
 Requires the ``mcp`` extra: ``pip install voip[mcp]``.
 """
@@ -34,17 +29,14 @@ from voip.types import NetworkAddress
 
 __all__ = [
     "mcp",
-    "connect_rtp",
-    "connect_sip",
+    "run",
     "HangupDialog",
     "MCPAgentCall",
-    "read_aor",
-    "read_stun_server",
     "DEFAULT_STUN_SERVER",
     "DEFAULT_SYSTEM_PROMPT",
 ]
 
-#: Default STUN server used when ``STUN_SERVER`` env var is absent.
+#: Default STUN server used when *rtp_stun_server* is not provided to [`run`][voip.mcp.run].
 DEFAULT_STUN_SERVER: typing.Final[str] = "stun.cloudflare.com:3478"
 
 #: Default system prompt for [`MCPAgentCall`][voip.mcp.MCPAgentCall].
@@ -62,82 +54,87 @@ mcp = FastMCP(
 )
 
 
-async def connect_rtp(
-    proxy_addr: NetworkAddress,
-    stun_server: NetworkAddress | None = None,
-) -> tuple[asyncio.DatagramTransport, RealtimeTransportProtocol]:
-    """Create and connect an RTP transport.
-
-    This factory function mirrors the simplicity of
-    [`mcp.run`][fastmcp.FastMCP.run]: provide the target address and it
-    handles binding, STUN negotiation, and returns a ready-to-use transport.
-
-    Args:
-        proxy_addr: Address of the SIP proxy, used to pick the correct IP family.
-        stun_server: Optional STUN server address for NAT traversal.
-
-    Returns:
-        A ``(transport, protocol)`` tuple for the new RTP endpoint.
-    """
-    loop = asyncio.get_running_loop()
-    rtp_bind_address = "::" if isinstance(proxy_addr[0], ipaddress.IPv6Address) else "0.0.0.0"  # noqa: S104
-    return await loop.create_datagram_endpoint(
-        lambda: RealtimeTransportProtocol(stun_server_address=stun_server),
-        local_addr=(rtp_bind_address, 0),
-    )
-
-
-async def connect_sip(
-    factory: collections.abc.Callable[[], SessionInitiationProtocol],
-    proxy_addr: NetworkAddress,
-    *,
-    use_tls: bool = True,
-    no_verify_tls: bool = False,
-) -> None:
-    """Connect a SIP transport and block until the session ends.
-
-    Like [`mcp.run`][fastmcp.FastMCP.run], this is a *start-and-block* call:
-    it establishes the TCP/TLS connection to the SIP proxy using `factory`,
-    registers the user agent, and suspends until the connection is closed
-    (typically after a call ends and the transport is shut down).
-
-    Args:
-        factory: Callable that returns a new
-            [`SessionInitiationProtocol`][voip.sip.protocol.SessionInitiationProtocol]
-            instance for each connection attempt.
-        proxy_addr: Address of the SIP proxy to connect to.
-        use_tls: Whether to wrap the connection in TLS. Defaults to ``True``.
-        no_verify_tls: Disable TLS certificate verification. Insecure; for
-            testing only. Defaults to ``False``.
-    """
-    loop = asyncio.get_running_loop()
-    ssl_context: ssl.SSLContext | None = None
-    if use_tls:
-        ssl_context = ssl.create_default_context()
-        if no_verify_tls:
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
-    _, protocol = await loop.create_connection(
-        factory,
-        host=str(proxy_addr[0]),
-        port=proxy_addr[1],
-        ssl=ssl_context,
-    )
-    await protocol.disconnected_event.wait()
-
-
 class HangupDialog(dialog.Dialog):
     """Dialog that closes the SIP transport when the remote party hangs up.
 
-    Use this in outbound call factories to ensure the SIP connection is
-    released after a remote BYE, which in turn unblocks
-    [`connect_sip`][voip.mcp.connect_sip].
+    When used as *dialog_class* in [`run`][voip.mcp.run], the SIP transport is
+    closed after a remote BYE, which unblocks `run` and ends the session.
     """
 
     def hangup_received(self) -> None:
         """Close the SIP transport on receiving a remote BYE."""
         if self.sip is not None:
             self.sip.close()
+
+
+async def run(
+    fn: collections.abc.Callable[[SessionInitiationProtocol], None],
+    aor: SipURI,
+    dialog_class: type[dialog.Dialog] = HangupDialog,
+    *,
+    no_verify_tls: bool = False,
+    rtp: NetworkAddress | None = None,
+    rtp_stun_server: NetworkAddress | None = None,
+) -> None:
+    """Run a SIP session and call *fn* once registered.
+
+    This is a start-and-block function, similar to [`mcp.run`][fastmcp.FastMCP.run]:
+    it sets up RTP (unless an external address is provided), establishes the SIP/TLS
+    connection derived from *aor*, calls *fn* with the registered SIP session, and
+    suspends until the transport is closed.
+
+    The transport protocol (TLS vs plain TCP) and proxy address are read from *aor*
+    directly — no extra arguments are needed.
+
+    Args:
+        fn: Called when the SIP session is registered. Receives the
+            [`SessionInitiationProtocol`][voip.sip.protocol.SessionInitiationProtocol]
+            instance. May use [`asyncio.create_task`][] for async work.
+        aor: SIP Address of Record, e.g. ``sip:alice@carrier.example``. The host,
+            port, and ``transport`` parameter are used to connect to the SIP proxy.
+        dialog_class: [`Dialog`][voip.sip.Dialog] subclass used for inbound calls.
+            Defaults to [`HangupDialog`][voip.mcp.HangupDialog], which closes the SIP
+            transport on remote BYE.
+        no_verify_tls: Disable TLS certificate verification. Insecure; for testing
+            only. Defaults to ``False``.
+        rtp: External RTP server address (e.g. for ffmpeg). When ``None`` (default),
+            a [`RealtimeTransportProtocol`][voip.rtp.RealtimeTransportProtocol]
+            endpoint is created automatically.
+        rtp_stun_server: STUN server for RTP NAT traversal. Defaults to
+            ``stun.cloudflare.com:3478``. Ignored when *rtp* is supplied.
+    """
+    loop = asyncio.get_running_loop()
+
+    if rtp is None:
+        stun_server = rtp_stun_server or NetworkAddress.parse(DEFAULT_STUN_SERVER)
+        rtp_bind_address = "::" if isinstance(aor.maddr[0], ipaddress.IPv6Address) else "0.0.0.0"  # noqa: S104
+        _, rtp_protocol = await loop.create_datagram_endpoint(
+            lambda: RealtimeTransportProtocol(stun_server_address=stun_server),
+            local_addr=(rtp_bind_address, 0),
+        )
+    else:
+        rtp_protocol = RealtimeTransportProtocol()
+        rtp_protocol.public_address = rtp
+
+    ssl_context: ssl.SSLContext | None = None
+    if aor.transport == "TLS":
+        ssl_context = ssl.create_default_context()
+        if no_verify_tls:
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+
+    @dataclasses.dataclass(kw_only=True, slots=True)
+    class InlineProtocol(SessionInitiationProtocol):
+        def on_registered(self) -> None:
+            fn(self)
+
+    _, protocol = await loop.create_connection(
+        lambda: InlineProtocol(aor=aor, rtp=rtp_protocol, dialog_class=dialog_class),
+        host=str(aor.maddr[0]),
+        port=aor.maddr[1],
+        ssl=ssl_context,
+    )
+    await protocol.disconnected_event.wait()
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -214,35 +211,6 @@ class MCPAgentCall(TTSMixin, TranscribeCall):
             await self.send_speech(reply)
 
 
-def read_aor() -> SipURI:
-    """Read and parse the SIP AOR from the ``SIP_AOR`` environment variable.
-
-    Returns:
-        Parsed [`SipURI`][voip.sip.types.SipURI].
-
-    Raises:
-        ToolError: When ``SIP_AOR`` is not set.
-    """
-    aor_str = os.environ.get("SIP_AOR")
-    if not aor_str:
-        raise ToolError("SIP_AOR environment variable is not set.")
-    return SipURI.parse(aor_str)
-
-
-def read_stun_server() -> NetworkAddress:
-    """Read the STUN server address from the environment.
-
-    Falls back to [`DEFAULT_STUN_SERVER`][voip.mcp.DEFAULT_STUN_SERVER] when
-    ``STUN_SERVER`` is unset.
-
-    Returns:
-        Parsed [`NetworkAddress`][voip.types.NetworkAddress].
-    """
-    return NetworkAddress.parse(
-        os.environ.get("STUN_SERVER", DEFAULT_STUN_SERVER)
-    )
-
-
 @mcp.tool
 async def say(ctx: Context, target: str, prompt: str = "") -> None:
     """Call a phone number and speak a message.
@@ -256,29 +224,20 @@ async def say(ctx: Context, target: str, prompt: str = "") -> None:
             or ``"sip:alice@example.com"``.
         prompt: Text to speak during the call.
     """
-    aor = read_aor()
-    stun_server = read_stun_server()
+    aor_str = os.environ.get("SIP_AOR")
+    if not aor_str:
+        raise ToolError("SIP_AOR environment variable is not set.")
+    aor = SipURI.parse(aor_str)
     no_verify_tls = os.environ.get("SIP_NO_VERIFY_TLS", "").lower() in ("1", "true")
+    stun_str = os.environ.get("STUN_SERVER")
+    stun_server = NetworkAddress.parse(stun_str) if stun_str else None
     target_uri = parse_uri(target, aor)
 
-    _, rtp_protocol = await connect_rtp(aor.maddr, stun_server)
+    def on_registered(sip: SessionInitiationProtocol) -> None:
+        d = HangupDialog(sip=sip)
+        asyncio.create_task(d.dial(target_uri, session_class=SayCall, text=prompt))
 
-    @dataclasses.dataclass(kw_only=True, slots=True)
-    class OutboundProtocol(SessionInitiationProtocol):
-        dial_target: SipURI
-
-        def on_registered(self) -> None:
-            d = HangupDialog(sip=self)
-            asyncio.create_task(
-                d.dial(self.dial_target, session_class=SayCall, text=prompt)
-            )
-
-    await connect_sip(
-        lambda: OutboundProtocol(aor=aor, rtp=rtp_protocol, dial_target=target_uri),
-        aor.maddr,
-        use_tls=aor.transport == "TLS",
-        no_verify_tls=no_verify_tls,
-    )
+    await run(on_registered, aor, no_verify_tls=no_verify_tls, rtp_stun_server=stun_server)
 
 
 @mcp.tool
@@ -305,12 +264,14 @@ async def call(
     Returns:
         The full conversation transcript with ``Caller:`` / ``Agent:`` prefixes.
     """
-    aor = read_aor()
-    stun_server = read_stun_server()
+    aor_str = os.environ.get("SIP_AOR")
+    if not aor_str:
+        raise ToolError("SIP_AOR environment variable is not set.")
+    aor = SipURI.parse(aor_str)
     no_verify_tls = os.environ.get("SIP_NO_VERIFY_TLS", "").lower() in ("1", "true")
+    stun_str = os.environ.get("STUN_SERVER")
+    stun_server = NetworkAddress.parse(stun_str) if stun_str else None
     target_uri = parse_uri(target, aor)
-
-    _, rtp_protocol = await connect_rtp(aor.maddr, stun_server)
     sessions: list[MCPAgentCall] = []
 
     @dataclasses.dataclass(kw_only=True, slots=True)
@@ -319,28 +280,19 @@ async def call(
             super().__post_init__()
             sessions.append(self)
 
-    @dataclasses.dataclass(kw_only=True, slots=True)
-    class OutboundProtocol(SessionInitiationProtocol):
-        dial_target: SipURI
-
-        def on_registered(self) -> None:
-            d = HangupDialog(sip=self)
-            asyncio.create_task(
-                d.dial(
-                    self.dial_target,
-                    session_class=CallSession,
-                    ctx=ctx,
-                    system_prompt=system_prompt,
-                    initial_prompt=initial_prompt,
-                )
+    def on_registered(sip: SessionInitiationProtocol) -> None:
+        d = HangupDialog(sip=sip)
+        asyncio.create_task(
+            d.dial(
+                target_uri,
+                session_class=CallSession,
+                ctx=ctx,
+                system_prompt=system_prompt,
+                initial_prompt=initial_prompt,
             )
+        )
 
-    await connect_sip(
-        lambda: OutboundProtocol(aor=aor, rtp=rtp_protocol, dial_target=target_uri),
-        aor.maddr,
-        use_tls=aor.transport == "TLS",
-        no_verify_tls=no_verify_tls,
-    )
+    await run(on_registered, aor, no_verify_tls=no_verify_tls, rtp_stun_server=stun_server)
     return sessions[0].transcript if sessions else ""
 
 
