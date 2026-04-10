@@ -93,6 +93,42 @@ def voip(ctx, verbose: int = 0):
     logging.getLogger("voip").setLevel(max(10, 10 * (3 - verbose)))
 
 
+@voip.command()
+@click.argument("aor", metavar="AOR", envvar="SIP_AOR")
+@click.option(
+    "--stun-server",
+    envvar="STUN_SERVER",
+    default="stun.cloudflare.com:3478",
+    show_default=True,
+    metavar="HOST[:PORT]",
+    callback=lambda ctx, param, value: NetworkAddress.parse(value),
+    is_eager=False,
+    help="STUN server for RTP NAT traversal.",
+)
+@click.option(
+    "--no-verify-tls",
+    is_flag=True,
+    default=False,
+    help="Disable TLS certificate verification (insecure; for testing only).",
+)
+@click.option(
+    "--transport",
+    type=click.Choice(["http", "stdio"]),
+    default="stdio",
+    show_default=True,
+)
+def mcp(aor: str, stun_server: NetworkAddress, no_verify_tls: bool, transport: str):
+    import os  # noqa: PLC0415
+
+    from .mcp import mcp as voip_mcp  # noqa: PLC0415
+
+    os.environ.setdefault("SIP_AOR", aor)
+    os.environ.setdefault("STUN_SERVER", str(stun_server))
+    if no_verify_tls:
+        os.environ.setdefault("SIP_NO_VERIFY_TLS", "1")
+    asyncio.run(voip_mcp.run_async(transport=transport))
+
+
 @voip.group()
 @click.argument("aor", metavar="AOR", envvar="SIP_AOR")
 @click.option(
