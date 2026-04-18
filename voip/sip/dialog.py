@@ -73,6 +73,7 @@ class Dialog:
         default=None, compare=False, repr=False
     )
 
+    session: Session | None = dataclasses.field(default=None, init=False, compare=False)
     created: datetime.datetime = dataclasses.field(
         init=False, default_factory=datetime.datetime.now
     )

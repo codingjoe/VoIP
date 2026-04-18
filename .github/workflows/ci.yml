@@ -52,6 +52,7 @@ jobs:
           - hd-audio
           - cli
           - pygments
+          - mcp
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6

@@ -93,8 +93,56 @@ def voip(ctx, verbose: int = 0):
     logging.getLogger("voip").setLevel(max(10, 10 * (3 - verbose)))
 
 
+@voip.command()
+@click.argument(
+    "aor",
+    metavar="AOR",
+    envvar="SIP_AOR",
+    callback=lambda ctx, param, value: SipURI.parse(value),
+)
+@click.option(
+    "--stun-server",
+    envvar="STUN_SERVER",
+    default="stun.cloudflare.com:3478",
+    show_default=True,
+    metavar="HOST[:PORT]",
+    callback=lambda ctx, param, value: NetworkAddress.parse(value),
+    is_eager=False,
+    help="STUN server for RTP NAT traversal.",
+)
+@click.option(
+    "--no-verify-tls",
+    is_flag=True,
+    default=False,
+    help="Disable TLS certificate verification (insecure; for testing only).",
+)
+@click.option(
+    "--transport",
+    type=click.Choice(["http", "stdio"]),
+    default="stdio",
+    show_default=True,
+)
+def mcp(aor: SipURI, stun_server: NetworkAddress, no_verify_tls: bool, transport: str):
+    from .mcp import run
+
+    asyncio.run(
+        run(
+            lambda: None,
+            aor,
+            stun_server=stun_server,
+            no_verify_tls=no_verify_tls,
+            transport=transport,
+        )
+    )
+
+
 @voip.group()
-@click.argument("aor", metavar="AOR", envvar="SIP_AOR")
+@click.argument(
+    "aor",
+    metavar="AOR",
+    envvar="SIP_AOR",
+    callback=lambda ctx, param, value: SipURI.parse(value),
+)
 @click.option(
     "--stun-server",
     envvar="STUN_SERVER",
@@ -115,14 +163,9 @@ def voip(ctx, verbose: int = 0):
 def sip(ctx, aor, stun_server, no_verify_tls):
     """Session Initiation Protocol (SIP)."""
     ctx.ensure_object(dict)
-    try:
-        parsed_aor = SipURI.parse(aor)
-    except ValueError as exc:
-        raise click.BadParameter(str(exc), param_hint="AOR") from exc
-
     ctx.obj.update(
-        aor=parsed_aor,
-        proxy_addr=parsed_aor.maddr,
+        aor=aor,
+        proxy_addr=aor.maddr,
         stun_server=stun_server,
         no_verify_tls=no_verify_tls,
     )

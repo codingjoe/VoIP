@@ -7,7 +7,9 @@ See also: https://datatracker.ietf.org/doc/html/rfc3261
 import asyncio
 import dataclasses
 import datetime
+import ipaddress
 import logging
+import ssl
 import typing
 
 from voip.rtp import RealtimeTransportProtocol
@@ -113,9 +115,71 @@ class SessionInitiationProtocol(asyncio.Protocol):
     transport: asyncio.Transport | None = dataclasses.field(init=False, default=None)
     is_secure: bool = dataclasses.field(init=False, default=False)
     recv_buffer: bytearray = dataclasses.field(init=False, default_factory=bytearray)
+    ready_callback: typing.Callable[[], None] = None
 
     def __post_init__(self):
         self.public_address = self.public_address or self.rtp.public_address
+
+    @classmethod
+    async def run(
+        cls,
+        fn: typing.Callable[[], None],
+        aor: types.SipURI,
+        dialog_class: type[Dialog],
+        *,
+        no_verify_tls: bool = False,
+        stun_server: NetworkAddress | None = None,
+    ) -> SessionInitiationProtocol:
+        """Run a SIP session and call *fn* once registered.
+
+        This is a start-and-block function, similar to [`mcp.run`][fastmcp.FastMCP.run]:
+        it sets up RTP (unless an external address is provided), establishes the SIP/TLS
+        connection derived from *aor*, calls *fn* with the registered SIP session, and
+        suspends until the transport is closed.
+
+        The transport protocol (TLS vs plain TCP) and proxy address are read from *aor*
+        directly — no extra arguments are needed.
+
+        Args:
+            fn: Called when the SIP session is registered. Receives the
+                [`SessionInitiationProtocol`][voip.sip.protocol.SessionInitiationProtocol]
+                instance. May use [`asyncio.create_task`][] for async work.
+            aor: SIP Address of Record, e.g. ``sip:alice@carrier.example``. The host,
+                port, and ``transport`` parameter are used to connect to the SIP proxy.
+            dialog_class: [`Dialog`][voip.sip.Dialog] subclass used for inbound calls.
+                Defaults to [`HangupDialog`][voip.mcp.HangupDialog], which closes the SIP
+                transport on remote BYE.
+            no_verify_tls: Disable TLS certificate verification. Insecure; for testing
+                only. Defaults to ``False``.
+            stun_server: STUN server for RTP NAT traversal. Defaults to
+                ``stun.cloudflare.com:3478``. Ignored when *rtp* is supplied.
+        """
+        loop = asyncio.get_running_loop()
+
+        rtp_bind_address = (
+            "::" if isinstance(aor.maddr[0], ipaddress.IPv6Address) else "0.0.0.0"
+        )  # noqa: S104
+        _, rtp_protocol = await loop.create_datagram_endpoint(
+            lambda: RealtimeTransportProtocol(stun_server_address=stun_server),
+            local_addr=(rtp_bind_address, 0),
+        )
+
+        ssl_context: ssl.SSLContext | None = None
+        if aor.transport == "TLS":
+            ssl_context = ssl.create_default_context()
+            if no_verify_tls:
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
+
+        _, protocol = await loop.create_connection(
+            lambda: cls(
+                aor=aor, rtp=rtp_protocol, dialog_class=dialog_class, ready_callback=fn
+            ),
+            host=str(aor.maddr[0]),
+            port=aor.maddr[1],
+            ssl=ssl_context,
+        )
+        return protocol
 
     def register_dialog(self, dialog: Dialog) -> None:
         """Register *dialog* keyed by ``(dialog.local_tag, dialog.remote_tag)``."""
@@ -360,6 +424,8 @@ class SessionInitiationProtocol(asyncio.Protocol):
         Override in subclasses to initiate outbound calls or start other
         post-registration activity. The base implementation is a no-op.
         """
+        if self.ready_callback is not None:
+            self.ready_callback()
 
     @property
     def contact(self) -> str:

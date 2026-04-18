@@ -111,7 +111,9 @@ class STUNProtocol(asyncio.DatagramProtocol):
     ```
     """
 
-    stun_server_address: tuple[str, int] | None = ("stun.cloudflare.com", 3478)
+    stun_server_address: NetworkAddress | None = NetworkAddress(
+        "stun.cloudflare.com", 3478
+    )
     _stun_transaction_id: bytes = dataclasses.field(init=False, default=b"")
     transport: asyncio.DatagramTransport | None = dataclasses.field(
         init=False, default=None
