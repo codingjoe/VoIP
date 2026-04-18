@@ -269,6 +269,15 @@ class TestSayTool:
         _, kwargs = mock_dialog.dial.call_args
         assert kwargs["text"] == ""
 
+    async def test_say__raises_when_not_connected(self) -> None:
+        """say() raises RuntimeError when connection_pool.sip is not set."""
+        if hasattr(connection_pool, "sip"):
+            del connection_pool.sip
+
+        ctx = make_mock_context()
+        with pytest.raises(RuntimeError, match="run()"):
+            await say(ctx=ctx, target="sip:bob@example.com")
+
 
 # ---------------------------------------------------------------------------
 # call tool
@@ -276,6 +285,15 @@ class TestSayTool:
 
 
 class TestCallTool:
+    async def test_call__raises_when_not_connected(self) -> None:
+        """call() raises RuntimeError when connection_pool.sip is not set."""
+        if hasattr(connection_pool, "sip"):
+            del connection_pool.sip
+
+        ctx = make_mock_context()
+        with pytest.raises(RuntimeError, match="run()"):
+            await call(ctx=ctx, target="sip:bob@example.com")
+
     async def test_call__returns_transcript(self) -> None:
         """call() returns dialog.session.transcript after dialing."""
         aor = SipURI.parse("sip:alice@example.com")

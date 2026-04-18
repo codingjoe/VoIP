@@ -127,6 +127,8 @@ async def say(ctx: Context, target: str, prompt: str = "") -> None:
             or ``"sip:alice@example.com"``.
         prompt: Text to speak during the call.
     """
+    if not hasattr(connection_pool, "sip"):
+        raise RuntimeError("VoIP not connected: call run() before using tools.")
     target_uri = parse_uri(target, connection_pool.sip.aor)
     dialog = Dialog(sip=connection_pool.sip)
     await dialog.dial(target_uri, session_class=SayCall, text=prompt)
@@ -158,6 +160,8 @@ async def call(
     Returns:
         The full conversation transcript with ``Caller:`` / ``Agent:`` prefixes.
     """
+    if not hasattr(connection_pool, "sip"):
+        raise RuntimeError("VoIP not connected: call run() before using tools.")
     target_uri = parse_uri(target, connection_pool.sip.aor)
     dialog = Dialog(sip=connection_pool.sip)
     kwargs: dict[str, typing.Any] = {"ctx": ctx, "salutation": initial_prompt}
