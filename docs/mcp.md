@@ -37,8 +37,6 @@ address are derived from the URI automatically.
 
 ::: voip.mcp.run
 
-::: voip.mcp.HangupDialog
-
 ::: voip.mcp.MCPAgentCall
 
 [cc-mcp]: https://docs.anthropic.com/en/docs/claude-code/mcp

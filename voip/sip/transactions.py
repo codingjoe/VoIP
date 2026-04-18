@@ -762,6 +762,7 @@ class InviteTransaction(Transaction):
                 dialog=self.dialog,
                 **self.pending_call_kwargs,
             )
+            self.dialog.session = self.session
             if remote_audio is not None and remote_audio.port != 0:
                 media_connection = remote_audio.connection
                 session_connection = response.body.connection if response.body else None
