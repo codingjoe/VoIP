@@ -9,6 +9,7 @@ import ssl
 import time
 
 from voip.ai import SayCall
+from voip.fax import FaxCall
 from voip.rtp import RealtimeTransportProtocol, Session
 from voip.sip import dialog, messages
 from voip.sip.protocol import SessionInitiationProtocol
@@ -555,6 +556,40 @@ def agent(
                 aor.transport == "TLS",
                 obj["no_verify_tls"],
             )
+
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        pass
+
+
+@sip.command()
+@click.argument("target")
+@click.argument("document", type=click.Path(exists=True, readable=True))
+@click.pass_context
+def fax(ctx, target: str, document: str):
+    """Dial TARGET and send DOCUMENT as a T.38 FAX."""
+    obj = ctx.obj
+    aor = obj["aor"]
+
+    async def run():
+        _, rtp_protocol = await _connect_rtp(
+            aor.maddr,
+            obj["stun_server"],
+        )
+        await _connect_sip_once(
+            _make_outbound_factory(
+                verbose=obj.get("verbose", 0),
+                aor=aor,
+                rtp_protocol=rtp_protocol,
+                target_uri=parse_uri(target, aor),
+                session_class=FaxCall,
+                session_kwargs={"document": open(document, "rb").read()},  # noqa: WPS515
+            ),
+            aor.maddr,
+            aor.transport == "TLS",
+            obj["no_verify_tls"],
+        )
 
     try:
         asyncio.run(run())
