@@ -13,7 +13,7 @@ import struct
 import typing
 from typing import TYPE_CHECKING
 
-from voip.sdp.types import MediaDescription, RTPPayloadFormat
+from voip.sdp.types import Attribute, MediaDescription, RTPPayloadFormat
 from voip.srtp import SRTPSession
 from voip.stun import STUNProtocol
 from voip.types import ByteSerializableObject, NetworkAddress
@@ -102,12 +102,15 @@ class Session:
     negotiation, buffering, and decoding.
 
     Attributes:
+        media_type: SDP media type (e.g. ``"audio"`` or ``"image"``).
         rtp: Shared RTP multiplexer socket that delivers packets to this handler.
         dialog: SIP dialog state for this call leg.
         media: Negotiated SDP media description for this call leg.
         caller: Caller identifier as received in the SIP From header.
         srtp: Optional SRTP session for encrypting and decrypting media.
     """
+
+    media_type: typing.ClassVar[str] = "audio"
 
     rtp: RealtimeTransportProtocol
     dialog: Dialog
@@ -121,6 +124,18 @@ class Session:
         Args:
             packet: Parsed RTP packet.
             addr: Remote ``(host, port)`` the packet arrived from.
+        """
+
+    def data_received(self, data: bytes, addr: NetworkAddress) -> None:
+        """Handle a raw datagram for non-RTP media protocols.
+
+        Called when an incoming datagram cannot be parsed as an RTP packet.
+        Override in subclasses to support alternative media transports such as
+        UDPTL (T.38 FAX).
+
+        Args:
+            data: Raw datagram payload.
+            addr: Source ``(host, port)`` of the datagram.
         """
 
     def send_packet(self, packet: RTPPacket, addr: NetworkAddress) -> None:
@@ -201,6 +216,27 @@ class Session:
         from voip.sdp.types import StaticPayloadType  # noqa: PLC0415
 
         return [RTPPayloadFormat.from_pt(StaticPayloadType.PCMU.pt)]
+
+    @classmethod
+    def sdp_media_description(cls, port: int) -> MediaDescription:
+        """Return the media description for outbound SDP offers.
+
+        Override in subclasses to support alternative media types (e.g. T.38
+        FAX uses ``m=image udptl t38`` instead of ``m=audio RTP/AVP``).
+
+        Args:
+            port: Local port number for the media stream.
+
+        Returns:
+            A `MediaDescription` suitable for inclusion in an SDP offer.
+        """
+        return MediaDescription(
+            media=cls.media_type,
+            port=port,
+            proto="RTP/AVP",
+            fmt=cls.sdp_formats(),
+            attributes=[Attribute(name="sendrecv")],
+        )
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -307,11 +343,7 @@ class RealtimeTransportProtocol(STUNProtocol):
             try:
                 handler.packet_received(RTPPacket.parse(data), addr)
             except ValueError:
-                logger.warning(
-                    "Malformed RTP packet from %s:%s, discarding",
-                    addr[0],
-                    addr[1],
-                )
+                handler.data_received(data, addr)
         else:
             logger.debug(
                 "No call handler registered for %s:%s, dropping RTP packet",

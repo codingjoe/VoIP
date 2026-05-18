@@ -8,12 +8,15 @@ import dataclasses
 import threading
 import typing
 
+import pathlib
+
 from fastmcp import Context, FastMCP
 from mcp.types import SamplingMessage, TextContent
 
 import voip
 from voip import ai
 from voip.ai import SayCall
+from voip.fax import FaxCall
 from voip.sip import Dialog
 from voip.sip.protocol import SessionInitiationProtocol
 from voip.sip.types import SipURI, parse_uri
@@ -99,6 +102,38 @@ async def say(ctx: Context, target: str, prompt: str = "") -> None:
     target_uri = parse_uri(target, connection_pool.sip.aor)
     dialog = Dialog(sip=connection_pool.sip)
     await dialog.dial(target_uri, session_class=SayCall, text=prompt)
+
+
+@mcp.tool
+async def send_fax(
+    ctx: Context,
+    target: str,
+    text: str = "",
+    document_path: str = "",
+) -> None:
+    """Send a T.38 FAX to a phone number.
+
+    Dials `target` and transmits either the file at `document_path` or
+    `text` (encoded as UTF-8) as a T.38 FAX, then hangs up.
+    When both are provided, `document_path` takes precedence.
+
+    Args:
+        ctx: FastMCP context (injected automatically by the framework).
+        target: Phone number or SIP URI to call, e.g. `"tel:+1234567890"`
+            or `"sip:alice@example.com"`.
+        text: Plain-text content to send as a FAX.
+        document_path: Path to a document file (e.g. PDF) to send as a FAX.
+    """
+    if not hasattr(connection_pool, "sip"):
+        raise RuntimeError("VoIP not connected: call run() before using tools.")
+    if not document_path and not text:
+        raise ValueError("Provide either text or document_path.")
+    document = (
+        pathlib.Path(document_path).read_bytes() if document_path else text.encode()
+    )
+    target_uri = parse_uri(target, connection_pool.sip.aor)
+    dialog = Dialog(sip=connection_pool.sip)
+    await dialog.dial(target_uri, session_class=FaxCall, document=document)
 
 
 @mcp.tool

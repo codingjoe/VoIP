@@ -3,7 +3,8 @@
 [Session][voip.rtp.Session] and its subclasses handle the media exchange between call parties.
 They are created by the [Dialog][voip.sip.Dialog] when a call is accepted or initiated.
 
-Sessions can be audio, video, and more. However, this library currently only provides audio sessions via the [AudioCall][voip.audio.AudioCall] class. Video and other media types are fairly uncommon outside of consumer applications, and implementing them is on the roadmap but not yet a priority.
+Sessions can be audio, video, and more. This library provides audio sessions via
+[AudioCall][voip.audio.AudioCall] and T.38 FAX sessions via [FaxSession][voip.fax.FaxSession].
 
 ::: voip.rtp.Session
 
@@ -22,3 +23,9 @@ Sessions can be audio, video, and more. However, this library currently only pro
 ::: voip.ai.AgentCall
 
 ::: voip.ai.SayCall
+
+## FAX (T.38)
+
+::: voip.fax.FaxSession
+
+::: voip.fax.FaxCall

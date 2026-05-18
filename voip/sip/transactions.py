@@ -509,19 +509,19 @@ class InviteTransaction(Transaction):
             else None
         )
         caller = CallerID(self.request.headers.get("From", ""))
-        remote_audio = next(
+        remote_media = next(
             (
                 m
                 for m in (self.request.body.media if self.request.body else [])
-                if m.media == "audio"
+                if m.media == session_class.media_type
             ),
             None,
         )
-        if remote_audio is not None:
-            negotiated_media = session_class.negotiate_codec(remote_audio)
+        if remote_media is not None:
+            negotiated_media = session_class.negotiate_codec(remote_media)
         else:
             negotiated_media = MediaDescription(
-                media="audio",
+                media=session_class.media_type,
                 port=0,
                 proto="RTP/SAVP",
                 fmt=[RTPPayloadFormat.from_pt(0)],
@@ -545,8 +545,8 @@ class InviteTransaction(Transaction):
             dialog=self.dialog,
             **session_kwargs,
         )
-        if remote_audio is not None and remote_audio.port != 0:
-            media_connection = remote_audio.connection
+        if remote_media is not None and remote_media.port != 0:
+            media_connection = remote_media.connection
             session_connection = (
                 self.request.body.connection if self.request.body else None
             )
@@ -556,7 +556,7 @@ class InviteTransaction(Transaction):
             else:
                 remote_ip = peer[0] if peer else "0.0.0.0"  # noqa: S104
             remote_rtp_address: NetworkAddress | None = NetworkAddress(
-                remote_ip, remote_audio.port
+                remote_ip, remote_media.port
             )
         else:
             remote_rtp_address = None
@@ -568,7 +568,10 @@ class InviteTransaction(Transaction):
         record_route = self.request.headers.get("Record-Route")
         session_id = str(secrets.randbelow(2**32) + 1)
         rtp_public = self.sip.public_address
-        sdp_media_attributes = [Attribute(name="sendrecv")]
+        sdp_media_attributes = list(
+            negotiated_media.attributes if negotiated_media.attributes
+            else [Attribute(name="sendrecv")]
+        )
         if srtp_session is not None:
             sdp_media_attributes.append(
                 Attribute(name="crypto", value=srtp_session.sdes_attribute)
@@ -607,7 +610,7 @@ class InviteTransaction(Transaction):
                     ),
                     media=[
                         MediaDescription(
-                            media="audio",
+                            media=negotiated_media.media,
                             port=rtp_public[1],
                             proto=negotiated_media.proto,
                             fmt=negotiated_media.fmt,
@@ -678,13 +681,7 @@ class InviteTransaction(Transaction):
                 connection_address=str(rtp_public[0]),
             ),
             media=[
-                MediaDescription(
-                    media="audio",
-                    port=rtp_public[1],
-                    proto="RTP/AVP",
-                    fmt=session_class.sdp_formats(),
-                    attributes=[Attribute(name="sendrecv")],
-                )
+                session_class.sdp_media_description(rtp_public[1])
             ],
         )
         tx.request = Request(
@@ -735,16 +732,16 @@ class InviteTransaction(Transaction):
             if self.sip.transport
             else None
         )
-        remote_audio = next(
+        remote_media = next(
             (
                 m
                 for m in (response.body.media if response.body else [])
-                if m.media == "audio"
+                if m.media == self.pending_call_class.media_type
             ),
             None,
         )
-        if remote_audio is not None and self.pending_call_class is not None:
-            negotiated_media = self.pending_call_class.negotiate_codec(remote_audio)
+        if remote_media is not None and self.pending_call_class is not None:
+            negotiated_media = self.pending_call_class.negotiate_codec(remote_media)
         else:
             negotiated_media = MediaDescription(
                 media="audio",
@@ -762,8 +759,8 @@ class InviteTransaction(Transaction):
                 dialog=self.dialog,
                 **self.pending_call_kwargs,
             )
-            if remote_audio is not None and remote_audio.port != 0:
-                media_connection = remote_audio.connection
+            if remote_media is not None and remote_media.port != 0:
+                media_connection = remote_media.connection
                 session_connection = response.body.connection if response.body else None
                 connection = media_connection or session_connection
                 remote_ip = (
@@ -774,7 +771,7 @@ class InviteTransaction(Transaction):
                     else None
                 )
                 remote_rtp_address: NetworkAddress | None = (
-                    NetworkAddress(remote_ip, remote_audio.port)
+                    NetworkAddress(remote_ip, remote_media.port)
                     if remote_ip is not None
                     else None
                 )
