@@ -167,8 +167,8 @@ class SessionInitiationProtocol(asyncio.Protocol):
         loop = asyncio.get_running_loop()
 
         rtp_bind_address = (
-            "::" if isinstance(aor.maddr[0], ipaddress.IPv6Address) else "0.0.0.0"
-        )  # noqa: S104
+            "::" if isinstance(aor.maddr[0], ipaddress.IPv6Address) else "0.0.0.0"  # noqa: S104
+        )
         _, rtp_protocol = await loop.create_datagram_endpoint(
             lambda: RealtimeTransportProtocol(stun_server_address=stun_server),
             local_addr=(rtp_bind_address, 0),
