@@ -14,6 +14,7 @@ Python VoIP is an async VoIP library for Python. It implements SIP (signalling),
 | `voip/rtp.py`      | RTP media transport                                                     |
 | `voip/srtp.py`     | SRTP (encrypted RTP)                                                    |
 | `voip/stun.py`     | STUN client                                                             |
+| `voip/types.py`    | Shared types and parsing helpers                                         |
 | `voip/codecs/`     | Audio codec implementations (PCMU, PCMA, G.722, Opus, AV bridge)        |
 | `voip/audio.py`    | Audio I/O helpers                                                       |
 | `voip/ai.py`       | AI/transcription call helpers                                           |
@@ -44,13 +45,13 @@ uvx prek install
 Run the full test suite:
 
 ```console
-uv run pytest
+uv run --group test pytest
 ```
 
 Run with all optional dependencies:
 
 ```console
-uv run --extra=cli --extra=pygments --extra=audio pytest
+uv run --group test --extra=cli --extra=pygments --extra=audio pytest
 ```
 
 Avoid mocking in tests. Only mock transports to avoid network IO or to mimic network counterparts.
