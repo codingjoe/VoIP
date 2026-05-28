@@ -7,20 +7,20 @@ Python VoIP is an async VoIP library for Python. It implements SIP (signalling),
 
 ## Repository Structure
 
-| Path | Description |
-| --- | --- |
-| `voip/sip/` | SIP protocol: messages, transactions, dialog, types, and Pygments lexer |
-| `voip/sdp/` | SDP parsing and generation |
-| `voip/rtp.py` | RTP media transport |
-| `voip/srtp.py` | SRTP (encrypted RTP) |
-| `voip/stun.py` | STUN client |
-| `voip/codecs/` | Audio codec implementations (PCMU, PCMA, G.722, Opus, AV bridge) |
-| `voip/audio.py` | Audio I/O helpers |
-| `voip/ai.py` | AI/transcription call helpers |
-| `voip/mcp.py` | MCP (Model Context Protocol) integration |
-| `voip/__main__.py` | CLI entry point |
-| `docs/` | MkDocs documentation source |
-| `tests/` | Pytest test suite mirroring the `voip/` package layout |
+| Path               | Description                                                             |
+| ------------------ | ----------------------------------------------------------------------- |
+| `voip/sip/`        | SIP protocol: messages, transactions, dialog, types, and Pygments lexer |
+| `voip/sdp/`        | SDP parsing and generation                                              |
+| `voip/rtp.py`      | RTP media transport                                                     |
+| `voip/srtp.py`     | SRTP (encrypted RTP)                                                    |
+| `voip/stun.py`     | STUN client                                                             |
+| `voip/codecs/`     | Audio codec implementations (PCMU, PCMA, G.722, Opus, AV bridge)        |
+| `voip/audio.py`    | Audio I/O helpers                                                       |
+| `voip/ai.py`       | AI/transcription call helpers                                           |
+| `voip/mcp.py`      | MCP (Model Context Protocol) integration                                |
+| `voip/__main__.py` | CLI entry point                                                         |
+| `docs/`            | MkDocs documentation source                                             |
+| `tests/`           | Pytest test suite mirroring the `voip/` package layout                  |
 
 When writing code, you MUST ALWAYS follow the [naming-things](https://github.com/codingjoe/naming-things/blob/main/README.md) guidelines.
 
