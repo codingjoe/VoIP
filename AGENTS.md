@@ -14,7 +14,7 @@ Python VoIP is an async VoIP library for Python. It implements SIP (signalling),
 | `voip/rtp.py`      | RTP media transport                                                     |
 | `voip/srtp.py`     | SRTP (encrypted RTP)                                                    |
 | `voip/stun.py`     | STUN client                                                             |
-| `voip/types.py`    | Shared types and parsing helpers                                         |
+| `voip/types.py`    | Shared types and parsing helpers                                        |
 | `voip/codecs/`     | Audio codec implementations (PCMU, PCMA, G.722, Opus, AV bridge)        |
 | `voip/audio.py`    | Audio I/O helpers                                                       |
 | `voip/ai.py`       | AI/transcription call helpers                                           |
