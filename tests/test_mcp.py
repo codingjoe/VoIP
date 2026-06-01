@@ -11,7 +11,15 @@ pytest.importorskip("pocket_tts")
 
 
 import voip.mcp  # noqa: E402
-from voip.mcp import MCPAgentCall, call, connection_pool, run, say  # noqa: E402
+from voip.mcp import (  # noqa: E402
+    MCPAgentCall,
+    call,
+    connection_pool,
+    run,
+    say,
+    send_text,
+)
+from voip.msrp import MSRPURI  # noqa: E402
 from voip.rtp import RealtimeTransportProtocol  # noqa: E402
 from voip.sdp.types import MediaDescription, RTPPayloadFormat  # noqa: E402
 from voip.sip.dialog import Dialog  # noqa: E402
@@ -379,6 +387,53 @@ class TestCallTool:
 
         _, kwargs = mock_dialog.dial.call_args
         assert kwargs["salutation"] == ""
+
+
+# ---------------------------------------------------------------------------
+# send_text tool
+# ---------------------------------------------------------------------------
+
+
+class TestSendTextTool:
+    async def test_send_text__raises_when_not_connected(self) -> None:
+        """send_text() raises RuntimeError when connection_pool.sip is not set."""
+        if hasattr(connection_pool, "sip"):
+            del connection_pool.sip
+
+        ctx = make_mock_context()
+        with pytest.raises(RuntimeError, match="run()"):
+            await send_text(
+                ctx=ctx,
+                target="msrps://chat.example.com:2855/session-id;tcp",
+                text="hello",
+            )
+
+    async def test_send_text__sends_msrp_payload(self) -> None:
+        """send_text() sends text over MSRP with a generated sender URI."""
+        aor = SipURI.parse("sip:alice@example.com")
+        mock_sip = MagicMock(spec=SessionInitiationProtocol)
+        mock_sip.aor = aor
+        mock_sip.no_verify_tls = True
+        connection_pool.sip = mock_sip
+
+        target_uri = MSRPURI.parse("msrps://chat.example.com:2855/session-id;tcp")
+        sender_uri = MSRPURI.parse("msrps://example.com:2855/local-session;tcp")
+        ctx = make_mock_context()
+
+        with patch("voip.mcp.MSRPURI.create", return_value=sender_uri) as mock_create:
+            with patch("voip.mcp.MessageSessionRelayProtocol") as protocol_class:
+                protocol = protocol_class.return_value
+                protocol.send_text = AsyncMock()
+
+                await send_text(ctx=ctx, target=str(target_uri), text="Hello MSRP")
+
+        mock_create.assert_called_once_with(host=aor.host, secure=True)
+        protocol_class.assert_called_once_with(no_verify_tls=True)
+        protocol.send_text.assert_awaited_once_with(
+            target=target_uri,
+            sender=sender_uri,
+            text="Hello MSRP",
+        )
 
 
 # ---------------------------------------------------------------------------

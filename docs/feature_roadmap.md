@@ -64,6 +64,7 @@ back to the caller.
 
 `voip sip <aor> transcribe` — live call transcription to stdout.
 `voip sip <aor> agent` — AI voice agent.
+`voip sip <aor> text` — outbound plain-text MSRP message delivery.
 SIP message syntax highlighting via a Pygments lexer.
 
 ______________________________________________________________________

@@ -30,6 +30,8 @@
 
 | RFC                                                       | Title                                                       | Status  | Notes                                                          |
 | --------------------------------------------------------- | ----------------------------------------------------------- | ------- | -------------------------------------------------------------- |
+| [RFC 4975](https://datatracker.ietf.org/doc/html/rfc4975) | The Message Session Relay Protocol (MSRP)                  | Partial | Outbound plain-text SEND over MSRP/MSRPS                      |
+| [RFC 4976](https://datatracker.ietf.org/doc/html/rfc4976) | Relay Extensions for the Message Sessions Relay Protocol   | Planned | Relay usage and path routing not implemented yet              |
 | [RFC 6230](https://datatracker.ietf.org/doc/html/rfc6230) | Media Control Channel Framework                             | Planned | SIP-based control of external media servers                    |
 | [RFC 6231](https://datatracker.ietf.org/doc/html/rfc6231) | IVR Control Package for the Media Control Channel Framework | Planned | Interactive voice response over the media control channel      |
 | [RFC 4458](https://datatracker.ietf.org/doc/html/rfc4458) | SIP URIs for Applications such as Voicemail and IVR         | Planned | Standardized SIP URI parameters for voicemail and IVR services |

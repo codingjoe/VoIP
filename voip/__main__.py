@@ -9,6 +9,7 @@ import ssl
 import time
 
 from voip.ai import SayCall
+from voip.msrp import MSRPURI, MessageSessionRelayProtocol
 from voip.rtp import RealtimeTransportProtocol, Session
 from voip.sip import dialog, messages
 from voip.sip.protocol import SessionInitiationProtocol
@@ -595,6 +596,35 @@ def say(ctx, target: str, prompt: str, voice: str):
             aor.maddr,
             aor.transport == "TLS",
             obj["no_verify_tls"],
+        )
+
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        pass
+
+
+@sip.command()
+@click.argument("target")
+@click.argument("text")
+@click.pass_context
+def text(ctx, target: str, text: str):
+    """Send TEXT to TARGET using MSRP."""
+    obj = ctx.obj
+    aor = obj["aor"]
+    target_uri = MSRPURI.parse(target)
+    sender_uri = MSRPURI.create(
+        host=aor.host,
+        secure=target_uri.scheme == "msrps",
+    )
+
+    async def run():
+        await MessageSessionRelayProtocol(
+            no_verify_tls=obj["no_verify_tls"]
+        ).send_text(
+            target=target_uri,
+            sender=sender_uri,
+            text=text,
         )
 
     try:

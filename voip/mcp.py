@@ -14,6 +14,7 @@ from mcp.types import SamplingMessage, TextContent
 import voip
 from voip import ai
 from voip.ai import SayCall
+from voip.msrp import MSRPURI, MessageSessionRelayProtocol
 from voip.sip import Dialog
 from voip.sip.protocol import SessionInitiationProtocol
 from voip.sip.types import SipURI, parse_uri
@@ -23,6 +24,7 @@ __all__ = [
     "mcp",
     "run",
     "MCPAgentCall",
+    "send_text",
 ]
 
 mcp = FastMCP(
@@ -134,6 +136,28 @@ async def call(
         kwargs["system_prompt"] = system_prompt
     await dialog.dial(target_uri, session_class=MCPAgentCall, **kwargs)
     return dialog.session.transcript
+
+
+@mcp.tool
+async def send_text(ctx: Context, target: str, text: str) -> None:
+    """Send plain text via MSRP.
+
+    Args:
+        ctx: FastMCP context (injected automatically by the framework).
+        target: MSRP endpoint URI, e.g. `"msrps://chat.example.com/abc;tcp"`.
+        text: UTF-8 plain text payload.
+    """
+    if not hasattr(connection_pool, "sip"):
+        raise RuntimeError("VoIP not connected: call run() before using tools.")
+    target_uri = MSRPURI.parse(target)
+    sender_uri = MSRPURI.create(
+        host=connection_pool.sip.aor.host,
+        secure=target_uri.scheme == "msrps",
+    )
+    sender = MessageSessionRelayProtocol(
+        no_verify_tls=getattr(connection_pool.sip, "no_verify_tls", False)
+    )
+    await sender.send_text(target=target_uri, sender=sender_uri, text=text)
 
 
 async def run(

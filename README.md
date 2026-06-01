@@ -51,6 +51,12 @@ To dial a number, say a message, and hang up automatically:
 uvx 'voip[cli]' sip sips:alice:********@sip.example.com say sip:+15551234567@sip.example.com "Your package has arrived."
 ```
 
+To send a plain text MSRP message:
+
+```console
+uvx 'voip[cli]' sip sips:alice:********@sip.example.com text msrps://chat.example.com:2855/abc123;tcp "Hello from MSRP."
+```
+
 You can also talk to a local agent (needs [Ollama]):
 
 ```console
