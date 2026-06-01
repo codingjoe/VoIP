@@ -21,6 +21,7 @@ from .messages import USER_AGENT, Message, Request, Response
 from .transactions import (
     ByeTransaction,
     InviteTransaction,
+    MessageTransaction,
     RegistrationTransaction,
     Transaction,
 )
@@ -333,6 +334,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 SIPMethod.ACK,
                 SIPMethod.BYE,
                 SIPMethod.CANCEL,
+                SIPMethod.MESSAGE,
                 SIPMethod.OPTIONS,
             }
         )
@@ -409,6 +411,8 @@ class SessionInitiationProtocol(asyncio.Protocol):
                         headers={"Allow": self.allow_header},
                     )
                 )
+            case SIPMethod.MESSAGE:
+                asyncio.create_task(MessageTransaction.receive(request=request, sip=self))
             case _:
                 self.method_not_allowed(request)
 
@@ -438,6 +442,17 @@ class SessionInitiationProtocol(asyncio.Protocol):
         self.registered_event.set()
         if self.ready_callback is not None:
             self.ready_callback()
+
+    def message_received(self, request: Request) -> None:
+        """Called when a SIP MESSAGE is received.
+
+        Override in subclasses to handle incoming instant messages.
+
+        Args:
+            request: The incoming SIP MESSAGE request.  The body is
+                available as ``request.body`` (bytes) and the MIME type
+                as ``request.headers.get("Content-Type")``.
+        """  # noqa: D401
 
     @property
     def contact(self) -> str:

@@ -176,6 +176,65 @@ class Dialog:
             )
         self.sip.drop_dialog(self)
 
+    async def send_message(
+        self,
+        target: SipURI,
+        content: str | bytes,
+        *,
+        cipher=None,
+        recipient_public_key: bytes | None = None,
+    ) -> None:
+        """Send a SIP MESSAGE to *target* [RFC 3428].
+
+        When both *cipher* and *recipient_public_key* are provided, the
+        body is encrypted with
+        :class:`~voip.messaging.MessageCipher` before sending and the
+        sender's long-term public key is advertised in the
+        ``X-Public-Key`` SIP header.
+
+        Args:
+            target: SIP URI of the recipient.
+            content: Text or raw bytes to send.
+            cipher: Optional :class:`~voip.messaging.MessageCipher`
+                instance for end-to-end encryption.
+            recipient_public_key: 32-byte raw X25519 public key of the
+                recipient.  Required when *cipher* is provided.
+
+        [RFC 3428]: https://datatracker.ietf.org/doc/html/rfc3428
+        """
+        from voip.messaging import CONTENT_TYPE  # noqa: PLC0415
+        from voip.sip.transactions import MessageTransaction  # noqa: PLC0415
+
+        if cipher is not None and recipient_public_key is not None:
+            body: bytes = cipher.encrypt(content, recipient_public_key)
+            content_type = CONTENT_TYPE
+            public_key = cipher.public_key_b64
+        else:
+            body = content.encode() if isinstance(content, str) else content
+            content_type = "text/plain"
+            public_key = cipher.public_key_b64 if cipher is not None else None
+
+        await MessageTransaction.send(
+            sip=self.sip,
+            target=target,
+            content=body,
+            content_type=content_type,
+            public_key=public_key,
+        )
+
+    def message_received(
+        self, content: bytes, content_type: str, from_uri: str
+    ) -> None:
+        """Called when a SIP MESSAGE is received.
+
+        Override in subclasses to handle incoming messages.
+
+        Args:
+            content: Raw message body bytes.
+            content_type: MIME type of the body.
+            from_uri: ``From`` header value of the sender.
+        """  # noqa: D401
+
     async def dial(
         self,
         target: SipURI,

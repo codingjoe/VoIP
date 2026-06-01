@@ -77,6 +77,19 @@ class ConsoleMessageProtocol(SessionInitiationProtocol):
             pretty_msg = highlight(str(msg), SIPLexer(), TerminalFormatter())
             click.echo(f"{prefix} {pretty_msg}")
 
+    def message_received(self, request: messages.Request) -> None:
+        """Print an incoming SIP MESSAGE to the console."""
+        from_uri = request.headers.get("From", "unknown")
+        content_type = request.headers.get("Content-Type", "text/plain")
+        body = request.body
+        if isinstance(body, bytes) and "text" in content_type:
+            text = body.decode(errors="replace")
+        elif isinstance(body, bytes):
+            text = f"<{len(body)} bytes, Content-Type: {content_type}>"
+        else:
+            text = ""
+        click.echo(click.style(f"Message from {from_uri}: {text}", fg="cyan", bold=True))
+
 
 @click.group()
 @click.option("-v", "--verbose", count=True, help="Increase verbosity.")
@@ -591,6 +604,161 @@ def say(ctx, target: str, prompt: str, voice: str):
                 target_uri=parse_uri(target, aor),
                 session_class=SayCall,
                 session_kwargs={"text": prompt, "voice": voice},
+            ),
+            aor.maddr,
+            aor.transport == "TLS",
+            obj["no_verify_tls"],
+        )
+
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        pass
+
+
+@sip.command()
+@click.argument("target")
+@click.argument("message_text", metavar="MESSAGE")
+@click.option(
+    "--recipient-key",
+    default=None,
+    metavar="BASE64_KEY",
+    envvar="RECIPIENT_PUBLIC_KEY",
+    help="URL-safe base64 X25519 public key of the recipient for E2EE.",
+)
+@click.option(
+    "--my-key",
+    default=None,
+    metavar="BASE64_KEY",
+    envvar="MY_PRIVATE_KEY",
+    help="URL-safe base64 X25519 private key (generated if not supplied).",
+)
+@click.pass_context
+def send(ctx, target: str, message_text: str, recipient_key: str | None, my_key: str | None):
+    """Send a SIP MESSAGE to TARGET."""
+    import base64  # noqa: PLC0415
+
+    from voip.messaging import MessageCipher  # noqa: PLC0415
+
+    obj = ctx.obj
+    aor = obj["aor"]
+
+    cipher: MessageCipher | None = None
+    recipient_pub: bytes | None = None
+
+    if my_key is not None:
+        raw = base64.urlsafe_b64decode(my_key + "==")
+        cipher = MessageCipher(raw)
+    elif recipient_key is not None:
+        cipher = MessageCipher.generate()
+        click.echo(
+            click.style(f"Your public key: {cipher.public_key_b64}", fg="yellow"),
+            err=True,
+        )
+
+    if recipient_key is not None:
+        padding = "=" * (-len(recipient_key) % 4)
+        recipient_pub = base64.urlsafe_b64decode(recipient_key + padding)
+
+    @dataclasses.dataclass(kw_only=True, slots=True)
+    class SendProtocol(ConsoleMessageProtocol):
+        def on_registered(self) -> None:
+            super().on_registered()
+            asyncio.create_task(self._send_and_close())
+
+        async def _send_and_close(self) -> None:
+            target_uri = parse_uri(target, self.aor)
+            d = dialog.Dialog(sip=self)
+            try:
+                await d.send_message(
+                    target_uri,
+                    message_text,
+                    cipher=cipher,
+                    recipient_public_key=recipient_pub,
+                )
+            finally:
+                self.close()
+
+    async def run():
+        _, rtp_protocol = await _connect_rtp(aor.maddr, obj["stun_server"])
+        await _connect_sip_once(
+            lambda: SendProtocol(
+                verbose=obj.get("verbose", 0),
+                dialog_class=dialog.Dialog,
+                aor=aor,
+                rtp=rtp_protocol,
+            ),
+            aor.maddr,
+            aor.transport == "TLS",
+            obj["no_verify_tls"],
+        )
+
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        pass
+
+
+@sip.command()
+@click.option(
+    "--my-key",
+    default=None,
+    metavar="BASE64_KEY",
+    envvar="MY_PRIVATE_KEY",
+    help="URL-safe base64 X25519 private key (generated if not supplied).",
+)
+@click.pass_context
+def listen(ctx, my_key: str | None):
+    """Connect and print incoming SIP MESSAGEs.
+
+    Prints the local public key on startup so senders can use --recipient-key
+    to encrypt messages to you.
+    """
+    import base64  # noqa: PLC0415
+
+    from voip.messaging import MessageCipher  # noqa: PLC0415
+
+    obj = ctx.obj
+    aor = obj["aor"]
+
+    if my_key is not None:
+        padding = "=" * (-len(my_key) % 4)
+        cipher = MessageCipher(base64.urlsafe_b64decode(my_key + padding))
+    else:
+        cipher = MessageCipher.generate()
+
+    click.echo(click.style(f"Public key: {cipher.public_key_b64}", fg="yellow"))
+
+    @dataclasses.dataclass(kw_only=True, slots=True)
+    class ListenProtocol(ConsoleMessageProtocol):
+        def message_received(self, request: messages.Request) -> None:
+            from voip.messaging import CONTENT_TYPE  # noqa: PLC0415
+
+            from_uri = request.headers.get("From", "unknown")
+            content_type = request.headers.get("Content-Type", "text/plain")
+            body = request.body
+            if isinstance(body, bytes) and content_type == CONTENT_TYPE:
+                try:
+                    plaintext = cipher.decrypt(body).decode(errors="replace")
+                    click.echo(
+                        click.style(f"[E2EE] Message from {from_uri}: {plaintext}", fg="cyan", bold=True)
+                    )
+                except ValueError as exc:
+                    click.echo(
+                        click.style(f"[E2EE decryption failed] from {from_uri}: {exc}", fg="red"),
+                        err=True,
+                    )
+            else:
+                super().message_received(request)
+
+    async def run():
+        _, rtp_protocol = await _connect_rtp(aor.maddr, obj["stun_server"])
+        await _connect_sip(
+            lambda: ListenProtocol(
+                verbose=obj.get("verbose", 0),
+                dialog_class=dialog.Dialog,
+                aor=aor,
+                rtp=rtp_protocol,
             ),
             aor.maddr,
             aor.transport == "TLS",

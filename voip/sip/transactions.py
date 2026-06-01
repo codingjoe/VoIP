@@ -43,6 +43,7 @@ logger = logging.getLogger("voip.sip")
 __all__ = [
     "ByeTransaction",
     "InviteTransaction",
+    "MessageTransaction",
     "RegistrationTransaction",
 ]
 
@@ -941,4 +942,127 @@ class ByeTransaction(Transaction):
             self.complete()
             logger.debug(
                 "BYE acknowledged: %s %s", response.status_code, response.phrase
+            )
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class MessageTransaction(Transaction):
+    """Pager-mode SIP MESSAGE transaction [RFC 3428].
+
+    Carries an instant message as a standalone (out-of-dialog) SIP
+    request/response pair with no ACK.
+
+    Use :meth:`send` to dispatch a message and await delivery confirmation,
+    or :meth:`receive` to handle an incoming MESSAGE from the remote party.
+
+    [RFC 3428]: https://datatracker.ietf.org/doc/html/rfc3428
+    """
+
+    method: SIPMethod = SIPMethod.MESSAGE
+
+    @classmethod
+    async def send(
+        cls,
+        *,
+        sip: SessionInitiationProtocol,
+        target: types.SipURI,
+        content: str | bytes,
+        content_type: str = "text/plain",
+        public_key: str | None = None,
+    ) -> None:
+        """Send a SIP MESSAGE to *target* and wait for the 200 OK.
+
+        Args:
+            sip: The SIP session to send from.
+            target: SIP URI of the recipient.
+            content: Message body as text or raw bytes.
+            content_type: MIME type of the body (default: ``text/plain``).
+            public_key: URL-safe base64 public key to advertise in the
+                ``X-Public-Key`` header, enabling recipients to discover
+                the sender's encryption key.
+        """
+        from .dialog import Dialog  # noqa: PLC0415
+
+        if isinstance(content, str):
+            body: bytes = content.encode()
+        else:
+            body = content
+
+        dialog = Dialog(uac=sip.aor, sip=sip)
+        cseq = dialog.outbound_cseq
+        tx = cls(sip=sip, dialog=dialog, cseq=cseq)
+
+        headers: SIPHeaderDict = SIPHeaderDict(
+            {
+                "Via": f"SIP/2.0/{sip.aor.transport} {sip.public_address};rport;branch={tx.branch}",
+                "Max-Forwards": "70",
+                "From": dialog.from_header,
+                "To": str(target),
+                "Call-ID": dialog.call_id,
+                "CSeq": f"{cseq} {SIPMethod.MESSAGE}",
+                "Contact": sip.contact,
+                "Content-Type": content_type,
+                "Content-Length": str(len(body)),
+            }
+        )
+        if public_key is not None:
+            headers["X-Public-Key"] = public_key
+
+        tx.request = Request(method=SIPMethod.MESSAGE, uri=target, headers=headers, body=body)
+        sip.register_transaction(tx)
+        sip.send(tx.request)
+        try:
+            await tx
+        except asyncio.CancelledError:
+            sip.drop_transaction(tx)
+            raise
+
+    @classmethod
+    async def receive(
+        cls,
+        *,
+        request: Request,
+        sip: SessionInitiationProtocol,
+    ) -> None:
+        """Handle an incoming SIP MESSAGE.
+
+        Sends a ``200 OK`` response immediately, then notifies the
+        application via :meth:`~voip.sip.protocol.SessionInitiationProtocol.message_received`.
+
+        Args:
+            request: The incoming SIP MESSAGE request.
+            sip: The SIP session receiving the request.
+        """
+        from .dialog import Dialog  # noqa: PLC0415
+
+        dialog = Dialog(uac=sip.aor, sip=sip)
+        tx = cls(
+            sip=sip,
+            dialog=dialog,
+            method=SIPMethod.MESSAGE,
+            branch=request.branch,
+            cseq=request.sequence,
+            request=request,
+        )
+        tx.send_response(
+            Response.from_request(
+                request,
+                status_code=SIPStatus.OK,
+                phrase=SIPStatus.OK.phrase,
+            )
+        )
+        sip.message_received(request)
+        tx.complete()
+
+    def response_received(self, response: Response) -> None:
+        """Handle the 200 OK for an outgoing MESSAGE.
+
+        Args:
+            response: The parsed SIP response to our MESSAGE request.
+        """
+        if response.status_code >= 200:
+            self.sip.drop_transaction(self)
+            self.complete()
+            logger.debug(
+                "MESSAGE acknowledged: %s %s", response.status_code, response.phrase
             )

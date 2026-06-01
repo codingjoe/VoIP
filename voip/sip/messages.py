@@ -62,7 +62,7 @@ class Message(ByteSerializableObject, abc.ABC):
     headers: SIPHeaderDict | dict[str, str | CallerID] = dataclasses.field(
         default_factory=SIPHeaderDict, repr=False
     )
-    body: SessionDescription | None = dataclasses.field(default=None, repr=False)
+    body: SessionDescription | bytes | None = dataclasses.field(default=None, repr=False)
     version: str = "SIP/2.0"
 
     def __post_init__(self):
@@ -97,11 +97,13 @@ class Message(ByteSerializableObject, abc.ABC):
         )
 
     @staticmethod
-    def _parse_body(headers: dict[str, str], body: bytes) -> SessionDescription | None:
+    def _parse_body(headers: dict[str, str], body: bytes) -> SessionDescription | bytes | None:
         """Parse the body according to the Content-Type header."""
-        if headers.get("Content-Type") == "application/sdp" and body:
+        if not body:
+            return None
+        if headers.get("Content-Type") == "application/sdp":
             return SessionDescription.parse(body)
-        return None
+        return body
 
     def __bytes__(self) -> bytes:
         if raw_body := bytes(self.body) if self.body is not None else b"":

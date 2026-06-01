@@ -102,6 +102,30 @@ async def say(ctx: Context, target: str, prompt: str = "") -> None:
 
 
 @mcp.tool
+async def send_message(ctx: Context, target: str, content: str) -> str:
+    """Send a SIP instant message to a phone number or SIP URI.
+
+    Delivers `content` as a pager-mode SIP MESSAGE (RFC 3428) and waits
+    for delivery confirmation.
+
+    Args:
+        ctx: FastMCP context (injected automatically by the framework).
+        target: Phone number or SIP URI to message, e.g.
+            ``"sip:alice@example.com"`` or ``"tel:+1234567890"``.
+        content: Text to send.
+
+    Returns:
+        Confirmation string including the resolved target URI.
+    """
+    if not hasattr(connection_pool, "sip"):
+        raise RuntimeError("VoIP not connected: call run() before using tools.")
+    target_uri = parse_uri(target, connection_pool.sip.aor)
+    dialog = Dialog(sip=connection_pool.sip)
+    await dialog.send_message(target_uri, content)
+    return f"Message sent to {target_uri}"
+
+
+@mcp.tool
 async def call(
     ctx: Context,
     target: str,
