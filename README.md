@@ -18,6 +18,10 @@ Async VoIP Python library for the AI age.
 > [!WARNING]
 > This library is in early development and may contain breaking changes. Use with caution.
 
+## Sponsors
+
+[![Sponsors](https://django.the-box.sh/sponsors/codingjoe/VoIP.svg)](https://github.com/sponsors/codingjoe)
+
 ## Usage
 
 To get started, you will need a SIP account. One is usually included with ISP.
