@@ -9,7 +9,7 @@ import ssl
 import time
 
 from voip.ai import SayCall
-from voip.fax import FaxCall
+from voip.fax import OutboundFaxSession
 from voip.rtp import RealtimeTransportProtocol, Session
 from voip.sip import dialog, messages
 from voip.sip.protocol import SessionInitiationProtocol
@@ -583,7 +583,7 @@ def fax(ctx, target: str, document: str):
                 aor=aor,
                 rtp_protocol=rtp_protocol,
                 target_uri=parse_uri(target, aor),
-                session_class=FaxCall,
+                session_class=OutboundFaxSession,
                 session_kwargs={"document": open(document, "rb").read()},  # noqa: WPS515
             ),
             aor.maddr,

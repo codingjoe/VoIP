@@ -15,7 +15,7 @@ from mcp.types import SamplingMessage, TextContent
 import voip
 from voip import ai
 from voip.ai import SayCall
-from voip.fax import FaxCall
+from voip.fax import OutboundFaxSession
 from voip.sip import Dialog
 from voip.sip.protocol import SessionInitiationProtocol
 from voip.sip.types import SipURI, parse_uri
@@ -132,7 +132,7 @@ async def send_fax(
     )
     target_uri = parse_uri(target, connection_pool.sip.aor)
     dialog = Dialog(sip=connection_pool.sip)
-    await dialog.dial(target_uri, session_class=FaxCall, document=document)
+    await dialog.dial(target_uri, session_class=OutboundFaxSession, document=document)
 
 
 @mcp.tool

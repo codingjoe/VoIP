@@ -24,6 +24,7 @@
 | [RFC 7983](https://datatracker.ietf.org/doc/html/rfc7983) | Multiplexing Scheme Updates for SRTP Extension for DTLS             | Complete | First-byte demultiplexing of STUN vs. RTP/SRTP                 |
 | [RFC 7587](https://datatracker.ietf.org/doc/html/rfc7587) | RTP Payload Format for the Opus Speech and Audio Codec              | Complete | Dynamic payload type 111                                       |
 | [RFC 3533](https://datatracker.ietf.org/doc/html/rfc3533) | The Ogg Encapsulation Format Version 0                              | Partial  | Minimal Ogg page writer for Opus audio export                  |
+| [RFC 3362](https://datatracker.ietf.org/doc/html/rfc3362) | Real-time Facsimile (T.38) — image/t38 MIME Sub-type Registration  | Complete | T.38 over SIP/UDPTL via `FaxSession`, `OutboundFaxSession`, and `InboundFaxSession` |
 | [RFC 4733](https://datatracker.ietf.org/doc/html/rfc4733) | RTP Payload for DTMF Digits, Telephony Tones, and Telephony Signals | Planned  | In-band DTMF over RTP                                          |
 
 ## IVR and Application Services

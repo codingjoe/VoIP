@@ -288,14 +288,9 @@ class TestSayTool:
             await say(ctx=ctx, target="sip:bob@example.com")
 
 
-# ---------------------------------------------------------------------------
-# send_fax tool
-# ---------------------------------------------------------------------------
-
-
 class TestSendFaxTool:
     async def test_send_fax__dials_with_document_path(self, tmp_path) -> None:
-        """send_fax() reads document_path and dials with FaxCall session."""
+        """send_fax() reads document_path and dials with OutboundFaxSession."""
         from voip.mcp import send_fax  # noqa: PLC0415
 
         aor = SipURI.parse("sip:alice@carrier.example;transport=TLS")
@@ -320,11 +315,11 @@ class TestSendFaxTool:
                 )
 
         _, kwargs = mock_dialog.dial.call_args
-        assert kwargs["session_class"].__name__ == "FaxCall"
+        assert kwargs["session_class"].__name__ == "OutboundFaxSession"
         assert kwargs["document"] == b"fax content"
 
     async def test_send_fax__dials_with_text(self) -> None:
-        """send_fax() encodes text as UTF-8 and dials with FaxCall session."""
+        """send_fax() encodes text as UTF-8 and dials with OutboundFaxSession."""
         from voip.mcp import send_fax  # noqa: PLC0415
 
         aor = SipURI.parse("sip:alice@carrier.example")

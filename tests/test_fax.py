@@ -3,7 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from voip.fax import FaxCall, FaxSession
+from voip.fax import FaxSession, InboundFaxSession, OutboundFaxSession
 from voip.rtp import RealtimeTransportProtocol
 from voip.sdp.types import MediaDescription, RTPPayloadFormat
 from voip.sip.dialog import Dialog
@@ -23,11 +23,6 @@ def make_fax_session(**kwargs) -> FaxSession:
     return FaxSession(**defaults)
 
 
-# ---------------------------------------------------------------------------
-# FaxSession class attributes
-# ---------------------------------------------------------------------------
-
-
 class TestFaxSessionAttributes:
     def test_media_type__is_image(self) -> None:
         """media_type class variable is 'image' for T.38."""
@@ -39,12 +34,7 @@ class TestFaxSessionAttributes:
 
     def test_t38_max_bit_rate__is_14400(self) -> None:
         """T38_MAX_BIT_RATE defaults to 14400 bps."""
-        assert FaxSession.T38_MAX_BIT_RATE == 14400
-
-
-# ---------------------------------------------------------------------------
-# FaxSession.sdp_formats
-# ---------------------------------------------------------------------------
+        assert FaxSession.T38_MAX_BIT_RATE == 14_400
 
 
 class TestSdpFormats:
@@ -53,11 +43,6 @@ class TestSdpFormats:
         formats = FaxSession.sdp_formats()
         assert len(formats) == 1
         assert formats[0].payload_type == "t38"
-
-
-# ---------------------------------------------------------------------------
-# FaxSession.sdp_media_description
-# ---------------------------------------------------------------------------
 
 
 class TestSdpMediaDescription:
@@ -91,11 +76,6 @@ class TestSdpMediaDescription:
     def test_sdp_media_description__default_port_is_zero(self) -> None:
         """sdp_media_description uses port 0 when no port is given."""
         assert FaxSession.sdp_media_description().port == 0
-
-
-# ---------------------------------------------------------------------------
-# FaxSession.negotiate_codec
-# ---------------------------------------------------------------------------
 
 
 class TestNegotiateCodec:
@@ -133,11 +113,6 @@ class TestNegotiateCodec:
         assert FaxSession.negotiate_codec(offer).port == 7070
 
 
-# ---------------------------------------------------------------------------
-# FaxSession.data_received
-# ---------------------------------------------------------------------------
-
-
 class TestDataReceived:
     def test_data_received__delegates_to_document_received(self) -> None:
         """data_received forwards the raw data to document_received."""
@@ -148,20 +123,10 @@ class TestDataReceived:
         assert received == [b"t38 packet"]
 
 
-# ---------------------------------------------------------------------------
-# FaxSession.document_received
-# ---------------------------------------------------------------------------
-
-
 class TestDocumentReceived:
     def test_document_received__is_noop(self) -> None:
         """document_received is a no-op in the base class."""
         make_fax_session().document_received(b"data")  # must not raise
-
-
-# ---------------------------------------------------------------------------
-# FaxSession.send_document
-# ---------------------------------------------------------------------------
 
 
 class TestSendDocument:
@@ -187,12 +152,7 @@ class TestSendDocument:
         assert any("No remote address" in r.message for r in caplog.records)
 
 
-# ---------------------------------------------------------------------------
-# FaxCall
-# ---------------------------------------------------------------------------
-
-
-class TestFaxCall:
+class TestOutboundFaxSession:
     async def test_transmit__sends_document_and_hangs_up(self) -> None:
         """Transmit sends the document, hangs up, and closes the SIP connection."""
         mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
@@ -201,7 +161,7 @@ class TestFaxCall:
         mock_dialog.sip = mock_sip
         remote_address = ("127.0.0.1", 5004)
 
-        session = FaxCall(
+        session = OutboundFaxSession(
             rtp=mock_rtp,
             dialog=mock_dialog,
             media=FaxSession.sdp_media_description(),
@@ -224,7 +184,7 @@ class TestFaxCall:
         mock_dialog.sip = None
         mock_rtp.calls = {}
 
-        session = FaxCall(
+        session = OutboundFaxSession(
             rtp=mock_rtp,
             dialog=mock_dialog,
             media=FaxSession.sdp_media_description(),
@@ -242,7 +202,7 @@ class TestFaxCall:
         mock_dialog.sip = None
 
         with patch("asyncio.create_task") as mock_create_task:
-            FaxCall(
+            OutboundFaxSession(
                 rtp=mock_rtp,
                 dialog=mock_dialog,
                 media=FaxSession.sdp_media_description(),
@@ -251,3 +211,31 @@ class TestFaxCall:
             )
 
         mock_create_task.assert_called_once()
+
+
+class TestInboundFaxSession:
+    def test_document_received__accumulates_data(self) -> None:
+        """document_received appends each packet to the document buffer."""
+        mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
+        mock_dialog = MagicMock(spec=Dialog)
+        session = InboundFaxSession(
+            rtp=mock_rtp,
+            dialog=mock_dialog,
+            media=FaxSession.sdp_media_description(),
+            caller=CallerID(""),
+        )
+        session.document_received(b"page1")
+        session.document_received(b"page2")
+        assert session.document == b"page1page2"
+
+    def test_document__starts_empty(self) -> None:
+        """Document buffer is empty bytes before any data is received."""
+        mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
+        mock_dialog = MagicMock(spec=Dialog)
+        session = InboundFaxSession(
+            rtp=mock_rtp,
+            dialog=mock_dialog,
+            media=FaxSession.sdp_media_description(),
+            caller=CallerID(""),
+        )
+        assert session.document == b""

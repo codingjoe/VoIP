@@ -279,16 +279,15 @@ class RTPPayloadFormat(ByteSerializableObject):
     sample_rate: int | None = None
 
     def __post_init__(self):
-        if not isinstance(self.payload_type, int):
-            return
-        try:
-            default = StaticPayloadType.from_pt(self.payload_type)
-        except ValueError:
-            pass
-        else:
-            self.sample_rate = self.sample_rate or default.sample_rate
-            self.encoding_name = self.encoding_name or default.encoding_name
-            self.channels = self.channels or default.channels
+        if isinstance(self.payload_type, int):
+            try:
+                default = StaticPayloadType.from_pt(self.payload_type)
+            except ValueError:
+                pass
+            else:
+                self.sample_rate = self.sample_rate or default.sample_rate
+                self.encoding_name = self.encoding_name or default.encoding_name
+                self.channels = self.channels or default.channels
 
     def __bytes__(self) -> bytes:
         base = f"{self.payload_type} {self.encoding_name}/{self.sample_rate}"
@@ -321,18 +320,12 @@ class RTPPayloadFormat(ByteSerializableObject):
     def frame_size(self) -> int:
         """Samples per standard 20 ms RTP frame.
 
-        For static payload types the value comes from `StaticPayloadType`.
+        For static payload types the value comes from `sample_rate` (populated
+        by `__post_init__` from `StaticPayloadType`).
         For dynamic payload types (e.g. Opus, PT ≥ 96) it is derived from
         `sample_rate` assuming a 20 ms packetisation interval.
         """
-        if isinstance(self.payload_type, int):
-            try:
-                spec = StaticPayloadType.from_pt(self.payload_type)
-                if spec.frame_size:
-                    return spec.frame_size
-            except ValueError:
-                pass
-        return (self.sample_rate or 8000) * 20 // 1000
+        return (self.sample_rate or 8_000) * 20 // 1000
 
 
 @dataclasses.dataclass(slots=True)

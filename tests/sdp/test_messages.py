@@ -777,19 +777,19 @@ class TestRTPPayloadFormatFrameSize:
     def test_frame_size__dynamic_with_sample_rate(self) -> None:
         """frame_size is derived from sample_rate for dynamic payload types."""
         f = RTPPayloadFormat(
-            payload_type=111, encoding_name="opus", sample_rate=48000, channels=2
+            payload_type=111, encoding_name="opus", sample_rate=48_000, channels=2
         )
-        assert f.frame_size == 48000 * 20 // 1000
+        assert f.frame_size == 48_000 * 20 // 1000
 
     def test_frame_size__dynamic_without_sample_rate__uses_8000_default(self) -> None:
         """frame_size falls back to 8000 Hz when sample_rate is None."""
         f = RTPPayloadFormat(payload_type=99)
-        assert f.frame_size == 8000 * 20 // 1000
+        assert f.frame_size == 8_000 * 20 // 1000
 
     def test_frame_size__str_payload_type__uses_sample_rate_fallback(self) -> None:
         """String payload types bypass StaticPayloadType and use sample_rate fallback."""
         f = RTPPayloadFormat(payload_type="t38")
-        assert f.frame_size == 8000 * 20 // 1000
+        assert f.frame_size == 8_000 * 20 // 1000
 
 
 class TestMediaDescriptionGetFormatNonInt:
@@ -823,7 +823,7 @@ class TestMediaDescriptionApplyAttributeEdgeCases:
             proto="RTP/AVP",
             fmt=[
                 RTPPayloadFormat(
-                    payload_type=111, fmtp="minptime=10", sample_rate=48000
+                    payload_type=111, fmtp="minptime=10", sample_rate=48_000
                 )
             ],
         )

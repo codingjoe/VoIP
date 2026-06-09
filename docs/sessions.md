@@ -26,6 +26,12 @@ Sessions can be audio, video, and more. This library provides audio sessions via
 
 ## FAX (T.38)
 
+Implements [RFC 3362] for T.38 fax over SIP/UDPTL.
+
 ::: voip.fax.FaxSession
 
-::: voip.fax.FaxCall
+::: voip.fax.OutboundFaxSession
+
+::: voip.fax.InboundFaxSession
+
+[RFC 3362]: https://datatracker.ietf.org/doc/html/rfc3362

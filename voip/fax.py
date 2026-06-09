@@ -15,7 +15,7 @@ from voip.rtp import Session
 from voip.sdp.types import Attribute, MediaDescription, RTPPayloadFormat
 from voip.types import NetworkAddress
 
-__all__ = ["FaxCall", "FaxSession"]
+__all__ = ["FaxSession", "OutboundFaxSession", "InboundFaxSession"]
 
 logger = logging.getLogger(__name__)
 
@@ -43,12 +43,6 @@ class FaxSession(Session):
     T38_MAX_BIT_RATE: ClassVar[int] = 14400
 
     def data_received(self, data: bytes, address: NetworkAddress) -> None:
-        """Handle an incoming T.38 UDPTL packet.
-
-        Args:
-            data: Raw UDPTL packet bytes.
-            address: Source ``(host, port)`` of the datagram.
-        """
         self.document_received(data)
 
     def document_received(self, data: bytes) -> None:
@@ -123,7 +117,7 @@ class FaxSession(Session):
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
-class FaxCall(FaxSession):
+class OutboundFaxSession(FaxSession):
     """Dial a number, send a FAX document, and hang up.
 
     Attributes:
@@ -141,3 +135,21 @@ class FaxCall(FaxSession):
         await self.hang_up()
         if self.dialog is not None and self.dialog.sip is not None:
             self.dialog.sip.close()
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class InboundFaxSession(FaxSession):
+    """Collect incoming T.38 UDPTL packets into a single document buffer.
+
+    Each UDPTL packet appended to `document` via
+    [document_received][voip.fax.InboundFaxSession.document_received].
+    Override that method to process packets individually instead.
+
+    Attributes:
+        document: Accumulated T.38 UDPTL data received so far.
+    """
+
+    document: bytes = dataclasses.field(default=b"", init=False)
+
+    def document_received(self, data: bytes) -> None:
+        self.document += data
