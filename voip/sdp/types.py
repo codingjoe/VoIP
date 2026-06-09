@@ -357,7 +357,7 @@ class MediaDescription(ByteSerializableObject):
         """Return the `RTPPayloadFormat` for payload type *pt*, or ``None``."""
         try:
             target: int | str = int(pt)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             target = str(pt)
         return next((f for f in self.fmt if f.payload_type == target), None)
 
@@ -418,7 +418,9 @@ class MediaDescription(ByteSerializableObject):
         first = lines[0].rstrip("\r").removeprefix("m=")
         media_type, port_str, proto, *fmts = first.split()
         fmt = [
-            RTPPayloadFormat.from_pt(int(pt)) if pt.isdigit() else RTPPayloadFormat(payload_type=pt)
+            RTPPayloadFormat.from_pt(int(pt))
+            if pt.isdigit()
+            else RTPPayloadFormat(payload_type=pt)
             for pt in fmts
         ]
         obj = cls(media=media_type, port=int(port_str), proto=proto, fmt=fmt)

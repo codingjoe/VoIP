@@ -5,10 +5,9 @@ Requires the ``mcp`` extra: ``pip install voip[mcp]``.
 
 import asyncio
 import dataclasses
+import pathlib
 import threading
 import typing
-
-import pathlib
 
 from fastmcp import Context, FastMCP
 from mcp.types import SamplingMessage, TextContent

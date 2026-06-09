@@ -1,10 +1,8 @@
 """Tests for the T.38 FAX session (voip.fax)."""
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from voip.fax import FaxCall, FaxSession
 from voip.rtp import RealtimeTransportProtocol
 from voip.sdp.types import MediaDescription, RTPPayloadFormat
@@ -176,9 +174,7 @@ class TestSendDocument:
         session.send_document(b"fax content")
         mock_rtp.send.assert_called_once_with(b"fax content", remote_address)
 
-    def test_send_document__logs_warning_when_no_remote_address(
-        self, caplog
-    ) -> None:
+    def test_send_document__logs_warning_when_no_remote_address(self, caplog) -> None:
         """send_document logs a warning and does nothing when not registered."""
         import logging  # noqa: PLC0415
 
@@ -198,7 +194,7 @@ class TestSendDocument:
 
 class TestFaxCall:
     async def test_transmit__sends_document_and_hangs_up(self) -> None:
-        """transmit sends the document, hangs up, and closes the SIP connection."""
+        """Transmit sends the document, hangs up, and closes the SIP connection."""
         mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
         mock_dialog = MagicMock(spec=Dialog)
         mock_sip = MagicMock()
@@ -222,7 +218,7 @@ class TestFaxCall:
         mock_sip.close.assert_called_once()
 
     async def test_transmit__skips_sip_close_when_no_sip(self) -> None:
-        """transmit does not raise when dialog.sip is None."""
+        """Transmit does not raise when dialog.sip is None."""
         mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
         mock_dialog = MagicMock(spec=Dialog)
         mock_dialog.sip = None

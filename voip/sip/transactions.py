@@ -569,7 +569,8 @@ class InviteTransaction(Transaction):
         session_id = str(secrets.randbelow(2**32) + 1)
         rtp_public = self.sip.public_address
         sdp_media_attributes = list(
-            negotiated_media.attributes if negotiated_media.attributes
+            negotiated_media.attributes
+            if negotiated_media.attributes
             else [Attribute(name="sendrecv")]
         )
         if srtp_session is not None:
@@ -680,9 +681,7 @@ class InviteTransaction(Transaction):
                 ),
                 connection_address=str(rtp_public[0]),
             ),
-            media=[
-                session_class.sdp_media_description(rtp_public[1])
-            ],
+            media=[session_class.sdp_media_description(rtp_public[1])],
         )
         tx.request = Request(
             method=SIPMethod.INVITE,
