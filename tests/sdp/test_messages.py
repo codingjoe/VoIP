@@ -759,3 +759,109 @@ class TestMediaDescriptionSampleRate:
         """Dynamic PTs without an a=rtpmap have sample_rate=None (no RFC 3551 default)."""
         f = RTPPayloadFormat(payload_type=99)
         assert f.sample_rate is None
+
+
+class TestRTPPayloadFormatPostInit:
+    def test_post_init__str_payload_type__skips_static_defaults(self) -> None:
+        """String payload types (e.g. 't38') skip StaticPayloadType defaults."""
+        f = RTPPayloadFormat(payload_type="t38")
+        assert f.encoding_name is None
+        assert f.sample_rate is None
+
+
+class TestRTPPayloadFormatFrameSize:
+    def test_frame_size__static_pcmu(self) -> None:
+        """frame_size returns the RFC 3551 frame size for PCMU (PT 0)."""
+        assert RTPPayloadFormat(payload_type=0).frame_size == 160
+
+    def test_frame_size__dynamic_with_sample_rate(self) -> None:
+        """frame_size is derived from sample_rate for dynamic payload types."""
+        f = RTPPayloadFormat(
+            payload_type=111, encoding_name="opus", sample_rate=48000, channels=2
+        )
+        assert f.frame_size == 48000 * 20 // 1000
+
+    def test_frame_size__dynamic_without_sample_rate__uses_8000_default(self) -> None:
+        """frame_size falls back to 8000 Hz when sample_rate is None."""
+        f = RTPPayloadFormat(payload_type=99)
+        assert f.frame_size == 8000 * 20 // 1000
+
+    def test_frame_size__str_payload_type__uses_sample_rate_fallback(self) -> None:
+        """String payload types bypass StaticPayloadType and use sample_rate fallback."""
+        f = RTPPayloadFormat(payload_type="t38")
+        assert f.frame_size == 8000 * 20 // 1000
+
+
+class TestMediaDescriptionGetFormatNonInt:
+    def test_get_format__non_numeric_string__matches_str_payload_type(self) -> None:
+        """get_format with a non-numeric string matches str payload types."""
+        media = MediaDescription(
+            media="image",
+            port=0,
+            proto="udptl",
+            fmt=[RTPPayloadFormat(payload_type="t38")],
+        )
+        assert media.get_format("t38") is not None
+
+    def test_get_format__non_numeric_string__returns_none_when_not_found(self) -> None:
+        """get_format returns None for an unrecognised non-numeric string."""
+        media = MediaDescription(
+            media="image",
+            port=0,
+            proto="udptl",
+            fmt=[RTPPayloadFormat(payload_type="t38")],
+        )
+        assert media.get_format("vp8") is None
+
+
+class TestMediaDescriptionApplyAttributeEdgeCases:
+    def test_apply_attribute__preserves_existing_fmtp_on_rtpmap(self) -> None:
+        """Applying a=rtpmap preserves an already-set fmtp on the format."""
+        media = MediaDescription(
+            media="audio",
+            port=0,
+            proto="RTP/AVP",
+            fmt=[
+                RTPPayloadFormat(
+                    payload_type=111, fmtp="minptime=10", sample_rate=48000
+                )
+            ],
+        )
+        media.apply_attribute(Attribute(name="rtpmap", value="111 opus/48000/2"))
+        assert media.fmt[0].fmtp == "minptime=10"
+
+    def test_apply_attribute__fmtp_non_numeric_pt__returns_false(self) -> None:
+        """apply_attribute returns False for a=fmtp with a non-numeric payload type."""
+        media = MediaDescription(
+            media="image",
+            port=0,
+            proto="udptl",
+            fmt=[RTPPayloadFormat(payload_type="t38")],
+        )
+        assert not media.apply_attribute(
+            Attribute(name="fmtp", value="t38 T38FaxVersion=0")
+        )
+
+
+class TestMediaDescriptionParseEdgeCases:
+    def test_parse__with_title(self) -> None:
+        """parse() populates title from an i= line."""
+        media = MediaDescription.parse("audio 5004 RTP/AVP 0\r\ni=Voice Channel")
+        assert media.title == "Voice Channel"
+
+    def test_parse__with_connection(self) -> None:
+        """parse() populates connection from a c= line."""
+        media = MediaDescription.parse("audio 5004 RTP/AVP 0\r\nc=IN IP4 192.0.2.1")
+        assert media.connection is not None
+        assert "192.0.2.1" in str(media.connection)
+
+    def test_parse__with_bandwidth(self) -> None:
+        """parse() appends bandwidth entries from b= lines."""
+        media = MediaDescription.parse("audio 5004 RTP/AVP 0\r\nb=AS:64")
+        assert len(media.bandwidths) == 1
+
+    def test_parse__empty_and_no_equals_lines__skipped(self) -> None:
+        """parse() skips blank lines and lines without an = sign."""
+        media = MediaDescription.parse("audio 5004 RTP/AVP 0\r\n\r\nNOEQUALS\r\n")
+        assert media.media == "audio"
+        assert media.port == 5004
