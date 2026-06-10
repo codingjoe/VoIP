@@ -274,8 +274,8 @@ class TestSendFaxTool:
         mock_sip.aor = aor
         connection_pool.sip = mock_sip
 
-        doc = tmp_path / "fax.txt"
-        doc.write_bytes(b"fax content")
+        doc = tmp_path / "fax.pdf"
+        doc.write_bytes(b"%PDF-1.4")
         ctx = make_mock_context()
         target_uri = SipURI.parse("sip:bob@carrier.example")
 
@@ -292,7 +292,8 @@ class TestSendFaxTool:
 
         _, kwargs = mock_dialog.dial.call_args
         assert kwargs["session_class"].__name__ == "OutboundFaxSession"
-        assert kwargs["document"] == b"fax content"
+        assert kwargs["document"] == b"%PDF-1.4"
+        assert kwargs["mime_type"] == "application/pdf"
 
     async def test_send_fax__dials_with_text(self) -> None:
         """send_fax() encodes text as UTF-8 and dials with OutboundFaxSession."""
@@ -315,9 +316,41 @@ class TestSendFaxTool:
 
         _, kwargs = mock_dialog.dial.call_args
         assert kwargs["document"] == b"Hello"
+        assert kwargs["mime_type"] == "text/plain"
 
     async def test_send_fax__document_path_takes_precedence(self, tmp_path) -> None:
         """send_fax() prefers document_path over text when both are given."""
+        from voip.mcp import send_fax  # noqa: PLC0415
+
+        aor = SipURI.parse("sip:alice@carrier.example")
+        mock_sip = MagicMock(spec=SessionInitiationProtocol)
+        mock_sip.aor = aor
+        connection_pool.sip = mock_sip
+
+        doc = tmp_path / "fax.pdf"
+        doc.write_bytes(b"%PDF-1.4")
+        ctx = make_mock_context()
+
+        with patch("voip.mcp.parse_uri", return_value=aor):
+            with patch("voip.mcp.Dialog") as MockDialog:
+                mock_dialog = MagicMock(spec=Dialog)
+                MockDialog.return_value = mock_dialog
+                mock_dialog.dial = AsyncMock()
+                await send_fax(
+                    ctx=ctx,
+                    target="sip:bob@carrier.example",
+                    text="ignored",
+                    document_path=str(doc),
+                )
+
+        _, kwargs = mock_dialog.dial.call_args
+        assert kwargs["document"] == b"%PDF-1.4"
+        assert kwargs["mime_type"] == "application/pdf"
+
+    async def test_send_fax__unknown_extension_uses_octet_stream(
+        self, tmp_path
+    ) -> None:
+        """send_fax() falls back to application/octet-stream for unknown file types."""
         from voip.mcp import send_fax  # noqa: PLC0415
 
         aor = SipURI.parse("sip:alice@carrier.example")
@@ -337,12 +370,11 @@ class TestSendFaxTool:
                 await send_fax(
                     ctx=ctx,
                     target="sip:bob@carrier.example",
-                    text="ignored",
                     document_path=str(doc),
                 )
 
         _, kwargs = mock_dialog.dial.call_args
-        assert kwargs["document"] == b"binary doc"
+        assert kwargs["mime_type"] == "application/octet-stream"
 
     async def test_send_fax__raises_when_no_content(self) -> None:
         """send_fax() raises ValueError when neither text nor document_path is given."""

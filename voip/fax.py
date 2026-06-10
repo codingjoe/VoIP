@@ -103,9 +103,12 @@ class OutboundFaxSession(FaxSession):
 
     Attributes:
         document: Raw document bytes to transmit as a T.38 FAX.
+        mime_type: MIME type of the document,
+            e.g. `"application/pdf"` or `"text/plain"`.
     """
 
     document: bytes
+    mime_type: str = "application/octet-stream"
 
     def __post_init__(self) -> None:
         asyncio.create_task(self.transmit())

@@ -153,6 +153,41 @@ class TestSendDocument:
 
 
 class TestOutboundFaxSession:
+    def test_mime_type__defaults_to_octet_stream(self) -> None:
+        """mime_type defaults to application/octet-stream when not specified."""
+        mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
+        mock_dialog = MagicMock(spec=Dialog)
+        mock_dialog.sip = None
+
+        with patch("asyncio.create_task"):
+            session = OutboundFaxSession(
+                rtp=mock_rtp,
+                dialog=mock_dialog,
+                media=FaxSession.sdp_media_description(),
+                caller=CallerID(""),
+                document=b"data",
+            )
+
+        assert session.mime_type == "application/octet-stream"
+
+    def test_mime_type__can_be_set(self) -> None:
+        """mime_type can be provided explicitly."""
+        mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
+        mock_dialog = MagicMock(spec=Dialog)
+        mock_dialog.sip = None
+
+        with patch("asyncio.create_task"):
+            session = OutboundFaxSession(
+                rtp=mock_rtp,
+                dialog=mock_dialog,
+                media=FaxSession.sdp_media_description(),
+                caller=CallerID(""),
+                document=b"%PDF-1.4",
+                mime_type="application/pdf",
+            )
+
+        assert session.mime_type == "application/pdf"
+
     async def test_transmit__sends_document_and_hangs_up(self) -> None:
         """Transmit sends the document, hangs up, and closes the SIP connection."""
         mock_rtp = MagicMock(spec=RealtimeTransportProtocol)

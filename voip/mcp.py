@@ -5,6 +5,7 @@ Requires the `mcp` extra: `pip install voip[mcp]`.
 
 import asyncio
 import dataclasses
+import mimetypes
 import pathlib
 import threading
 import typing
@@ -116,6 +117,10 @@ async def send_fax(
     `text` (encoded as UTF-8) as a T.38 FAX, then hangs up.
     When both are provided, `document_path` takes precedence.
 
+    The MIME type is detected automatically from the file extension
+    (e.g. `"application/pdf"` for `.pdf`, `"text/plain"` for `.txt`).
+    Plain `text` is always sent with MIME type `"text/plain"`.
+
     Args:
         ctx: FastMCP context (injected automatically by the framework).
         target: Phone number or SIP URI to call, e.g. `"tel:+1234567890"`
@@ -127,12 +132,22 @@ async def send_fax(
         raise RuntimeError("VoIP not connected: call run() before using tools.")
     if not document_path and not text:
         raise ValueError("Provide either text or document_path.")
-    document = (
-        pathlib.Path(document_path).read_bytes() if document_path else text.encode()
-    )
+    if document_path:
+        path = pathlib.Path(document_path)
+        document = path.read_bytes()
+        mime_type, _ = mimetypes.guess_type(str(path))
+        mime_type = mime_type or "application/octet-stream"
+    else:
+        document = text.encode()
+        mime_type = "text/plain"
     target_uri = parse_uri(target, connection_pool.sip.aor)
     dialog = Dialog(sip=connection_pool.sip)
-    await dialog.dial(target_uri, session_class=OutboundFaxSession, document=document)
+    await dialog.dial(
+        target_uri,
+        session_class=OutboundFaxSession,
+        document=document,
+        mime_type=mime_type,
+    )
 
 
 @mcp.tool
