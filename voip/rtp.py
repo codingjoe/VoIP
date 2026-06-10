@@ -96,13 +96,13 @@ class Session:
 
     The `rtp` back-reference allows sending media; the `dialog` back-reference
     carries the SIP dialog state and a reference to the SIP session
-    (``dialog.sip``) so that the transport can be closed when the call ends.
+    (`dialog.sip`) so that the transport can be closed when the call ends.
 
     Subclass `voip.audio.AudioCall` for audio calls with codec
     negotiation, buffering, and decoding.
 
     Attributes:
-        media_type: SDP media type (e.g. ``"audio"`` or ``"image"``).
+        media_type: SDP media type (e.g. `"audio"` or `"image"`).
         rtp: Shared RTP multiplexer socket that delivers packets to this handler.
         dialog: SIP dialog state for this call leg.
         media: Negotiated SDP media description for this call leg.
@@ -123,7 +123,7 @@ class Session:
 
         Args:
             packet: Parsed RTP packet.
-            addr: Remote ``(host, port)`` the packet arrived from.
+            addr: Remote `(host, port)` the packet arrived from.
         """
 
     def data_received(self, data: bytes, addr: NetworkAddress) -> None:
@@ -135,7 +135,7 @@ class Session:
 
         Args:
             data: Raw datagram payload.
-            addr: Source ``(host, port)`` of the datagram.
+            addr: Source `(host, port)` of the datagram.
         """
 
     def send_packet(self, packet: RTPPacket, addr: NetworkAddress) -> None:
@@ -145,7 +145,7 @@ class Session:
 
         Args:
             packet: RTP packet to send.
-            addr: Destination ``(host, port)``.
+            addr: Destination `(host, port)`.
         """
         data = bytes(packet)
         if self.srtp is not None:
@@ -187,7 +187,7 @@ class Session:
         propagates and the call is not answered.
 
         Args:
-            remote_media: The SDP ``m=audio`` section from the remote INVITE.
+            remote_media: The SDP `m=audio` section from the remote INVITE.
 
         Returns:
             A `MediaDescription` with the chosen codec.
@@ -222,7 +222,7 @@ class Session:
         """Return the media description for outbound SDP offers.
 
         Override in subclasses to support alternative media types (e.g. T.38
-        FAX uses ``m=image udptl t38`` instead of ``m=audio RTP/AVP``).
+        FAX uses `m=image udptl t38` instead of `m=audio RTP/AVP`).
 
         Args:
             port: Local port number for the media stream.
@@ -249,12 +249,12 @@ class RealtimeTransportProtocol(STUNProtocol):
     matching handler's `datagram_received` method by
     remote source address.
 
-    Use ``addr=None`` in `register_call` as a wildcard catch-all for
+    Use `addr=None` in `register_call` as a wildcard catch-all for
     calls whose remote RTP address is not known in advance (no SDP in INVITE).
     """
 
     rtp_header_size: typing.ClassVar[int] = 12
-    calls: dict[tuple[str, int] | None, Session] = dataclasses.field(
+    calls: dict[NetworkAddress | None, Session] = dataclasses.field(
         init=False, default_factory=dict
     )
     public_address: NetworkAddress | None = dataclasses.field(init=False, default=None)
@@ -273,13 +273,13 @@ class RealtimeTransportProtocol(STUNProtocol):
     ) -> None:
         """Register *handler* for RTP traffic arriving from *addr*.
 
-        Use ``addr=None`` as a wildcard to handle traffic from any source that
+        Use `addr=None` as a wildcard to handle traffic from any source that
         has no dedicated routing entry (useful when the caller's RTP address is
         not known in advance from the INVITE SDP).
 
         Args:
-            addr: Remote ``(ip, port)`` as it will appear in incoming datagrams,
-                or ``None`` to register a wildcard catch-all handler.
+            addr: Remote `(ip, port)` as it will appear in incoming datagrams,
+                or `None` to register a wildcard catch-all handler.
             handler: A `Call` instance whose
                 `datagram_received` will be called for
                 matching packets.
@@ -319,7 +319,7 @@ class RealtimeTransportProtocol(STUNProtocol):
         """Route an incoming SRTP datagram to the matching per-call handler.
 
         Looks up *addr* in the call registry.  Falls back to the wildcard
-        ``None`` handler when no exact match exists.  Drops the packet with a
+        `None` handler when no exact match exists.  Drops the packet with a
         debug log when no handler is registered at all.
 
         When the matched handler carries an SRTP session the packet is

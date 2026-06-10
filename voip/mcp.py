@@ -1,6 +1,6 @@
 """MCP server for VoIP actions.
 
-Requires the ``mcp`` extra: ``pip install voip[mcp]``.
+Requires the `mcp` extra: `pip install voip[mcp]`.
 """
 
 import asyncio

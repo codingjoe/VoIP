@@ -19,10 +19,6 @@ from voip.sip.protocol import SessionInitiationProtocol  # noqa: E402
 from voip.sip.types import CallerID, SipURI  # noqa: E402
 from voip.types import NetworkAddress  # noqa: E402
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def make_media() -> MediaDescription:
     """Return a minimal MediaDescription for testing."""
@@ -76,11 +72,6 @@ def make_agent_call(
     return agent
 
 
-# ---------------------------------------------------------------------------
-# MCPAgentCall.transcript
-# ---------------------------------------------------------------------------
-
-
 class TestTranscript:
     def test_transcript__empty(self) -> None:
         """Return empty string when only a system message exists."""
@@ -106,11 +97,6 @@ class TestTranscript:
         agent = make_agent_call(messages=messages)
         assert "secret" not in agent.transcript
         assert "Caller: test" in agent.transcript
-
-
-# ---------------------------------------------------------------------------
-# MCPAgentCall.transcription_received
-# ---------------------------------------------------------------------------
 
 
 class TestTranscriptionReceived:
@@ -150,11 +136,6 @@ class TestTranscriptionReceived:
                 agent.transcription_received("test")
 
         old_task.cancel.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# MCPAgentCall.respond
-# ---------------------------------------------------------------------------
 
 
 class TestRespond:
@@ -227,11 +208,6 @@ class TestRespond:
             await agent.respond()
 
         mock_send.assert_not_awaited()
-
-
-# ---------------------------------------------------------------------------
-# say tool
-# ---------------------------------------------------------------------------
 
 
 class TestSayTool:
@@ -391,11 +367,6 @@ class TestSendFaxTool:
             await send_fax(ctx=make_mock_context(), target="sip:bob@carrier.example")
 
 
-# ---------------------------------------------------------------------------
-# call tool
-# ---------------------------------------------------------------------------
-
-
 class TestCallTool:
     async def test_call__raises_when_not_connected(self) -> None:
         """call() raises RuntimeError when connection_pool.sip is not set."""
@@ -484,11 +455,6 @@ class TestCallTool:
         assert kwargs["salutation"] == ""
 
 
-# ---------------------------------------------------------------------------
-# run()
-# ---------------------------------------------------------------------------
-
-
 class TestRun:
     async def test_run__sets_connection_pool_sip(self) -> None:
         """run() stores the SIP protocol in connection_pool.sip."""
@@ -559,11 +525,6 @@ class TestRun:
 
         _, kwargs = mock_sip_run.call_args
         assert kwargs["stun_server"] is stun
-
-
-# ---------------------------------------------------------------------------
-# SessionInitiationProtocol.registered_event
-# ---------------------------------------------------------------------------
 
 
 class TestRegisteredEvent:

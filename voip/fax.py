@@ -24,13 +24,6 @@ logger = logging.getLogger(__name__)
 class FaxSession(Session):
     """T.38 FAX over SIP/UDPTL session [RFC 3362].
 
-    Handles SIP signaling and UDPTL media transport for sending and receiving
-    fax documents. Override
-    [document_received][voip.fax.FaxSession.document_received] to process
-    incoming fax data, and use
-    [send_document][voip.fax.FaxSession.send_document] to transmit outbound
-    data.
-
     Attributes:
         T38_VERSION: T.38 protocol version advertised in SDP.
         T38_MAX_BIT_RATE: Maximum fax bit rate in bits per second.
@@ -60,49 +53,37 @@ class FaxSession(Session):
         Args:
             data: Raw document data to send.
         """
-        remote_address = next(
+        if remote_address := next(
             (address for address, call in self.rtp.calls.items() if call is self),
             None,
-        )
-        if remote_address is None:
+        ):
+            self.rtp.send(data, remote_address)
+        else:
             logger.warning("No remote address for FAX call; dropping document data")
-            return
-        self.rtp.send(data, remote_address)
 
     @classmethod
     def negotiate_codec(cls, remote_media: MediaDescription) -> MediaDescription:
-        """Negotiate T.38 from a remote SDP ``m=image`` offer.
+        """Negotiate T.38 from a remote SDP `m=image` offer.
 
         Args:
-            remote_media: The SDP ``m=image`` section from the remote INVITE.
+            remote_media: The SDP `m=image` section from the remote INVITE.
 
         Returns:
-            A T.38 `MediaDescription` for the response SDP.
+            A T.38 media description for the response SDP.
 
         Raises:
             NotImplementedError: When the remote offer does not include T.38.
         """
-        if not any(str(fmt.payload_type).lower() == "t38" for fmt in remote_media.fmt):
-            raise NotImplementedError("Remote SDP offer does not include T.38")
-        return cls.sdp_media_description(port=remote_media.port)
+        if any(str(fmt.payload_type).lower() == "t38" for fmt in remote_media.fmt):
+            return cls.sdp_media_description(port=remote_media.port)
+        raise NotImplementedError("Remote SDP offer does not include T.38")
 
     @classmethod
     def sdp_formats(cls) -> list[RTPPayloadFormat]:
-        """Return the T.38 payload format descriptor."""
         return [RTPPayloadFormat(payload_type="t38")]
 
     @classmethod
     def sdp_media_description(cls, port: int = 0) -> MediaDescription:
-        """Return the T.38 media description for outbound SDP.
-
-        Args:
-            port: Local UDP port for T.38 UDPTL transport.
-
-        Returns:
-            A `MediaDescription` with T.38/UDPTL parameters per [RFC 3362].
-
-        [RFC 3362]: https://datatracker.ietf.org/doc/html/rfc3362
-        """
         return MediaDescription(
             media="image",
             port=port,
@@ -140,10 +121,6 @@ class OutboundFaxSession(FaxSession):
 @dataclasses.dataclass(kw_only=True, slots=True)
 class InboundFaxSession(FaxSession):
     """Collect incoming T.38 UDPTL packets into a single document buffer.
-
-    Each UDPTL packet appended to `document` via
-    [document_received][voip.fax.InboundFaxSession.document_received].
-    Override that method to process packets individually instead.
 
     Attributes:
         document: Accumulated T.38 UDPTL data received so far.

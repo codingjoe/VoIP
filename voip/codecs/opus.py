@@ -4,7 +4,7 @@ The [Opus][voip.codecs.opus.Opus] class wraps raw Opus RTP payloads in a
 minimal [Ogg][] container before passing them to PyAV for decoding, and
 encodes float32 PCM via `libopus`.
 
-Requires the ``pyav`` extra: ``pip install voip[pyav]``.
+Requires the `pyav` extra: `pip install voip[pyav]`.
 
 [Ogg]: https://wiki.xiph.org/Ogg
 """

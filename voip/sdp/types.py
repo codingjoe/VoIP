@@ -265,11 +265,11 @@ class StaticPayloadType(PayloadTypeSpec, enum.Enum):
 class RTPPayloadFormat(ByteSerializableObject):
     """RTP payload format descriptor (RFC 3551 §6 / RFC 4566 §6).
 
-    Codec parameters from ``a=rtpmap`` are merged in by the SDP parser.
+    Codec parameters from `a=rtpmap` are merged in by the SDP parser.
     Static payload types fall back to the `StaticPayloadType` table.
-    Dynamic payload types (PT ≥ 96) require an explicit ``a=rtpmap``.
+    Dynamic payload types (PT ≥ 96) require an explicit `a=rtpmap`.
 
-    Serialises to the ``a=rtpmap`` value when codec fields are present.
+    Serialises to the `a=rtpmap` value when codec fields are present.
     """
 
     payload_type: int | str
@@ -347,7 +347,7 @@ class MediaDescription(ByteSerializableObject):
     attributes: list[Attribute] = dataclasses.field(default_factory=list)
 
     def get_format(self, pt: int | str) -> RTPPayloadFormat | None:
-        """Return the `RTPPayloadFormat` for payload type *pt*, or ``None``."""
+        """Return the `RTPPayloadFormat` for payload type *pt*, or `None`."""
         try:
             target: int | str = int(pt)
         except TypeError, ValueError:
@@ -355,9 +355,9 @@ class MediaDescription(ByteSerializableObject):
         return next((f for f in self.fmt if f.payload_type == target), None)
 
     def apply_attribute(self, attr: Attribute) -> bool:
-        """Apply a media-level ``a=`` attribute, returning ``True`` if consumed.
+        """Apply a media-level `a=` attribute, returning `True` if consumed.
 
-        Handles ``a=rtpmap`` and ``a=fmtp`` by updating the matching
+        Handles `a=rtpmap` and `a=fmtp` by updating the matching
         `RTPPayloadFormat` entry.  Other attributes go to `attributes`.
         """
         if attr.name == "rtpmap" and attr.value is not None:

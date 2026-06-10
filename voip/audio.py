@@ -4,9 +4,9 @@ This module provides [AudioCall][voip.audio.AudioCall], which buffers RTP
 packets, negotiates codecs, and decodes/encodes audio using the codec
 implementations in [voip.codecs][voip.codecs].
 
-Requires the ``audio`` extra: ``pip install voip[audio]``.
+Requires the `audio` extra: `pip install voip[audio]`.
 AI-powered subclasses (Whisper transcription, Ollama agent) live in
-[voip.ai][voip.ai] and require the ``ai`` extra.
+[voip.ai][voip.ai] and require the `ai` extra.
 """
 
 import asyncio
@@ -209,7 +209,7 @@ class AudioCall(Session):
         """Handle completion of an outbound audio stream.
 
         Called once the last RTP packet of an outbound stream has been
-        dispatched (i.e. `outbound_handle` transitions to ``None``).
+        dispatched (i.e. `outbound_handle` transitions to `None`).
         The base implementation is a no-op.  Override in subclasses to
         trigger post-audio actions, for example hanging up after
         [SayCall][voip.ai.SayCall] finishes speaking.

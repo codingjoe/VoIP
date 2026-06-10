@@ -91,7 +91,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
         dialog_class: [Dialog][voip.sip.Dialog] subclass used to
             create dialogs for incoming calls.  Defaults to the base
             [Dialog][voip.sip.Dialog] which rejects all calls with
-            ``486 Busy Here``.
+            `486 Busy Here`.
         keepalive_interval: Keep-alive ping interval. Should be between 30 and 90 seconds.
 
     """
@@ -149,16 +149,16 @@ class SessionInitiationProtocol(asyncio.Protocol):
             fn: Called when the SIP session is registered, before
                 `run` returns. Receives no arguments. May use
                 [`asyncio.create_task`][] for async work.
-            aor: SIP Address of Record, e.g. ``sip:alice@carrier.example``.
-                The host, port, and ``transport`` parameter are used to connect
+            aor: SIP Address of Record, e.g. `sip:alice@carrier.example`.
+                The host, port, and `transport` parameter are used to connect
                 to the SIP proxy.
             dialog_class: [`Dialog`][voip.sip.Dialog] subclass used for
                 inbound calls. Defaults to the base
                 [`Dialog`][voip.sip.Dialog], which rejects all calls.
             no_verify_tls: Disable TLS certificate verification. Insecure; for
-                testing only. Defaults to ``False``.
+                testing only. Defaults to `False`.
             stun_server: STUN server for RTP NAT traversal. Defaults to
-                ``stun.cloudflare.com:3478``.
+                `stun.cloudflare.com:3478`.
 
         Returns:
             The registered [`SessionInitiationProtocol`][voip.sip.protocol.SessionInitiationProtocol]
@@ -167,8 +167,8 @@ class SessionInitiationProtocol(asyncio.Protocol):
         loop = asyncio.get_running_loop()
 
         rtp_bind_address = (
-            "::" if isinstance(aor.maddr[0], ipaddress.IPv6Address) else "0.0.0.0"
-        )  # noqa: S104
+            "::" if isinstance(aor.maddr[0], ipaddress.IPv6Address) else "0.0.0.0"  # noqa: S104
+        )
         _, rtp_protocol = await loop.create_datagram_endpoint(
             lambda: RealtimeTransportProtocol(stun_server_address=stun_server),
             local_addr=(rtp_bind_address, 0),
@@ -193,7 +193,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
         return protocol
 
     def register_dialog(self, dialog: Dialog) -> None:
-        """Register *dialog* keyed by ``(dialog.local_tag, dialog.remote_tag)``."""
+        """Register *dialog* keyed by `(dialog.local_tag, dialog.remote_tag)`."""
         if dialog.remote_tag is None:
             logger.warning("Dialog without remote tag cannot be registered: %r", dialog)
         else:
@@ -441,14 +441,14 @@ class SessionInitiationProtocol(asyncio.Protocol):
 
     @property
     def contact(self) -> str:
-        """Return a ``Contact:`` header value for this UA.
+        """Return a `Contact:` header value for this UA.
 
-        The URI scheme mirrors `aor`: a ``sips:`` AOR produces a
-        ``sips:`` Contact (the strongest TLS guarantee); a ``sip:`` AOR over
-        TLS produces ``sip:`` with ``transport=tls``; plain TCP produces plain
-        ``sip:``.
+        The URI scheme mirrors `aor`: a `sips:` AOR produces a
+        `sips:` Contact (the strongest TLS guarantee); a `sip:` AOR over
+        TLS produces `sip:` with `transport=tls`; plain TCP produces plain
+        `sip:`.
 
-        When *ob* is ``True`` the ``ob`` URI parameter ([RFC 5626 §5]) is
+        When *ob* is `True` the `ob` URI parameter ([RFC 5626 §5]) is
         appended inside the angle brackets to advertise outbound keep-alive
         support to the registrar.
 

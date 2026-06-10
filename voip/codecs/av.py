@@ -6,7 +6,7 @@
 [encode_pcm][voip.codecs.av.PyAVCodec.encode_pcm] helpers that use
 [PyAV][] for container-aware decode and codec-aware encode.
 
-Requires the ``pyav`` extra: ``pip install voip[pyav]``.
+Requires the `pyav` extra: `pip install voip[pyav]`.
 
 Concrete subclasses: [Opus][voip.codecs.Opus], [G722][voip.codecs.G722].
 

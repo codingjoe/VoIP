@@ -8,7 +8,7 @@ Use [G722Decoder][voip.codecs.g722.G722Decoder] (via
 stateful decoding that preserves the ADPCM predictor state across consecutive
 RTP packets.
 
-Requires the ``hd-audio`` extra: ``pip install voip[hd-audio]``.
+Requires the `hd-audio` extra: `pip install voip[hd-audio]`.
 """
 
 import dataclasses

@@ -43,11 +43,11 @@ def _parse_address(
     Args:
         value: Raw attribute value bytes (everything after the type/length TLV header).
         xor_key: XOR key bytes — must be exactly 16 bytes
-            (``MAGIC_COOKIE (4 bytes) || transaction_id (12 bytes)``)
+            (`MAGIC_COOKIE (4 bytes) || transaction_id (12 bytes)`)
             for XOR-MAPPED-ADDRESS, or empty bytes for plain MAPPED-ADDRESS.
 
     Returns:
-        ``(ip_address, port)`` on success, ``None`` when *value* is
+        `(ip_address, port)` on success, `None` when *value* is
         too short or the address family is unrecognised.
     """
     assert not xor_key or len(xor_key) == 16, "xor_key must be 16 bytes or empty"  # noqa: S101
@@ -191,7 +191,7 @@ class STUNProtocol(asyncio.DatagramProtocol):
 
         Args:
             data: Raw datagram payload (first byte ≥ 4, not a STUN packet).
-            addr: Source ``(host, port)`` of the datagram.
+            addr: Source `(host, port)` of the datagram.
         """
 
     def _send_stun_request(self) -> None:
