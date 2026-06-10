@@ -13,19 +13,19 @@
 
 ## Media Transport
 
-| RFC                                                       | Title                                                               | Status   | Notes                                                          |
-| --------------------------------------------------------- | ------------------------------------------------------------------- | -------- | -------------------------------------------------------------- |
-| [RFC 3550](https://datatracker.ietf.org/doc/html/rfc3550) | RTP: A Transport Protocol for Real-Time Applications                | Complete | Full RTP packet parsing and per-call multiplexing              |
-| [RFC 3551](https://datatracker.ietf.org/doc/html/rfc3551) | RTP Profile for Audio and Video Conferences                         | Partial  | PCMU (0), PCMA (8), G.722 (9), and Opus (111) payload types    |
-| [RFC 3711](https://datatracker.ietf.org/doc/html/rfc3711) | Secure Real-time Transport Protocol (SRTP)                          | Complete | AES-CM-128-HMAC-SHA1-80 encryption and authentication          |
-| [RFC 4566](https://datatracker.ietf.org/doc/html/rfc4566) | SDP: Session Description Protocol                                   | Partial  | Offer/answer model for audio calls; connection and media lines |
-| [RFC 4568](https://datatracker.ietf.org/doc/html/rfc4568) | SDP Security Descriptions for Media Streams (SDES)                  | Complete | Inline SRTP key exchange via `a=crypto:`                       |
-| [RFC 5389](https://datatracker.ietf.org/doc/html/rfc5389) | STUN: Session Traversal Utilities for NAT                           | Complete | Binding Request/Response with XOR-MAPPED-ADDRESS               |
-| [RFC 7983](https://datatracker.ietf.org/doc/html/rfc7983) | Multiplexing Scheme Updates for SRTP Extension for DTLS             | Complete | First-byte demultiplexing of STUN vs. RTP/SRTP                 |
-| [RFC 7587](https://datatracker.ietf.org/doc/html/rfc7587) | RTP Payload Format for the Opus Speech and Audio Codec              | Complete | Dynamic payload type 111                                       |
-| [RFC 3533](https://datatracker.ietf.org/doc/html/rfc3533) | The Ogg Encapsulation Format Version 0                              | Partial  | Minimal Ogg page writer for Opus audio export                  |
-| [RFC 3362](https://datatracker.ietf.org/doc/html/rfc3362) | Real-time Facsimile (T.38) — image/t38 MIME Sub-type Registration  | Complete | T.38 over SIP/UDPTL via `FaxSession`, `OutboundFaxSession`, and `InboundFaxSession` |
-| [RFC 4733](https://datatracker.ietf.org/doc/html/rfc4733) | RTP Payload for DTMF Digits, Telephony Tones, and Telephony Signals | Planned  | In-band DTMF over RTP                                          |
+| RFC                                                       | Title                                                               | Status   | Notes                                                                               |
+| --------------------------------------------------------- | ------------------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------- |
+| [RFC 3550](https://datatracker.ietf.org/doc/html/rfc3550) | RTP: A Transport Protocol for Real-Time Applications                | Complete | Full RTP packet parsing and per-call multiplexing                                   |
+| [RFC 3551](https://datatracker.ietf.org/doc/html/rfc3551) | RTP Profile for Audio and Video Conferences                         | Partial  | PCMU (0), PCMA (8), G.722 (9), and Opus (111) payload types                         |
+| [RFC 3711](https://datatracker.ietf.org/doc/html/rfc3711) | Secure Real-time Transport Protocol (SRTP)                          | Complete | AES-CM-128-HMAC-SHA1-80 encryption and authentication                               |
+| [RFC 4566](https://datatracker.ietf.org/doc/html/rfc4566) | SDP: Session Description Protocol                                   | Partial  | Offer/answer model for audio calls; connection and media lines                      |
+| [RFC 4568](https://datatracker.ietf.org/doc/html/rfc4568) | SDP Security Descriptions for Media Streams (SDES)                  | Complete | Inline SRTP key exchange via `a=crypto:`                                            |
+| [RFC 5389](https://datatracker.ietf.org/doc/html/rfc5389) | STUN: Session Traversal Utilities for NAT                           | Complete | Binding Request/Response with XOR-MAPPED-ADDRESS                                    |
+| [RFC 7983](https://datatracker.ietf.org/doc/html/rfc7983) | Multiplexing Scheme Updates for SRTP Extension for DTLS             | Complete | First-byte demultiplexing of STUN vs. RTP/SRTP                                      |
+| [RFC 7587](https://datatracker.ietf.org/doc/html/rfc7587) | RTP Payload Format for the Opus Speech and Audio Codec              | Complete | Dynamic payload type 111                                                            |
+| [RFC 3533](https://datatracker.ietf.org/doc/html/rfc3533) | The Ogg Encapsulation Format Version 0                              | Partial  | Minimal Ogg page writer for Opus audio export                                       |
+| [RFC 3362](https://datatracker.ietf.org/doc/html/rfc3362) | Real-time Facsimile (T.38) — image/t38 MIME Sub-type Registration   | Complete | T.38 over SIP/UDPTL via `FaxSession`, `OutboundFaxSession`, and `InboundFaxSession` |
+| [RFC 4733](https://datatracker.ietf.org/doc/html/rfc4733) | RTP Payload for DTMF Digits, Telephony Tones, and Telephony Signals | Planned  | In-band DTMF over RTP                                                               |
 
 ## IVR and Application Services
 

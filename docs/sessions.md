@@ -34,4 +34,4 @@ Implements [RFC 3362] for T.38 fax over SIP/UDPTL.
 
 ::: voip.fax.InboundFaxSession
 
-[RFC 3362]: https://datatracker.ietf.org/doc/html/rfc3362
+[rfc 3362]: https://datatracker.ietf.org/doc/html/rfc3362
