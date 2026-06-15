@@ -63,7 +63,7 @@ uvx 'voip[cli]' sip sips:alice:********@sip.example.com agent --initial-prompt "
 
 ### MCP
 
-The `voip` package ships a ready-made [Model Context Protocol (MCP)][mcp] server
+The `voip` package ships a ready-made [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server
 that exposes tools to make phone calls on your behalf to any MCP client.
 
 ```json
