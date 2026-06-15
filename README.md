@@ -61,6 +61,29 @@ You can also talk to a local agent (needs [Ollama]):
 uvx 'voip[cli]' sip sips:alice:********@sip.example.com agent --initial-prompt "Hi, I am looking for a Mr. Ron, first name Mo?"
 ```
 
+### MCP
+
+The `voip` package ships a ready-made [Model Context Protocol (MCP)][mcp] server
+that exposes tools to make phone calls on your behalf to any MCP client.
+
+```json
+{
+  "mcpServers": {
+    "VoIP": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "voip[mcp]",
+        "mcp"
+      ],
+      "env": {
+        "SIP_AOR": "sip:****:****@example.com:5060?transport=tcp"
+      }
+    }
+  }
+}
+```
+
 ### Python API
 
 ```console
