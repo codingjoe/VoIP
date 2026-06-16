@@ -228,6 +228,7 @@ class RealtimeTransportProtocol(STUNProtocol):
         transport: asyncio.DatagramTransport,
         addr: NetworkAddress,
     ) -> None:
+        logger.debug("RTP socket ready, public address is %s:%s", addr[0], addr[1])
         self.public_address = addr
 
     def register_call(

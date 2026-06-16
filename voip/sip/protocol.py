@@ -124,6 +124,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
 
     def __post_init__(self):
         self.public_address = self.public_address or self.rtp.public_address
+        logger.warning("Public address: %s", self.public_address)
 
     @classmethod
     async def run(
@@ -134,6 +135,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
         *,
         no_verify_tls: bool = False,
         stun_server: NetworkAddress | None = None,
+        **kwargs: typing.Any,
     ) -> SessionInitiationProtocol:
         """Run a SIP session and call *fn* once registered.
 
@@ -159,6 +161,10 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 testing only. Defaults to ``False``.
             stun_server: STUN server for RTP NAT traversal. Defaults to
                 ``stun.cloudflare.com:3478``.
+            **kwargs: Extra keyword arguments forwarded to the protocol
+                constructor.  Use this to pass subclass-specific parameters,
+                e.g. ``verbose=2`` for
+                [`ConsoleMessageProtocol`][voip.__main__.ConsoleMessageProtocol].
 
         Returns:
             The registered [`SessionInitiationProtocol`][voip.sip.protocol.SessionInitiationProtocol]
@@ -181,9 +187,16 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 ssl_context.check_hostname = False
                 ssl_context.verify_mode = ssl.CERT_NONE
 
+        logger.warning(
+            "Add: %s:%s ssl=%s", str(aor.maddr[0]), aor.maddr[1], ssl_context
+        )
         _, protocol = await loop.create_connection(
             lambda: cls(
-                aor=aor, rtp=rtp_protocol, dialog_class=dialog_class, ready_callback=fn
+                aor=aor,
+                rtp=rtp_protocol,
+                dialog_class=dialog_class,
+                ready_callback=fn,
+                **kwargs,
             ),
             host=str(aor.maddr[0]),
             port=aor.maddr[1],
@@ -191,6 +204,72 @@ class SessionInitiationProtocol(asyncio.Protocol):
         )
         await protocol.registered_event.wait()
         return protocol
+
+    @classmethod
+    async def serve(
+        cls,
+        aor: types.SipURI,
+        dialog_class: type[Dialog],
+        *,
+        no_verify_tls: bool = False,
+        stun_server: NetworkAddress | None = None,
+        **kwargs: typing.Any,
+    ) -> None:
+        """Register with a carrier and handle inbound calls, reconnecting on disconnect.
+
+        Creates one RTP endpoint for the lifetime of the process, then enters a
+        persistent loop: connect to the SIP proxy, wait for the connection to drop,
+        and reconnect with exponential back-off.  Use this for long-running
+        inbound-call servers.
+
+        The transport protocol (TLS vs plain TCP) and proxy address are read from
+        *aor* directly.
+
+        Args:
+            aor: SIP Address of Record, e.g. ``sip:alice@carrier.example``.
+            dialog_class: [`Dialog`][voip.sip.Dialog] subclass used for
+                inbound calls.
+            no_verify_tls: Disable TLS certificate verification. Insecure; for
+                testing only. Defaults to ``False``.
+            stun_server: STUN server for RTP NAT traversal.
+            **kwargs: Extra keyword arguments forwarded to the protocol
+                constructor, e.g. ``verbose=2`` for
+                [`ConsoleMessageProtocol`][voip.__main__.ConsoleMessageProtocol].
+        """
+        loop = asyncio.get_running_loop()
+        rtp_bind_address = (
+            "::" if isinstance(aor.maddr[0], ipaddress.IPv6Address) else "0.0.0.0"  # noqa: S104
+        )
+        _, rtp_protocol = await loop.create_datagram_endpoint(
+            lambda: RealtimeTransportProtocol(stun_server_address=stun_server),
+            local_addr=(rtp_bind_address, 0),
+        )
+        ssl_context: ssl.SSLContext | None = None
+        if aor.transport == "TLS":
+            ssl_context = ssl.create_default_context()
+            if no_verify_tls:
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
+        backoff_secs = 1
+        while True:
+            try:
+                _, protocol = await loop.create_connection(
+                    lambda: cls(
+                        aor=aor, rtp=rtp_protocol, dialog_class=dialog_class, **kwargs
+                    ),
+                    host=str(aor.maddr[0]),
+                    port=aor.maddr[1],
+                    ssl=ssl_context,
+                )
+                backoff_secs = 1
+                await protocol.disconnected_event.wait()
+                logger.info("SIP connection closed; reconnecting in %s s", backoff_secs)
+            except (OSError, ssl.SSLError) as exc:
+                logger.warning(
+                    "SIP connection failed (%s); retrying in %s s", exc, backoff_secs
+                )
+            await asyncio.sleep(backoff_secs)
+            backoff_secs = min(backoff_secs * 2, 60)
 
     def register_dialog(self, dialog: Dialog) -> None:
         """Register *dialog* keyed by ``(dialog.local_tag, dialog.remote_tag)``."""

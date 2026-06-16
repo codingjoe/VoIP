@@ -10,6 +10,7 @@ import uuid
 
 __all__ = ["STUNAttributeType", "STUNMessageType", "STUNProtocol"]
 
+
 from voip.types import NetworkAddress
 
 logger = logging.getLogger(__name__)
@@ -215,6 +216,7 @@ class STUNProtocol(asyncio.DatagramProtocol):
 
     def _parse_stun_response(self, data: bytes) -> None:
         """Parse a STUN Binding Success Response and invoke :meth:`stun_connection_made`."""
+        logger.debug("Parsing STUN response (len=%d)", len(data))
         if len(data) < 20:
             return
         message_type, _message_len, magic_cookie = struct.unpack(">HHI", data[:8])
