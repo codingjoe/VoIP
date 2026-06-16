@@ -392,7 +392,6 @@ class TestRun:
         aor = SipURI.parse("sip:alice@example.com")
         mock_protocol = MagicMock(spec=SessionInitiationProtocol)
 
-        fn = MagicMock()
         with patch.object(
             SessionInitiationProtocol,
             "run",
@@ -400,7 +399,7 @@ class TestRun:
             return_value=mock_protocol,
         ):
             with patch.object(voip.mcp.mcp, "run_async", new_callable=AsyncMock):
-                await run(fn, aor)
+                await run(aor)
 
         assert connection_pool.sip is mock_protocol
 
@@ -418,7 +417,7 @@ class TestRun:
             with patch.object(
                 voip.mcp.mcp, "run_async", new_callable=AsyncMock
             ) as mock_run:
-                await run(lambda: None, aor, transport="stdio")
+                await run(aor, transport="stdio")
 
         mock_run.assert_awaited_once_with(transport="stdio")
 
@@ -434,7 +433,7 @@ class TestRun:
             return_value=mock_protocol,
         ) as mock_sip_run:
             with patch.object(voip.mcp.mcp, "run_async", new_callable=AsyncMock):
-                await run(lambda: None, aor, no_verify_tls=True)
+                await run(aor, no_verify_tls=True)
 
         _, kwargs = mock_sip_run.call_args
         assert kwargs["no_verify_tls"] is True
@@ -452,7 +451,7 @@ class TestRun:
             return_value=mock_protocol,
         ) as mock_sip_run:
             with patch.object(voip.mcp.mcp, "run_async", new_callable=AsyncMock):
-                await run(lambda: None, aor, stun_server=stun)
+                await run(aor, stun_server=stun)
 
         _, kwargs = mock_sip_run.call_args
         assert kwargs["stun_server"] is stun
@@ -468,22 +467,7 @@ class TestRegisteredEvent:
         """on_registered() sets registered_event so run() can unblock."""
         protocol = SessionInitiationProtocol.__new__(SessionInitiationProtocol)
         protocol.registered_event = asyncio.Event()
-        protocol.ready_callback = None
 
         assert not protocol.registered_event.is_set()
         protocol.on_registered()
         assert protocol.registered_event.is_set()
-
-    def test_registered_event__ready_callback_called_after_event(self) -> None:
-        """ready_callback is invoked after registered_event is set."""
-        call_order: list[str] = []
-        protocol = SessionInitiationProtocol.__new__(SessionInitiationProtocol)
-        protocol.registered_event = asyncio.Event()
-
-        def _cb() -> None:
-            call_order.append("cb" if protocol.registered_event.is_set() else "early")
-
-        protocol.ready_callback = _cb
-        protocol.on_registered()
-
-        assert call_order == ["cb"]

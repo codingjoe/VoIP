@@ -137,7 +137,6 @@ async def call(
 
 
 async def run(
-    fn: typing.Callable[[], None],
     aor: SipURI,
     *,
     no_verify_tls: bool = False,
@@ -145,7 +144,6 @@ async def run(
     transport: str | None = None,
 ) -> None:
     connection_pool.sip = await SessionInitiationProtocol.run(
-        fn,
         aor,
         Dialog,
         no_verify_tls=no_verify_tls,

@@ -118,52 +118,48 @@ class SessionInitiationProtocol(asyncio.Protocol):
     transport: asyncio.Transport | None = dataclasses.field(init=False, default=None)
     is_secure: bool = dataclasses.field(init=False, default=False)
     recv_buffer: bytearray = dataclasses.field(init=False, default_factory=bytearray)
-    ready_callback: typing.Callable[[], None] | None = dataclasses.field(
-        default=None, repr=False, compare=False
-    )
 
     def __post_init__(self):
         self.public_address = self.public_address or self.rtp.public_address
-        logger.warning("Public address: %s", self.public_address)
 
     @classmethod
     async def run(
         cls,
-        fn: typing.Callable[[], None],
         aor: types.SipURI,
         dialog_class: type[Dialog],
         *,
+        rtp: RealtimeTransportProtocol | None = None,
         no_verify_tls: bool = False,
         stun_server: NetworkAddress | None = None,
         **kwargs: typing.Any,
     ) -> SessionInitiationProtocol:
-        """Run a SIP session and call *fn* once registered.
+        """Connect to the SIP proxy and return once registered.
 
-        Establishes RTP and SIP/TLS connections derived from *aor*, then
-        **suspends until SIP registration is confirmed** before returning the
-        ready protocol.  After this call returns, the MCP server (or any other
-        caller) may safely place outbound calls.
+        Establishes RTP (if not provided) and SIP/TLS connections derived from
+        *aor*, then **suspends until SIP registration is confirmed** before
+        returning the ready protocol.  After this call returns the caller may
+        safely place outbound calls or start an MCP server.
 
         The transport protocol (TLS vs plain TCP) and proxy address are read
         from *aor* directly — no extra arguments are needed.
 
         Args:
-            fn: Called when the SIP session is registered, before
-                `run` returns. Receives no arguments. May use
-                [`asyncio.create_task`][] for async work.
             aor: SIP Address of Record, e.g. ``sip:alice@carrier.example``.
                 The host, port, and ``transport`` parameter are used to connect
                 to the SIP proxy.
             dialog_class: [`Dialog`][voip.sip.Dialog] subclass used for
-                inbound calls. Defaults to the base
+                inbound calls.  Defaults to the base
                 [`Dialog`][voip.sip.Dialog], which rejects all calls.
+            rtp: Existing RTP endpoint to reuse.  When ``None`` (default) a
+                new datagram endpoint is created from *aor* and *stun_server*.
+                Pass an existing instance to share one endpoint across
+                reconnections (see [`serve`][voip.sip.protocol.SessionInitiationProtocol.serve]).
             no_verify_tls: Disable TLS certificate verification. Insecure; for
                 testing only. Defaults to ``False``.
-            stun_server: STUN server for RTP NAT traversal. Defaults to
-                ``stun.cloudflare.com:3478``.
+            stun_server: STUN server for RTP NAT traversal. Ignored when *rtp*
+                is provided.
             **kwargs: Extra keyword arguments forwarded to the protocol
-                constructor.  Use this to pass subclass-specific parameters,
-                e.g. ``verbose=2`` for
+                constructor, e.g. ``verbose=2`` for
                 [`ConsoleMessageProtocol`][voip.__main__.ConsoleMessageProtocol].
 
         Returns:
@@ -171,33 +167,22 @@ class SessionInitiationProtocol(asyncio.Protocol):
             instance, ready to place calls.
         """
         loop = asyncio.get_running_loop()
-
-        rtp_bind_address = (
-            "::" if isinstance(aor.maddr[0], ipaddress.IPv6Address) else "0.0.0.0"  # noqa: S104
-        )
-        _, rtp_protocol = await loop.create_datagram_endpoint(
-            lambda: RealtimeTransportProtocol(stun_server_address=stun_server),
-            local_addr=(rtp_bind_address, 0),
-        )
-
+        if rtp is None:
+            rtp_bind_address = (
+                "::" if isinstance(aor.maddr[0], ipaddress.IPv6Address) else "0.0.0.0"  # noqa: S104
+            )
+            _, rtp = await loop.create_datagram_endpoint(
+                lambda: RealtimeTransportProtocol(stun_server_address=stun_server),
+                local_addr=(rtp_bind_address, 0),
+            )
         ssl_context: ssl.SSLContext | None = None
         if aor.transport == "TLS":
             ssl_context = ssl.create_default_context()
             if no_verify_tls:
                 ssl_context.check_hostname = False
                 ssl_context.verify_mode = ssl.CERT_NONE
-
-        logger.warning(
-            "Add: %s:%s ssl=%s", str(aor.maddr[0]), aor.maddr[1], ssl_context
-        )
         _, protocol = await loop.create_connection(
-            lambda: cls(
-                aor=aor,
-                rtp=rtp_protocol,
-                dialog_class=dialog_class,
-                ready_callback=fn,
-                **kwargs,
-            ),
+            lambda: cls(aor=aor, rtp=rtp, dialog_class=dialog_class, **kwargs),
             host=str(aor.maddr[0]),
             port=aor.maddr[1],
             ssl=ssl_context,
@@ -240,26 +225,15 @@ class SessionInitiationProtocol(asyncio.Protocol):
         rtp_bind_address = (
             "::" if isinstance(aor.maddr[0], ipaddress.IPv6Address) else "0.0.0.0"  # noqa: S104
         )
-        _, rtp_protocol = await loop.create_datagram_endpoint(
+        _, rtp = await loop.create_datagram_endpoint(
             lambda: RealtimeTransportProtocol(stun_server_address=stun_server),
             local_addr=(rtp_bind_address, 0),
         )
-        ssl_context: ssl.SSLContext | None = None
-        if aor.transport == "TLS":
-            ssl_context = ssl.create_default_context()
-            if no_verify_tls:
-                ssl_context.check_hostname = False
-                ssl_context.verify_mode = ssl.CERT_NONE
         backoff_secs = 1
         while True:
             try:
-                _, protocol = await loop.create_connection(
-                    lambda: cls(
-                        aor=aor, rtp=rtp_protocol, dialog_class=dialog_class, **kwargs
-                    ),
-                    host=str(aor.maddr[0]),
-                    port=aor.maddr[1],
-                    ssl=ssl_context,
+                protocol = await cls.run(
+                    aor, dialog_class, rtp=rtp, no_verify_tls=no_verify_tls, **kwargs
                 )
                 backoff_secs = 1
                 await protocol.disconnected_event.wait()
@@ -515,8 +489,6 @@ class SessionInitiationProtocol(asyncio.Protocol):
         post-registration activity. The base implementation is a no-op.
         """
         self.registered_event.set()
-        if self.ready_callback is not None:
-            self.ready_callback()
 
     @property
     def contact(self) -> str:

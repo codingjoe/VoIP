@@ -141,7 +141,6 @@ def mcp(aor: SipURI, stun_server: NetworkAddress, no_verify_tls: bool, transport
 
     asyncio.run(
         run(
-            lambda: None,
             aor,
             stun_server=stun_server,
             no_verify_tls=no_verify_tls,
@@ -216,17 +215,14 @@ def echo(ctx, dial: str | None):
             )
         else:
             protocol = await ConsoleMessageProtocol.run(
-                lambda: None,
                 aor,
                 OutboundDialog,
                 verbose=obj.get("verbose", 0),
                 no_verify_tls=obj["no_verify_tls"],
                 stun_server=obj["stun_server"],
             )
-            asyncio.create_task(
-                OutboundDialog(sip=protocol).dial(
-                    parse_uri(dial, aor), session_class=EchoCall
-                )
+            await OutboundDialog(sip=protocol).dial(
+                parse_uri(dial, aor), session_class=EchoCall
             )
             await protocol.disconnected_event.wait()
 
@@ -286,19 +282,16 @@ def transcribe(ctx, stt_model, dial: str | None):
             )
         else:
             protocol = await ConsoleMessageProtocol.run(
-                lambda: None,
                 aor,
                 OutboundDialog,
                 verbose=obj.get("verbose", 0),
                 no_verify_tls=obj["no_verify_tls"],
                 stun_server=obj["stun_server"],
             )
-            asyncio.create_task(
-                OutboundDialog(sip=protocol).dial(
-                    parse_uri(dial, aor),
-                    session_class=TranscribingCall,
-                    stt_model=WhisperModel(stt_model),
-                )
+            await OutboundDialog(sip=protocol).dial(
+                parse_uri(dial, aor),
+                session_class=TranscribingCall,
+                stt_model=WhisperModel(stt_model),
             )
             await protocol.disconnected_event.wait()
 
@@ -415,23 +408,20 @@ def agent(
             )
         else:
             protocol = await ConsoleMessageProtocol.run(
-                lambda: None,
                 aor,
                 OutboundDialog,
                 verbose=obj.get("verbose", 0),
                 no_verify_tls=obj["no_verify_tls"],
                 stun_server=obj["stun_server"],
             )
-            asyncio.create_task(
-                OutboundDialog(sip=protocol).dial(
-                    parse_uri(dial, aor),
-                    session_class=AgentCallWithOutput,
-                    stt_model=WhisperModel(stt_model),
-                    llm_model=llm_model,
-                    voice=voice,
-                    system_prompt=system_prompt,
-                    salutation=salutation,
-                )
+            await OutboundDialog(sip=protocol).dial(
+                parse_uri(dial, aor),
+                session_class=AgentCallWithOutput,
+                stt_model=WhisperModel(stt_model),
+                llm_model=llm_model,
+                voice=voice,
+                system_prompt=system_prompt,
+                salutation=salutation,
             )
             await protocol.disconnected_event.wait()
 
@@ -459,20 +449,17 @@ def say(ctx, target: str, prompt: str, voice: str):
 
     async def run():
         protocol = await ConsoleMessageProtocol.run(
-            lambda: None,
             aor,
             OutboundDialog,
             verbose=obj.get("verbose", 0),
             no_verify_tls=obj["no_verify_tls"],
             stun_server=obj["stun_server"],
         )
-        asyncio.create_task(
-            OutboundDialog(sip=protocol).dial(
-                parse_uri(target, aor),
-                session_class=SayCall,
-                text=prompt,
-                voice=voice,
-            )
+        await OutboundDialog(sip=protocol).dial(
+            parse_uri(target, aor),
+            session_class=SayCall,
+            text=prompt,
+            voice=voice,
         )
         await protocol.disconnected_event.wait()
 
