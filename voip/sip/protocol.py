@@ -46,38 +46,35 @@ __all__ = [
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
-class SessionInitiationProtocol(asyncio.Protocol):
+class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
     """
-    SIP User Agent Client (UAC) over TLS/TCP [RFC 3261].
+    SIP User Agent Client (UAC) over TLS/TCP or UDP [RFC 3261].
 
     Handles SIP message parsing, carrier registration, and transaction management.
+    The transport is selected automatically from the AOR's ``transport`` parameter:
+
+    | `aor.transport` | Underlying transport |
+    |-----------------|----------------------|
+    | ``TLS`` (default) | TCP with TLS |
+    | ``TCP`` | plain TCP |
+    | ``UDP`` | UDP datagram socket |
+
+    Use [`run`][voip.sip.protocol.SessionInitiationProtocol.run] for a single
+    outbound connection and [`serve`][voip.sip.protocol.SessionInitiationProtocol.serve]
+    for a persistent inbound server with automatic reconnection.
 
     Example:
-        You can use the handler like any [asyncio.Protocol][asyncio.Protocol] in Python.
-
         ```python
         import asyncio
-
-        from voip.sip import SessionInitiationProtocol
+        from voip.sip import SessionInitiationProtocol, Dialog
 
         async def main():
-            loop = asyncio.get_running_loop()
-
-            transport, protocol = await loop.create_connection(
-                SessionInitiationProtocol,
-                '0.0.0.0', 5060)
-
-            try:
-                await asyncio.Future()
-            finally:
-                transport.close()
-
-
-        asyncio.run(main())
+            protocol = await SessionInitiationProtocol.run(
+                aor=SipURI.parse("sip:alice@carrier.example;transport=UDP"),
+                dialog_class=Dialog,
+            )
+            # place outbound calls via protocol …
         ```
-
-        However, this example is incomplete, since the protocol will require some
-        arguments, like a reference to the RTP protocol and an AOR.
 
     > [!Note]
     > The support is limited to UAC (client mode).
@@ -92,7 +89,8 @@ class SessionInitiationProtocol(asyncio.Protocol):
             create dialogs for incoming calls.  Defaults to the base
             [Dialog][voip.sip.Dialog] which rejects all calls with
             ``486 Busy Here``.
-        keepalive_interval: Keep-alive ping interval. Should be between 30 and 90 seconds.
+        keepalive_interval: Keep-alive ping interval for TCP transports.
+            Should be between 30 and 90 seconds (RFC 5626).
 
     """
 
@@ -115,7 +113,9 @@ class SessionInitiationProtocol(asyncio.Protocol):
     registered_event: asyncio.Event = dataclasses.field(
         init=False, default_factory=asyncio.Event
     )
-    transport: asyncio.Transport | None = dataclasses.field(init=False, default=None)
+    transport: asyncio.BaseTransport | None = dataclasses.field(
+        init=False, default=None
+    )
     is_secure: bool = dataclasses.field(init=False, default=False)
     recv_buffer: bytearray = dataclasses.field(init=False, default_factory=bytearray)
 
@@ -175,18 +175,24 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 lambda: RealtimeTransportProtocol(stun_server_address=stun_server),
                 local_addr=(rtp_bind_address, 0),
             )
-        ssl_context: ssl.SSLContext | None = None
-        if aor.transport == "TLS":
-            ssl_context = ssl.create_default_context()
-            if no_verify_tls:
-                ssl_context.check_hostname = False
-                ssl_context.verify_mode = ssl.CERT_NONE
-        _, protocol = await loop.create_connection(
-            lambda: cls(aor=aor, rtp=rtp, dialog_class=dialog_class, **kwargs),
-            host=str(aor.maddr[0]),
-            port=aor.maddr[1],
-            ssl=ssl_context,
-        )
+        if aor.transport == "UDP":
+            _, protocol = await loop.create_datagram_endpoint(
+                lambda: cls(aor=aor, rtp=rtp, dialog_class=dialog_class, **kwargs),
+                remote_addr=(str(aor.maddr[0]), aor.maddr[1]),
+            )
+        else:
+            ssl_context: ssl.SSLContext | None = None
+            if aor.transport == "TLS":
+                ssl_context = ssl.create_default_context()
+                if no_verify_tls:
+                    ssl_context.check_hostname = False
+                    ssl_context.verify_mode = ssl.CERT_NONE
+            _, protocol = await loop.create_connection(
+                lambda: cls(aor=aor, rtp=rtp, dialog_class=dialog_class, **kwargs),
+                host=str(aor.maddr[0]),
+                port=aor.maddr[1],
+                ssl=ssl_context,
+            )
         await protocol.registered_event.wait()
         return protocol
 
@@ -196,6 +202,7 @@ class SessionInitiationProtocol(asyncio.Protocol):
         aor: types.SipURI,
         dialog_class: type[Dialog],
         *,
+        rtp: RealtimeTransportProtocol | None = None,
         no_verify_tls: bool = False,
         stun_server: NetworkAddress | None = None,
         **kwargs: typing.Any,
@@ -222,13 +229,14 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 [`ConsoleMessageProtocol`][voip.__main__.ConsoleMessageProtocol].
         """
         loop = asyncio.get_running_loop()
-        rtp_bind_address = (
-            "::" if isinstance(aor.maddr[0], ipaddress.IPv6Address) else "0.0.0.0"  # noqa: S104
-        )
-        _, rtp = await loop.create_datagram_endpoint(
-            lambda: RealtimeTransportProtocol(stun_server_address=stun_server),
-            local_addr=(rtp_bind_address, 0),
-        )
+        if rtp is None:
+            rtp_bind_address = (
+                "::" if isinstance(aor.maddr[0], ipaddress.IPv6Address) else "0.0.0.0"  # noqa: S104
+            )
+            _, rtp = await loop.create_datagram_endpoint(
+                lambda: RealtimeTransportProtocol(stun_server_address=stun_server),
+                local_addr=(rtp_bind_address, 0),
+            )
         backoff_secs = 1
         while True:
             try:
@@ -273,23 +281,32 @@ class SessionInitiationProtocol(asyncio.Protocol):
         except KeyError:
             logger.warning("Transaction not found for removal: %r", tx)
 
-    def connection_made(self, transport: asyncio.Transport) -> None:  # type: ignore[override]
-        """Store the TLS/TCP transport and start RTP mux + carrier registration."""
+    def connection_made(self, transport: asyncio.BaseTransport) -> None:  # type: ignore[override]
+        """Store the transport and start carrier registration.
+
+        Keepalive pings (RFC 5626) are only started for TCP/TLS transports.
+        """
         self.transport = transport
-        self.is_secure = transport.get_extra_info("ssl_object") is not None
+        self.is_secure = (
+            not isinstance(transport, asyncio.DatagramTransport)
+            and transport.get_extra_info("ssl_object") is not None
+        )
         try:
             loop = asyncio.get_running_loop()
             tx = RegistrationTransaction(sip=self, method=SIPMethod.REGISTER)
             self.register_transaction(tx)
             loop.create_task(self.handle_registration(tx))
-            self.keepalive_task = loop.create_task(self.send_keepalive())
+            if not isinstance(transport, asyncio.DatagramTransport):
+                self.keepalive_task = loop.create_task(self.send_keepalive())
         except RuntimeError:
             pass  # no running loop in synchronous test setups
 
     async def send_keepalive(self) -> None:
         while True:
             await asyncio.sleep(self.keepalive_interval.total_seconds())
-            if self.transport is None:
+            if self.transport is None or isinstance(
+                self.transport, asyncio.DatagramTransport
+            ):
                 return
             logger.info("PING", extra={"addr": self.public_address})
             self.transport.write(PING)
@@ -302,6 +319,14 @@ class SessionInitiationProtocol(asyncio.Protocol):
         self.recv_buffer.extend(data)
         for frame in self._extract_frames():
             self._dispatch_frame(frame)
+
+    def datagram_received(self, data: bytes, addr: tuple) -> None:  # type: ignore[override]
+        """Dispatch a complete UDP SIP datagram."""
+        self._dispatch_frame(data)
+
+    def error_received(self, exc: Exception) -> None:  # type: ignore[override]
+        """Log a UDP transport error."""
+        logger.warning("UDP error received", exc_info=exc)
 
     def _extract_frames(self) -> typing.Generator[memoryview | bytes]:  # noqa: C901
         while self.recv_buffer:
@@ -340,12 +365,14 @@ class SessionInitiationProtocol(asyncio.Protocol):
                 break
 
     def _dispatch_frame(self, frame: memoryview | bytes) -> None:
-        peer = NetworkAddress(*self.transport.get_extra_info("peername"))
+        peer = NetworkAddress(*self.transport.get_extra_info("peername")[:2])
         if frame == PONG:
             logger.info("PONG", extra={"addr": peer})
         elif frame == PING:
             logger.info("PING", extra={"addr": peer})
-            if self.transport:
+            if self.transport and not isinstance(
+                self.transport, asyncio.DatagramTransport
+            ):
                 logger.info("PONG", extra={"addr": self.public_address})
                 self.transport.write(PONG)
         else:
@@ -366,14 +393,18 @@ class SessionInitiationProtocol(asyncio.Protocol):
                     self.response_received(response)
 
     def send(self, message: Response | Request) -> None:
-        """Serialize and send a SIP message over the TLS/TCP connection."""
+        """Serialize and send a SIP message over the active transport."""
         logger.debug("Sending %r", message)
         message.headers.setdefault("User-Agent", USER_AGENT)
-        if self.transport is not None:
+        if self.transport is None:
+            return
+        if isinstance(self.transport, asyncio.DatagramTransport):
+            self.transport.sendto(bytes(message))
+        else:
             self.transport.write(bytes(message))
 
     def close(self) -> None:
-        """Close the TLS/TCP transport and the RTP mux."""
+        """Close the transport."""
         if self.transport is not None:
             self.transport.close()
 
@@ -494,14 +525,17 @@ class SessionInitiationProtocol(asyncio.Protocol):
     def contact(self) -> str:
         """Return a ``Contact:`` header value for this UA.
 
-        The URI scheme mirrors `aor`: a ``sips:`` AOR produces a
-        ``sips:`` Contact (the strongest TLS guarantee); a ``sip:`` AOR over
-        TLS produces ``sip:`` with ``transport=tls``; plain TCP produces plain
-        ``sip:``.
+        The URI scheme and transport parameter mirror the active transport:
 
-        When *ob* is ``True`` the ``ob`` URI parameter ([RFC 5626 §5]) is
-        appended inside the angle brackets to advertise outbound keep-alive
-        support to the registrar.
+        | Transport | Contact URI |
+        |-----------|-------------|
+        | SIPS AOR  | ``sips:…;ob`` |
+        | TLS       | ``sip:…;transport=tls;ob`` |
+        | TCP       | ``sip:…;transport=tcp;ob`` |
+        | UDP       | ``sip:…;transport=udp`` |
+
+        The ``ob`` parameter ([RFC 5626 §5]) advertises outbound keep-alive
+        support to the registrar for TCP/TLS transports.
 
         [RFC 5626 §5]: https://datatracker.ietf.org/doc/html/rfc5626#section-5
         """
@@ -510,14 +544,15 @@ class SessionInitiationProtocol(asyncio.Protocol):
             if self.aor.user
             else str(self.public_address)
         )
-        ob_uri_param = ";ob"
         if self.aor.scheme == "sips":
-            return f"<sips:{address}{ob_uri_param}>"
-        tls_param = ";transport=tls" if self.is_secure else ";transport=tcp"
-        return f"<sip:{address}{tls_param}{ob_uri_param}>"
+            return f"<sips:{address};ob>"
+        if isinstance(self.transport, asyncio.DatagramTransport):
+            return f"<sip:{address};transport=udp>"
+        transport_param = "tls" if self.is_secure else "tcp"
+        return f"<sip:{address};transport={transport_param};ob>"
 
     def connection_lost(self, exc: Exception | None) -> None:
-        """Handle a lost TLS/TCP connection."""
+        """Handle a lost or closed transport connection."""
         if exc is not None:
             logger.exception("Connection lost", exc_info=exc)
         if self.keepalive_task is not None:

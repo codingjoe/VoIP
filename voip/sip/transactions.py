@@ -214,7 +214,7 @@ class RegistrationTransaction(Transaction):
                 realm = params.get("realm", "")
                 nonce = params.get("nonce", "")
                 opaque = params.get("opaque")
-                algorithm = params.get("algorithm", DigestAlgorithm.SHA_256)
+                algorithm = params.get("algorithm", DigestAlgorithm.MD5)
                 qop_options = params.get("qop", "")
                 qop = (
                     DigestQoP.AUTH.value
