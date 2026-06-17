@@ -113,7 +113,7 @@ class STUNProtocol(asyncio.DatagramProtocol):
     """
 
     stun_server_address: NetworkAddress | None = NetworkAddress(
-        "stun.cloudflare.com", 3478
+        "stunserver2025.stunprotocol.org", 3478
     )
     _stun_transaction_id: bytes = dataclasses.field(init=False, default=b"")
     transport: asyncio.DatagramTransport | None = dataclasses.field(
@@ -178,7 +178,7 @@ class STUNProtocol(asyncio.DatagramProtocol):
             ):
                 self._parse_stun_response(data)
             return
-        self.packet_received(data, NetworkAddress(*addr))
+        self.packet_received(data, NetworkAddress(*addr[:2]))
 
     def connection_lost(self, exc: Exception | None) -> None:
         """Clear the internal transport reference on disconnect."""

@@ -117,7 +117,7 @@ def voip(ctx, verbose: int = 0):
 @click.option(
     "--stun-server",
     envvar="STUN_SERVER",
-    default="stun.cloudflare.com:3478",
+    default="stunserver2025.stunprotocol.org:3478",
     show_default=True,
     metavar="HOST[:PORT]",
     callback=lambda ctx, param, value: NetworkAddress.parse(value),
@@ -159,7 +159,7 @@ def mcp(aor: SipURI, stun_server: NetworkAddress, no_verify_tls: bool, transport
 @click.option(
     "--stun-server",
     envvar="STUN_SERVER",
-    default="stun.cloudflare.com:3478",
+    default="stunserver2025.stunprotocol.org:3478",
     show_default=True,
     metavar="HOST[:PORT]",
     callback=lambda ctx, param, value: NetworkAddress.parse(value),

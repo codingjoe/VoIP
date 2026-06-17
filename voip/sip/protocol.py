@@ -7,8 +7,8 @@ See also: https://datatracker.ietf.org/doc/html/rfc3261
 import asyncio
 import dataclasses
 import datetime
-import ipaddress
 import logging
+import socket
 import ssl
 import typing
 
@@ -169,8 +169,10 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
         """
         loop = asyncio.get_running_loop()
         if rtp is None:
+            addr_info = socket.getaddrinfo(*aor.maddr, type=socket.SOCK_DGRAM)
+
             rtp_bind_address = (
-                "::" if isinstance(aor.maddr[0], ipaddress.IPv6Address) else "0.0.0.0"  # noqa: S104
+                "::" if addr_info[0][0] == socket.AF_INET6 else "0.0.0.0"  # noqa: S104
             )
             rtp = await RealtimeTransportProtocol.create(rtp_bind_address, stun_server)
         if aor.transport == "UDP":
@@ -200,6 +202,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
         aor: types.SipURI,
         dialog_class: type[Dialog],
         *,
+        rtp: RealtimeTransportProtocol | None = None,
         no_verify_tls: bool = False,
         stun_server: NetworkAddress | None = None,
         **kwargs: typing.Any,
@@ -225,10 +228,13 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
                 constructor, e.g. ``verbose=2`` for
                 [`ConsoleMessageProtocol`][voip.__main__.ConsoleMessageProtocol].
         """
-        rtp_bind_address = (
-            "::" if isinstance(aor.maddr[0], ipaddress.IPv6Address) else "0.0.0.0"  # noqa: S104
-        )
-        rtp = await RealtimeTransportProtocol.create(rtp_bind_address, stun_server)
+        addr_info = socket.getaddrinfo(*aor.maddr, type=socket.SOCK_DGRAM)
+
+        if rtp is None:
+            rtp_bind_address = (
+                "::" if addr_info[0][0] == socket.AF_INET6 else "0.0.0.0"  # noqa: S104
+            )
+            rtp = await RealtimeTransportProtocol.create(rtp_bind_address, stun_server)
         backoff_secs = 1
         while True:
             try:
