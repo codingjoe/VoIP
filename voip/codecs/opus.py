@@ -121,8 +121,8 @@ class Opus(PyAVCodec):
             "<8sBBHIhB",
             b"OpusHead",
             1,  # version
-            1,  # channel count (mono)
-            3840,  # pre-skip: 80 ms at 48 kHz (RFC 7587)
+            cls.channels,  # channel count
+            0,  # pre-skip: each RTP payload is decoded as a standalone stream
             cls.sample_rate_hz,
             0,  # output gain
             0,  # channel mapping family (mono/stereo)
@@ -136,7 +136,7 @@ class Opus(PyAVCodec):
             [
                 cls._ogg_page(0x02, 0, serial_number, 0, [opus_head]),  # BOS
                 cls._ogg_page(0x00, 0, serial_number, 1, [opus_tags]),
-                cls._ogg_page(0x04, 0, serial_number, 2, [packet]),
+                cls._ogg_page(0x04, cls.frame_size, serial_number, 2, [packet]),
             ]
         )
 

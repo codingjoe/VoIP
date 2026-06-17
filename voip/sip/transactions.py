@@ -101,9 +101,6 @@ class Transaction(asyncio.Future):
 
     def complete(self) -> None:
         """Resolve the transaction with its dialog if not already complete."""
-        logger.debug(
-            "Completing transaction %s for dialog %s", self.branch, self.dialog
-        )
         if not self.done():
             self.set_result(self.dialog)
 

@@ -92,6 +92,18 @@ class TestOpusDecode:
         result = Opus.decode(sample, 16000)
         assert result.dtype == np.float32
 
+    def test_decode__real_decode_not_empty(self):
+        """Decode produces non-empty audio for a non-empty Opus packet.
+
+        Regression test: a too-large OpusHead pre-skip combined with a zero
+        granule position previously discarded all decoded samples, yielding
+        an empty array and silent calls.
+        """
+        rng = np.random.default_rng(0)
+        sample = Opus.encode(rng.uniform(-0.3, 0.3, 960).astype(np.float32))
+        result = Opus.decode(sample, 16000)
+        assert result.size > 0
+
 
 class TestOpusEncode:
     def test_encode__returns_bytes(self):
