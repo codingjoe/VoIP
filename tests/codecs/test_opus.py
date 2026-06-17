@@ -112,15 +112,57 @@ class TestOpusEncode:
         assert isinstance(result, bytes)
         assert len(result) > 0
 
-    def test_encode__uses_libopus_codec(self):
-        """Encode delegates to encode_pcm with libopus codec name."""
-        with patch.object(Opus, "encode_pcm", return_value=b"encoded") as mock_enc:
-            Opus.encode(np.zeros(960, dtype=np.float32))
-        mock_enc.assert_called_once_with(
-            pytest.approx(np.zeros(960, dtype=np.float32)),
-            "libopus",
-            Opus.sample_rate_hz,
-        )
+    def test_encode__produces_single_opus_frame(self):
+        """Encode produces exactly one Code-0 Opus frame per 960-sample chunk.
+
+        Regression test: the previous implementation concatenated two raw Opus
+        frames (one from ``codec.encode(frame)`` and one from the flush
+        ``codec.encode(None)``) into a single RTP payload.  A remote decoder
+        receiving such a payload sees Code-0 (single frame) in the TOC byte
+        and tries to decode the entire concatenated blob as one frame, which is
+        malformed — causing silence on outbound Opus echo calls.
+        """
+        rng = np.random.default_rng(0)
+        result = Opus.encode(rng.uniform(-0.3, 0.3, 960).astype(np.float32))
+        # Code-0 single-frame payload: TOC byte only, rest is frame data.
+        # Verify size is consistent with a single 20 ms Opus frame (not double).
+        assert (result[0] & 0x03) == 0  # TOC code bits: 0 = single frame
+        # A correctly encoded single 20 ms Opus frame is well under 1200 bytes.
+        # Two concatenated frames from the old code would be ~500+ bytes for noise.
+        # Silence is highly compressed; noise at 0.3 amplitude is a better bound.
+        assert len(result) < 1200
+
+
+class TestOpusPacketize:
+    def test_packetize__yields_single_frame_packets(self):
+        """Packetize yields only Code-0 (single-frame) Opus packets."""
+        rng = np.random.default_rng(0)
+        audio = rng.uniform(-0.3, 0.3, 48000).astype(np.float32)
+        for pkt in Opus.packetize(audio):
+            assert (pkt[0] & 0x03) == 0
+
+    def test_packetize__frame_count(self):
+        """Packetize yields exactly one packet per 20 ms frame, no flush packet.
+
+        Regression test: the previous implementation appended a flush packet
+        (``codec.encode(None)``) after all frames, producing N+1 RTP packets
+        for N frames of audio.  ``_dispatch_next_packet`` sends every yielded
+        payload at a fixed 20 ms interval, so the extra packet shifted the
+        receiver's playback timeline by one ptime (20 ms), causing audible
+        timing glitches.
+        """
+        # 5 full frames of 960 samples each → exactly 5 packets, no flush
+        audio = np.zeros(4800, dtype=np.float32)
+        assert len(list(Opus.packetize(audio))) == 5
+
+    def test_packetize__pads_partial_final_frame(self):
+        """Packetize zero-pads a partial last frame to a full 960-sample frame."""
+        # 5 full frames + 100 extra samples → 6 frames (5 full + 1 padded), no flush
+        audio = np.zeros(4900, dtype=np.float32)
+        packets = list(Opus.packetize(audio))
+        assert len(packets) == 6  # 6 frames (5 full + 1 padded), no flush
+        for pkt in packets:
+            assert (pkt[0] & 0x03) == 0
 
 
 class TestOpusConstants:

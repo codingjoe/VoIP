@@ -9,13 +9,18 @@ Requires the ``pyav`` extra: ``pip install voip[pyav]``.
 [Ogg]: https://wiki.xiph.org/Ogg
 """
 
+import logging
 import os
 import struct
-from typing import ClassVar
+from collections.abc import Iterator
+from typing import ClassVar, cast
 
+import av
 import numpy as np
 
 from voip.codecs.av import PyAVCodec
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["Opus"]
 
@@ -152,4 +157,58 @@ class Opus(PyAVCodec):
 
     @classmethod
     def encode(cls, samples: np.ndarray) -> bytes:
-        return cls.encode_pcm(samples, "libopus", cls.sample_rate_hz)
+        """Encode a single 20 ms PCM chunk to one valid Opus RTP payload.
+
+        Uses [packetize][voip.codecs.opus.Opus.packetize] with a fresh encoder
+        and returns the first encoded packet.  The payload is a Code-0
+        single-frame Opus packet suitable for direct embedding in an RTP
+        packet.
+
+        Args:
+            samples: Float32 mono PCM at `sample_rate_hz` Hz,
+                nominally `frame_size` (960) samples.
+
+        Returns:
+            Raw Opus payload bytes for one RTP packet.
+        """
+        return next(cls.packetize(samples), b"")
+
+    @classmethod
+    def packetize(cls, audio: np.ndarray) -> Iterator[bytes]:
+        """Encode *audio* and yield one valid Opus RTP payload per 20 ms frame.
+
+        Creates a single `libopus` encoder context for the entire buffer so
+        the encoder's internal state (VBR adaptation, noise shaping) is
+        preserved across packet boundaries.  Each call to
+        `av.CodecContext.encode` with exactly `frame_size` samples produces
+        exactly one Code-0 Opus packet, which is valid as a standalone RTP
+        payload.
+
+        Partial last frames are zero-padded to `frame_size` samples so that
+        `libopus` always receives the expected number of samples.  The encoder
+        is **not** flushed after the last frame: since every chunk is already
+        padded to a full frame the flush would only emit encoder look-ahead
+        silence, producing an extra RTP packet and shifting the receiver's
+        playback timeline by one 20 ms interval.
+
+        Args:
+            audio: Float32 mono PCM at `sample_rate_hz` Hz.
+
+        Yields:
+            Encoded Opus payload bytes, one per RTP packet.
+        """
+        codec = cast(av.AudioCodecContext, av.CodecContext.create("libopus", "w"))
+        codec.sample_rate = cls.sample_rate_hz
+        codec.format = av.AudioFormat("fltp")
+        codec.layout = av.AudioLayout("mono")
+        codec.open()
+        for i in range(0, len(audio), cls.frame_size):
+            chunk = audio[i : i + cls.frame_size].astype(np.float32)
+            if len(chunk) < cls.frame_size:
+                chunk = np.pad(chunk, (0, cls.frame_size - len(chunk)))
+            frame = av.AudioFrame.from_ndarray(
+                chunk[np.newaxis, :], format="fltp", layout="mono"
+            )
+            frame.sample_rate = cls.sample_rate_hz
+            frame.pts = i
+            yield from (bytes(pkt) for pkt in codec.encode(frame))
