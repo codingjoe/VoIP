@@ -161,6 +161,11 @@ class AudioCall(Session):
         audio = self.decode_payload(packet.payload)
         if audio.size > 0:
             self.audio_received(audio=audio, rms=self.rms(audio))
+        elif packet.payload:
+            logger.warning(
+                "Decoded audio is empty for non-empty RTP payload (size %d bytes)",
+                len(packet.payload),
+            )
 
     def decode_payload(self, payload: bytes) -> np.ndarray:
         return self.payload_decoder.decode(payload)
