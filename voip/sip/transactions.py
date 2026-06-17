@@ -101,6 +101,9 @@ class Transaction(asyncio.Future):
 
     def complete(self) -> None:
         """Resolve the transaction with its dialog if not already complete."""
+        logger.debug(
+            "Completing transaction %s for dialog %s", self.branch, self.dialog
+        )
         if not self.done():
             self.set_result(self.dialog)
 
@@ -537,7 +540,7 @@ class InviteTransaction(Transaction):
         self.dialog.route_set = list(self.request.headers.getlist("Record-Route"))
         self.sip.register_dialog(self.dialog)
 
-        call_handler = session_class(
+        session = session_class(
             rtp=self.sip.rtp,
             caller=caller,
             media=negotiated_media,
@@ -560,14 +563,13 @@ class InviteTransaction(Transaction):
             )
         else:
             remote_rtp_address = None
-        self.sip.rtp.register_call(remote_rtp_address, call_handler)
+        self.sip.rtp.register_call(remote_rtp_address, session)
 
         if remote_rtp_address is not None:
             self.sip.rtp.send(b"\x00", remote_rtp_address)
 
-        record_route = self.request.headers.get("Record-Route")
         session_id = str(secrets.randbelow(2**32) + 1)
-        rtp_public = self.sip.public_address
+        rtp_public = self.sip.rtp.public_address.result()
         sdp_media_attributes = [Attribute(name="sendrecv")]
         if srtp_session is not None:
             sdp_media_attributes.append(
@@ -580,7 +582,6 @@ class InviteTransaction(Transaction):
                 status_code=SIPStatus.OK,
                 phrase=SIPStatus.OK.phrase,
                 headers={
-                    **({"Record-Route": record_route} if record_route else {}),
                     "Contact": self.sip.contact,
                     "Allow": self.sip.allow_header,
                     "Supported": "replaces",
@@ -656,7 +657,7 @@ class InviteTransaction(Transaction):
         tx.pending_call_class = session_class
         tx.pending_call_kwargs = session_kwargs
 
-        rtp_public = sip.rtp.public_address
+        rtp_public = sip.rtp.public_address.result()
         session_id = str(secrets.randbelow(2**32) + 1)
         sdp_offer = SessionDescription(
             origin=Origin(
@@ -874,7 +875,7 @@ class ByeTransaction(Transaction):
             {
                 "Via": (
                     f"SIP/2.0/{sip.aor.transport}"
-                    f' {sip.rtp.public_address};oc-algo="loss";oc;rport;branch={tx.branch}'
+                    f' {sip.rtp.public_address.result()};oc-algo="loss";oc;rport;branch={tx.branch}'
                 ),
                 "Max-Forwards": "70",
                 "From": dialog.local_party,

@@ -177,13 +177,19 @@ class Response(Message):
         cls, request: Request, *, headers=None, dialog: Dialog = None, **kwargs
     ) -> Response:
         """Create a response from a request, copying relevant headers."""
-        headers = {
-            "Via": request.headers["Via"],
-            "From": request.headers["From"],
-            "To": f"{request.headers['To']};tag={dialog.remote_tag}"
-            if dialog and dialog.remote_tag
-            else request.headers["To"],
-            "Call-ID": request.headers["Call-ID"],
-            "CSeq": request.headers["CSeq"],
-        } | (headers or {})
-        return cls(headers=headers, **kwargs)
+        response_headers = SIPHeaderDict(
+            {
+                "From": request.headers["From"],
+                "To": f"{request.headers['To']};tag={dialog.local_tag}"
+                if dialog and dialog.local_tag
+                else request.headers["To"],
+                "Call-ID": request.headers["Call-ID"],
+                "CSeq": request.headers["CSeq"],
+            }
+        )
+        for via in request.headers.getlist("Via"):
+            response_headers.add("Via", via)
+        for record in request.headers.getlist("Record-Route"):
+            response_headers.add("Record-Route", record)
+        response_headers |= headers or {}
+        return cls(headers=response_headers, **kwargs)

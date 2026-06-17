@@ -120,7 +120,8 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
     recv_buffer: bytearray = dataclasses.field(init=False, default_factory=bytearray)
 
     def __post_init__(self):
-        self.public_address = self.public_address or self.rtp.public_address
+        if self.public_address is None and self.rtp.public_address is not None:
+            self.public_address = self.rtp.public_address.result()
 
     @classmethod
     async def run(
@@ -171,10 +172,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
             rtp_bind_address = (
                 "::" if isinstance(aor.maddr[0], ipaddress.IPv6Address) else "0.0.0.0"  # noqa: S104
             )
-            _, rtp = await loop.create_datagram_endpoint(
-                lambda: RealtimeTransportProtocol(stun_server_address=stun_server),
-                local_addr=(rtp_bind_address, 0),
-            )
+            rtp = await RealtimeTransportProtocol.create(rtp_bind_address, stun_server)
         if aor.transport == "UDP":
             _, protocol = await loop.create_datagram_endpoint(
                 lambda: cls(aor=aor, rtp=rtp, dialog_class=dialog_class, **kwargs),
@@ -202,7 +200,6 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
         aor: types.SipURI,
         dialog_class: type[Dialog],
         *,
-        rtp: RealtimeTransportProtocol | None = None,
         no_verify_tls: bool = False,
         stun_server: NetworkAddress | None = None,
         **kwargs: typing.Any,
@@ -228,15 +225,10 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
                 constructor, e.g. ``verbose=2`` for
                 [`ConsoleMessageProtocol`][voip.__main__.ConsoleMessageProtocol].
         """
-        loop = asyncio.get_running_loop()
-        if rtp is None:
-            rtp_bind_address = (
-                "::" if isinstance(aor.maddr[0], ipaddress.IPv6Address) else "0.0.0.0"  # noqa: S104
-            )
-            _, rtp = await loop.create_datagram_endpoint(
-                lambda: RealtimeTransportProtocol(stun_server_address=stun_server),
-                local_addr=(rtp_bind_address, 0),
-            )
+        rtp_bind_address = (
+            "::" if isinstance(aor.maddr[0], ipaddress.IPv6Address) else "0.0.0.0"  # noqa: S104
+        )
+        rtp = await RealtimeTransportProtocol.create(rtp_bind_address, stun_server)
         backoff_secs = 1
         while True:
             try:
@@ -458,7 +450,9 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
             case SIPMethod.ACK:
                 # For non-2xx ACKs the INVITE tx is still present; route by branch.
                 try:
-                    tx = self._transactions[request.branch]
+                    tx = self._dialogs[
+                        request.remote_tag, request.local_tag
+                    ].invite_transaction
                 except KeyError:
                     self.send(
                         Response.from_request(

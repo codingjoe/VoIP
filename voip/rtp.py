@@ -221,7 +221,14 @@ class RealtimeTransportProtocol(STUNProtocol):
     calls: dict[tuple[str, int] | None, Session] = dataclasses.field(
         init=False, default_factory=dict
     )
-    public_address: NetworkAddress | None = dataclasses.field(init=False, default=None)
+    public_address: asyncio.Future[NetworkAddress] = dataclasses.field(
+        init=False, default_factory=asyncio.Future
+    )
+
+    def connection_made(self, transport: asyncio.DatagramTransport) -> None:
+        """Create the public-address future, then start STUN negotiation."""
+        self.public_address = asyncio.get_running_loop().create_future()
+        super().connection_made(transport)
 
     def stun_connection_made(
         self,
@@ -229,7 +236,38 @@ class RealtimeTransportProtocol(STUNProtocol):
         addr: NetworkAddress,
     ) -> None:
         logger.debug("RTP socket ready, public address is %s:%s", addr[0], addr[1])
-        self.public_address = addr
+        if self.public_address is not None and not self.public_address.done():
+            self.public_address.set_result(addr)
+
+    @classmethod
+    async def create(
+        cls,
+        bind_address: str,
+        stun_server: NetworkAddress | None = None,
+    ) -> RealtimeTransportProtocol:
+        """Create a bound RTP endpoint and wait for the public address.
+
+        Creates the UDP socket, sends a STUN binding request when configured,
+        and suspends until the public address is confirmed before returning.
+
+        Args:
+            bind_address: Local bind address — ``"0.0.0.0"`` for IPv4 or
+                ``"::"`` for IPv6.
+            stun_server: STUN server for NAT traversal.  ``None`` skips STUN
+                and uses the local socket address instead.
+
+        Returns:
+            A ready [`RealtimeTransportProtocol`][voip.rtp.RealtimeTransportProtocol]
+            with [`public_address`][voip.rtp.RealtimeTransportProtocol.public_address]
+            already resolved.
+        """
+        loop = asyncio.get_running_loop()
+        _, rtp = await loop.create_datagram_endpoint(
+            lambda: cls(stun_server_address=stun_server),
+            local_addr=(bind_address, 0),
+        )
+        await rtp.public_address
+        return rtp
 
     def register_call(
         self,
