@@ -229,8 +229,9 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
             stun_server: STUN server for RTP NAT traversal.
             **kwargs: Extra keyword arguments forwarded to the protocol constructor.
         """
-        addr_info = socket.getaddrinfo(*aor.maddr, type=socket.SOCK_DGRAM)
-
+        addr_info = socket.getaddrinfo(
+            str(aor.maddr[0]), aor.maddr[1], type=socket.SOCK_DGRAM
+        )
         if rtp is None:
             rtp_bind_address = (
                 "::" if addr_info[0][0] == socket.AF_INET6 else "0.0.0.0"  # noqa: S104
