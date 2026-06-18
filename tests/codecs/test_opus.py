@@ -166,6 +166,10 @@ class TestOpusPacketize:
 
 
 class TestOpusConstants:
+    def test_channels(self):
+        """Opus channel count is 1 (mono), matching the encoder and decoder."""
+        assert Opus.channels == 1
+
     def test_payload_type(self):
         """Opus payload type is 111 per RFC 7587."""
         assert Opus.payload_type == 111

@@ -47,7 +47,7 @@ class Opus(PyAVCodec):
     rtp_clock_rate_hz: ClassVar[int] = 48000
     frame_size: ClassVar[int] = 960
     timestamp_increment: ClassVar[int] = 960
-    channels: ClassVar[int] = 2
+    channels: ClassVar[int] = 1
 
     @staticmethod
     def _ogg_crc32(data: bytes) -> int:
