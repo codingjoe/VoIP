@@ -167,8 +167,9 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
         """
         loop = asyncio.get_running_loop()
         if rtp is None:
-            addr_info = socket.getaddrinfo(*aor.maddr, type=socket.SOCK_DGRAM)
-
+            addr_info = socket.getaddrinfo(
+                str(aor.maddr[0]), aor.maddr[1], type=socket.SOCK_DGRAM
+            )
             rtp_bind_address = (
                 "::" if addr_info[0][0] == socket.AF_INET6 else "0.0.0.0"  # noqa: S104
             )
