@@ -140,7 +140,7 @@ class TestG722Decoder:
 
         encoder = av.CodecContext.create("g722", "w")
         encoder.sample_rate = 16000
-        encoder.format = av.AudioFormat("fltp")
+        encoder.format = av.AudioFormat("s16")
         encoder.layout = av.AudioLayout("mono")
         encoder.open()
         t = np.linspace(
@@ -149,7 +149,7 @@ class TestG722Decoder:
         signal = (np.sin(2 * np.pi * 440 * t) * 0.5).astype(np.float32)
         pcm = np.clip(np.round(signal * 32768.0), -32768, 32767).astype(np.int16)
         frame = av.AudioFrame.from_ndarray(
-            pcm[np.newaxis, :], format="fltp", layout="mono"
+            pcm[np.newaxis, :], format="s16", layout="mono"
         )
         frame.sample_rate = 16000
         frame.pts = 0

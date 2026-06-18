@@ -456,7 +456,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
                     InviteTransaction.receive(request=request, sip=self)
                 )
             case SIPMethod.ACK:
-                # For non-2xx ACKs the INVITE tx is still present; route by branch.
+                # For non-2xx ACKs the INVITE tx is still present; route by dialog.
                 try:
                     tx = self._dialogs[
                         request.remote_tag, request.local_tag
