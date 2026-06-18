@@ -52,7 +52,7 @@ class Transaction(asyncio.Future):
     """
     Initiated by a request, completed by any number of responses.
 
-    Transactions are awaitable: ``await tx`` suspends until the transaction
+    Transactions are awaitable: `await tx` suspends until the transaction
     reaches its terminal state and resolves to the dialog.
 
     Args:
@@ -282,7 +282,7 @@ class RegistrationTransaction(Transaction):
         """Parse Digest challenge parameters from a WWW-Authenticate/Proxy-Authenticate header.
 
         Args:
-            header: The raw ``WWW-Authenticate`` or ``Proxy-Authenticate`` header value.
+            header: The raw `WWW-Authenticate` or `Proxy-Authenticate` header value.
 
         Returns:
             A dict mapping parameter names to their unquoted values.
@@ -313,27 +313,27 @@ class RegistrationTransaction(Transaction):
         """Compute a SIP digest response per RFC 3261 §22 and RFC 8760.
 
         RFC 8760 deprecates MD5 and mandates support for SHA-256 and
-        SHA-512-256.  The ``algorithm`` parameter selects the hash function;
-        it defaults to ``SHA-256``.
+        SHA-512-256.  The `algorithm` parameter selects the hash function;
+        it defaults to `SHA-256`.
 
         Args:
             username: SIP username (AOR user part).
             password: SIP password.
             realm: Digest realm from the challenge.
             nonce: Digest nonce from the challenge.
-            method: SIP method string (e.g. ``"REGISTER"``).
+            method: SIP method string (e.g. `"REGISTER"`).
             uri: Request-URI string used in the digest.
-            algorithm: Digest algorithm identifier (default: ``"SHA-256"``).
-            qop: Quality-of-protection value, or ``None``.
-            nc: Nonce count hex string (default: ``"00000001"``).
-            cnonce: Client nonce, required for ``*-sess`` algorithms and ``qop``.
+            algorithm: Digest algorithm identifier (default: `"SHA-256"`).
+            qop: Quality-of-protection value, or `None`.
+            nc: Nonce count hex string (default: `"00000001"`).
+            cnonce: Client nonce, required for `*-sess` algorithms and `qop`.
 
         Returns:
             Hex-encoded digest response string.
 
         Raises:
-            ValueError: If ``algorithm`` is not a recognised `DigestAlgorithm`,
-                or if a ``*-sess`` algorithm is requested without a ``cnonce``.
+            ValueError: If `algorithm` is not a recognised `DigestAlgorithm`,
+                or if a `*-sess` algorithm is requested without a `cnonce`.
         """
         try:
             hash_name = cls.DIGEST_HASH_NAME[algorithm]
@@ -630,7 +630,7 @@ class InviteTransaction(Transaction):
 
         Args:
             sip: The SIP session to send from.
-            target: SIP or tel URI of the callee (e.g. ``"sip:+15551234567@carrier.com"`` or ``"tel:+15551234567"``).
+            target: SIP or tel URI of the callee (e.g. `"sip:+15551234567@carrier.com"` or `"tel:+15551234567"`).
             dialog: The dialog to associate with this call.
             session_class: Session implementation that will be initialized for the call.
             **session_kwargs: Additional keyword arguments forwarded to the

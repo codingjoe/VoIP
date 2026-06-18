@@ -96,7 +96,7 @@ class Session:
 
     The `rtp` back-reference allows sending media; the `dialog` back-reference
     carries the SIP dialog state and a reference to the SIP session
-    (``dialog.sip``) so that the transport can be closed when the call ends.
+    (`dialog.sip`) so that the transport can be closed when the call ends.
 
     Subclass `voip.audio.AudioCall` for audio calls with codec
     negotiation, buffering, and decoding.
@@ -120,7 +120,7 @@ class Session:
 
         Args:
             packet: Parsed RTP packet.
-            addr: Remote ``(host, port)`` the packet arrived from.
+            addr: Remote `(host, port)` the packet arrived from.
         """
 
     def send_packet(self, packet: RTPPacket, addr: NetworkAddress) -> None:
@@ -130,7 +130,7 @@ class Session:
 
         Args:
             packet: RTP packet to send.
-            addr: Destination ``(host, port)``.
+            addr: Destination `(host, port)`.
         """
         data = bytes(packet)
         if self.srtp is not None:
@@ -172,7 +172,7 @@ class Session:
         propagates and the call is not answered.
 
         Args:
-            remote_media: The SDP ``m=audio`` section from the remote INVITE.
+            remote_media: The SDP `m=audio` section from the remote INVITE.
 
         Returns:
             A `MediaDescription` with the chosen codec.
@@ -213,7 +213,7 @@ class RealtimeTransportProtocol(STUNProtocol):
     matching handler's `datagram_received` method by
     remote source address.
 
-    Use ``addr=None`` in `register_call` as a wildcard catch-all for
+    Use `addr=None` in `register_call` as a wildcard catch-all for
     calls whose remote RTP address is not known in advance (no SDP in INVITE).
     """
 
@@ -240,9 +240,9 @@ class RealtimeTransportProtocol(STUNProtocol):
             self.public_address.set_result(addr)
 
     @classmethod
-    async def create(
+    async def serve(
         cls,
-        bind_address: str,
+        bind_address: str | None = None,
         stun_server: NetworkAddress | None = None,
     ) -> RealtimeTransportProtocol:
         """Create a bound RTP endpoint and wait for the public address.
@@ -251,9 +251,9 @@ class RealtimeTransportProtocol(STUNProtocol):
         and suspends until the public address is confirmed before returning.
 
         Args:
-            bind_address: Local bind address — ``"0.0.0.0"`` for IPv4 or
-                ``"::"`` for IPv6.
-            stun_server: STUN server for NAT traversal.  ``None`` skips STUN
+            bind_address: Local bind address — `"0.0.0.0"` for IPv4 or
+                `"::"` for IPv6.
+            stun_server: STUN server for NAT traversal.  `None` skips STUN
                 and uses the local socket address instead.
 
         Returns:
@@ -276,13 +276,13 @@ class RealtimeTransportProtocol(STUNProtocol):
     ) -> None:
         """Register *handler* for RTP traffic arriving from *addr*.
 
-        Use ``addr=None`` as a wildcard to handle traffic from any source that
+        Use `addr=None` as a wildcard to handle traffic from any source that
         has no dedicated routing entry (useful when the caller's RTP address is
         not known in advance from the INVITE SDP).
 
         Args:
-            addr: Remote ``(ip, port)`` as it will appear in incoming datagrams,
-                or ``None`` to register a wildcard catch-all handler.
+            addr: Remote `(ip, port)` as it will appear in incoming datagrams,
+                or `None` to register a wildcard catch-all handler.
             handler: A `Call` instance whose
                 `datagram_received` will be called for
                 matching packets.
@@ -322,10 +322,10 @@ class RealtimeTransportProtocol(STUNProtocol):
         """Route an incoming SRTP datagram to the matching per-call handler.
 
         Looks up *addr* in the call registry.  Falls back to the wildcard
-        ``None`` handler when no exact match exists.  Drops the packet with a
+        `None` handler when no exact match exists.  Drops the packet with a
         debug log when no handler is registered at all.
 
-        When the matched handler carries an SRTP session the packet is
+        When the matched handler carries an SRTP session, the packet is
         authenticated and decrypted before being forwarded; packets that fail
         authentication are logged at WARNING level and discarded.
         """

@@ -116,8 +116,8 @@ class TestOpusEncode:
         """Encode produces exactly one Code-0 Opus frame per 960-sample chunk.
 
         Regression test: the previous implementation concatenated two raw Opus
-        frames (one from ``codec.encode(frame)`` and one from the flush
-        ``codec.encode(None)``) into a single RTP payload.  A remote decoder
+        frames (one from `codec.encode(frame)` and one from the flush
+        `codec.encode(None)`) into a single RTP payload.  A remote decoder
         receiving such a payload sees Code-0 (single frame) in the TOC byte
         and tries to decode the entire concatenated blob as one frame, which is
         malformed — causing silence on outbound Opus echo calls.
@@ -145,8 +145,8 @@ class TestOpusPacketize:
         """Packetize yields exactly one packet per 20 ms frame, no flush packet.
 
         Regression test: the previous implementation appended a flush packet
-        (``codec.encode(None)``) after all frames, producing N+1 RTP packets
-        for N frames of audio.  ``_dispatch_next_packet`` sends every yielded
+        (`codec.encode(None)`) after all frames, producing N+1 RTP packets
+        for N frames of audio.  `_dispatch_next_packet` sends every yielded
         payload at a fixed 20 ms interval, so the extra packet shifted the
         receiver's playback timeline by one ptime (20 ms), causing audible
         timing glitches.

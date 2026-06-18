@@ -8,7 +8,7 @@ Use [G722Decoder][voip.codecs.g722.G722Decoder] (via
 stateful decoding that preserves the ADPCM predictor state across consecutive
 RTP packets.
 
-Requires the ``hd-audio`` extra: ``pip install voip[hd-audio]``.
+Requires the `hd-audio` extra: `pip install voip[hd-audio]`.
 """
 
 import dataclasses
@@ -81,26 +81,6 @@ class G722(PyAVCodec):
     def create_decoder(
         cls, output_rate_hz: int, *, input_rate_hz: int | None = None
     ) -> G722Decoder:
-        """Create a stateful per-call G.722 decoder.
-
-        Returns a [G722Decoder][voip.codecs.g722.G722Decoder] that preserves
-        the ADPCM predictor state across consecutive RTP packets.  Pass the
-        returned decoder to
-        [AudioCall][voip.audio.AudioCall] (via the `create_decoder`
-        factory) to avoid the per-packet state reset that causes robotic
-        audio artefacts.
-
-        The *input_rate_hz* parameter is accepted for API consistency with
-        [RTPCodec.create_decoder][voip.codecs.base.RTPCodec.create_decoder]
-        but is not used; G.722 always decodes at 16 000 Hz internally.
-
-        Args:
-            output_rate_hz: Target PCM sample rate in Hz for decoded audio.
-            input_rate_hz: Ignored.  G.722 always decodes at `sample_rate_hz`.
-
-        Returns:
-            A new [G722Decoder][voip.codecs.g722.G722Decoder] instance.
-        """
         return G722Decoder(output_rate_hz)
 
 
@@ -114,9 +94,6 @@ class G722Decoder:
     same context.  This eliminates the per-packet predictor reset that causes
     robotic artefacts when decoding a G.722 stream with independent codec
     contexts.
-
-    Use [G722.create_decoder][voip.codecs.g722.G722.create_decoder] rather
-    than instantiating this class directly.
 
     Attributes:
         output_rate_hz: Target PCM sample rate in Hz for decoded audio.

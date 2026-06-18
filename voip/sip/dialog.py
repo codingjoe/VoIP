@@ -187,7 +187,7 @@ class Dialog:
         Initiate an outbound call to *target*.
 
         Args:
-            target: SIP or tel URI of the remote party (e.g. ``"sip:+15551234567@carrier.com"`` or ``"tel:+15551234567"``).
+            target: SIP or tel URI of the remote party (e.g. `"sip:+15551234567@carrier.com"` or `"tel:+15551234567"`).
             session_class: Session subclass to create for this call.
             **session_kwargs: Extra keyword arguments forwarded to `session_class`.
 

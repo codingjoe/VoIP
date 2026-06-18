@@ -51,13 +51,13 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
     SIP User Agent Client (UAC) over TLS/TCP or UDP [RFC 3261].
 
     Handles SIP message parsing, carrier registration, and transaction management.
-    The transport is selected automatically from the AOR's ``transport`` parameter:
+    The transport is selected automatically from the AOR's `transport` parameter:
 
     | `aor.transport` | Underlying transport |
     |-----------------|----------------------|
-    | ``TLS`` (default) | TCP with TLS |
-    | ``TCP`` | plain TCP |
-    | ``UDP`` | UDP datagram socket |
+    | `TLS` (default) | TCP with TLS |
+    | `TCP` | plain TCP |
+    | `UDP` | UDP datagram socket |
 
     Use [`run`][voip.sip.protocol.SessionInitiationProtocol.run] for a single
     outbound connection and [`serve`][voip.sip.protocol.SessionInitiationProtocol.serve]
@@ -88,7 +88,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
         dialog_class: [Dialog][voip.sip.Dialog] subclass used to
             create dialogs for incoming calls.  Defaults to the base
             [Dialog][voip.sip.Dialog] which rejects all calls with
-            ``486 Busy Here``.
+            `486 Busy Here`.
         keepalive_interval: Keep-alive ping interval for TCP transports.
             Should be between 30 and 90 seconds (RFC 5626).
 
@@ -138,30 +138,28 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
 
         Establishes RTP (if not provided) and SIP/TLS connections derived from
         *aor*, then **suspends until SIP registration is confirmed** before
-        returning the ready protocol.  After this call returns the caller may
+        returning the ready protocol. After this call returns, the caller may
         safely place outbound calls or start an MCP server.
 
-        The transport protocol (TLS vs plain TCP) and proxy address are read
+        The transport protocol (TLS vs. plain TCP) and proxy address are read
         from *aor* directly — no extra arguments are needed.
 
         Args:
-            aor: SIP Address of Record, e.g. ``sip:alice@carrier.example``.
-                The host, port, and ``transport`` parameter are used to connect
+            aor: SIP Address of Record, e.g. `sip:alice@carrier.example`.
+                The host, port, and `transport` parameter are used to connect
                 to the SIP proxy.
             dialog_class: [`Dialog`][voip.sip.Dialog] subclass used for
                 inbound calls.  Defaults to the base
                 [`Dialog`][voip.sip.Dialog], which rejects all calls.
-            rtp: Existing RTP endpoint to reuse.  When ``None`` (default) a
+            rtp: Existing RTP endpoint to reuse.  When `None` (default) a
                 new datagram endpoint is created from *aor* and *stun_server*.
                 Pass an existing instance to share one endpoint across
                 reconnections (see [`serve`][voip.sip.protocol.SessionInitiationProtocol.serve]).
             no_verify_tls: Disable TLS certificate verification. Insecure; for
-                testing only. Defaults to ``False``.
+                testing only. Defaults to `False`.
             stun_server: STUN server for RTP NAT traversal. Ignored when *rtp*
                 is provided.
-            **kwargs: Extra keyword arguments forwarded to the protocol
-                constructor, e.g. ``verbose=2`` for
-                [`ConsoleMessageProtocol`][voip.__main__.ConsoleMessageProtocol].
+            **kwargs: Extra keyword arguments forwarded to the protocol constructor.
 
         Returns:
             The registered [`SessionInitiationProtocol`][voip.sip.protocol.SessionInitiationProtocol]
@@ -174,7 +172,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
             rtp_bind_address = (
                 "::" if addr_info[0][0] == socket.AF_INET6 else "0.0.0.0"  # noqa: S104
             )
-            rtp = await RealtimeTransportProtocol.create(rtp_bind_address, stun_server)
+            rtp = await RealtimeTransportProtocol.serve(rtp_bind_address, stun_server)
         if aor.transport == "UDP":
             _, protocol = await loop.create_datagram_endpoint(
                 lambda: cls(aor=aor, rtp=rtp, dialog_class=dialog_class, **kwargs),
@@ -211,22 +209,24 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
 
         Creates one RTP endpoint for the lifetime of the process, then enters a
         persistent loop: connect to the SIP proxy, wait for the connection to drop,
-        and reconnect with exponential back-off.  Use this for long-running
+        and reconnect with exponential back-off. Use this for long-running
         inbound-call servers.
 
-        The transport protocol (TLS vs plain TCP) and proxy address are read from
+        The transport protocol (TLS vs. plain TCP) and proxy address are read from
         *aor* directly.
 
         Args:
-            aor: SIP Address of Record, e.g. ``sip:alice@carrier.example``.
+            aor: SIP Address of Record, e.g. `sip:alice@carrier.example`.
             dialog_class: [`Dialog`][voip.sip.Dialog] subclass used for
                 inbound calls.
+            rtp: Existing RTP endpoint to reuse.  When `None` (default) a
+                new datagram endpoint is created from *aor* and *stun_server*.
+                Pass an existing instance to share one endpoint across
+                reconnections (see [`serve`][voip.sip.protocol.SessionInitiationProtocol.serve]).
             no_verify_tls: Disable TLS certificate verification. Insecure; for
-                testing only. Defaults to ``False``.
+                testing only. Defaults to `False`.
             stun_server: STUN server for RTP NAT traversal.
-            **kwargs: Extra keyword arguments forwarded to the protocol
-                constructor, e.g. ``verbose=2`` for
-                [`ConsoleMessageProtocol`][voip.__main__.ConsoleMessageProtocol].
+            **kwargs: Extra keyword arguments forwarded to the protocol constructor.
         """
         addr_info = socket.getaddrinfo(*aor.maddr, type=socket.SOCK_DGRAM)
 
@@ -234,7 +234,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
             rtp_bind_address = (
                 "::" if addr_info[0][0] == socket.AF_INET6 else "0.0.0.0"  # noqa: S104
             )
-            rtp = await RealtimeTransportProtocol.create(rtp_bind_address, stun_server)
+            rtp = await RealtimeTransportProtocol.serve(rtp_bind_address, stun_server)
         backoff_secs = 1
         while True:
             try:
@@ -252,7 +252,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
             backoff_secs = min(backoff_secs * 2, 60)
 
     def register_dialog(self, dialog: Dialog) -> None:
-        """Register *dialog* keyed by ``(dialog.local_tag, dialog.remote_tag)``."""
+        """Register *dialog* keyed by `(dialog.local_tag, dialog.remote_tag)`."""
         if dialog.remote_tag is None:
             logger.warning("Dialog without remote tag cannot be registered: %r", dialog)
         else:
@@ -523,18 +523,9 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
 
     @property
     def contact(self) -> str:
-        """Return a ``Contact:`` header value for this UA.
+        """Return a `Contact:` header value for this UA.
 
-        The URI scheme and transport parameter mirror the active transport:
-
-        | Transport | Contact URI |
-        |-----------|-------------|
-        | SIPS AOR  | ``sips:…;ob`` |
-        | TLS       | ``sip:…;transport=tls;ob`` |
-        | TCP       | ``sip:…;transport=tcp;ob`` |
-        | UDP       | ``sip:…;transport=udp`` |
-
-        The ``ob`` parameter ([RFC 5626 §5]) advertises outbound keep-alive
+        The `ob` parameter ([RFC 5626 §5]) advertises outbound keep-alive
         support to the registrar for TCP/TLS transports.
 
         [RFC 5626 §5]: https://datatracker.ietf.org/doc/html/rfc5626#section-5

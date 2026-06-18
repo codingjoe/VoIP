@@ -176,10 +176,6 @@ class RTPCodec:
     ) -> PayloadDecoder:
         """Create a stateless per-call payload decoder for this codec.
 
-        Override in subclasses that require stateful decoding across RTP
-        packets (e.g. G.722 ADPCM — see
-        [G722.create_decoder][voip.codecs.g722.G722.create_decoder]).
-
         Args:
             output_rate_hz: Target PCM sample rate in Hz for decoded audio.
             input_rate_hz: Input clock rate override, or `None` to use the

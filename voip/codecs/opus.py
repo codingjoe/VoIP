@@ -4,7 +4,7 @@ The [Opus][voip.codecs.opus.Opus] class wraps raw Opus RTP payloads in a
 minimal [Ogg][] container before passing them to PyAV for decoding, and
 encodes float32 PCM via `libopus`.
 
-Requires the ``pyav`` extra: ``pip install voip[pyav]``.
+Requires the `pyav` extra: `pip install voip[pyav]`.
 
 [Ogg]: https://wiki.xiph.org/Ogg
 """
@@ -159,46 +159,10 @@ class Opus(PyAVCodec):
 
     @classmethod
     def encode(cls, samples: np.ndarray) -> bytes:
-        """Encode a single 20 ms PCM chunk to one valid Opus RTP payload.
-
-        Uses [packetize][voip.codecs.opus.Opus.packetize] with a fresh encoder
-        and returns the first encoded packet.  The payload is a Code-0
-        single-frame Opus packet suitable for direct embedding in an RTP
-        packet.
-
-        Args:
-            samples: Float32 mono PCM at `sample_rate_hz` Hz,
-                nominally `frame_size` (960) samples.
-
-        Returns:
-            Raw Opus payload bytes for one RTP packet.
-        """
         return next(cls.packetize(samples), b"")
 
     @classmethod
     def packetize(cls, audio: np.ndarray) -> Iterator[bytes]:
-        """Encode *audio* and yield one valid Opus RTP payload per 20 ms frame.
-
-        Creates a single `libopus` encoder context for the entire buffer so
-        the encoder's internal state (VBR adaptation, noise shaping) is
-        preserved across packet boundaries.  Each call to
-        `av.CodecContext.encode` with exactly `frame_size` samples produces
-        exactly one Code-0 Opus packet, which is valid as a standalone RTP
-        payload.
-
-        Partial last frames are zero-padded to `frame_size` samples so that
-        `libopus` always receives the expected number of samples.  The encoder
-        is **not** flushed after the last frame: since every chunk is already
-        padded to a full frame the flush would only emit encoder look-ahead
-        silence, producing an extra RTP packet and shifting the receiver's
-        playback timeline by one 20 ms interval.
-
-        Args:
-            audio: Float32 mono PCM at `sample_rate_hz` Hz.
-
-        Yields:
-            Encoded Opus payload bytes, one per RTP packet.
-        """
         codec = cast(av.AudioCodecContext, av.CodecContext.create("libopus", "w"))
         codec.sample_rate = cls.sample_rate_hz
         codec.format = av.AudioFormat("fltp")
@@ -219,25 +183,6 @@ class Opus(PyAVCodec):
     def create_decoder(
         cls, output_rate_hz: int, *, input_rate_hz: int | None = None
     ) -> OpusDecoder:
-        """Create a stateful per-call Opus decoder.
-
-        Returns an [OpusDecoder][voip.codecs.opus.OpusDecoder] that preserves
-        the `libopus` decoder's internal MDCT overlap state across consecutive
-        RTP packets.  Without this, each packet is decoded in an independent
-        context, causing CELT window-boundary discontinuities every 20 ms that
-        manifest as audible choppiness in echo and playback scenarios.
-
-        The *input_rate_hz* parameter is accepted for API consistency with
-        [RTPCodec.create_decoder][voip.codecs.base.RTPCodec.create_decoder]
-        but is not used; Opus always decodes at `sample_rate_hz` (48 000 Hz).
-
-        Args:
-            output_rate_hz: Target PCM sample rate in Hz for decoded audio.
-            input_rate_hz: Ignored.  Opus always decodes at `sample_rate_hz`.
-
-        Returns:
-            A new [OpusDecoder][voip.codecs.opus.OpusDecoder] instance.
-        """
         return OpusDecoder(output_rate_hz)
 
 
