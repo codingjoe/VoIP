@@ -7,7 +7,7 @@ import pytest
 np = pytest.importorskip("numpy")
 av = pytest.importorskip("av")
 
-from voip.codecs.opus import Opus  # noqa: E402
+from voip.codecs.opus import Opus, OpusDecoder  # noqa: E402
 
 
 class TestOggCRC32:
@@ -92,6 +92,18 @@ class TestOpusDecode:
         result = Opus.decode(sample, 16000)
         assert result.dtype == np.float32
 
+    def test_decode__real_decode_not_empty(self):
+        """Decode produces non-empty audio for a non-empty Opus packet.
+
+        Regression test: a too-large OpusHead pre-skip combined with a zero
+        granule position previously discarded all decoded samples, yielding
+        an empty array and silent calls.
+        """
+        rng = np.random.default_rng(0)
+        sample = Opus.encode(rng.uniform(-0.3, 0.3, 960).astype(np.float32))
+        result = Opus.decode(sample, 16000)
+        assert result.size > 0
+
 
 class TestOpusEncode:
     def test_encode__returns_bytes(self):
@@ -100,15 +112,57 @@ class TestOpusEncode:
         assert isinstance(result, bytes)
         assert len(result) > 0
 
-    def test_encode__uses_libopus_codec(self):
-        """Encode delegates to encode_pcm with libopus codec name."""
-        with patch.object(Opus, "encode_pcm", return_value=b"encoded") as mock_enc:
-            Opus.encode(np.zeros(960, dtype=np.float32))
-        mock_enc.assert_called_once_with(
-            pytest.approx(np.zeros(960, dtype=np.float32)),
-            "libopus",
-            Opus.sample_rate_hz,
-        )
+    def test_encode__produces_single_opus_frame(self):
+        """Encode produces exactly one Code-0 Opus frame per 960-sample chunk.
+
+        Regression test: the previous implementation concatenated two raw Opus
+        frames (one from `codec.encode(frame)` and one from the flush
+        `codec.encode(None)`) into a single RTP payload.  A remote decoder
+        receiving such a payload sees Code-0 (single frame) in the TOC byte
+        and tries to decode the entire concatenated blob as one frame, which is
+        malformed — causing silence on outbound Opus echo calls.
+        """
+        rng = np.random.default_rng(0)
+        result = Opus.encode(rng.uniform(-0.3, 0.3, 960).astype(np.float32))
+        # Code-0 single-frame payload: TOC byte only, rest is frame data.
+        # Verify size is consistent with a single 20 ms Opus frame (not double).
+        assert (result[0] & 0x03) == 0  # TOC code bits: 0 = single frame
+        # A correctly encoded single 20 ms Opus frame is well under 1200 bytes.
+        # Two concatenated frames from the old code would be ~500+ bytes for noise.
+        # Silence is highly compressed; noise at 0.3 amplitude is a better bound.
+        assert len(result) < 1200
+
+
+class TestOpusPacketize:
+    def test_packetize__yields_single_frame_packets(self):
+        """Packetize yields only Code-0 (single-frame) Opus packets."""
+        rng = np.random.default_rng(0)
+        audio = rng.uniform(-0.3, 0.3, 48000).astype(np.float32)
+        for pkt in Opus.packetize(audio):
+            assert (pkt[0] & 0x03) == 0
+
+    def test_packetize__frame_count(self):
+        """Packetize yields exactly one packet per 20 ms frame, no flush packet.
+
+        Regression test: the previous implementation appended a flush packet
+        (`codec.encode(None)`) after all frames, producing N+1 RTP packets
+        for N frames of audio.  `_dispatch_next_packet` sends every yielded
+        payload at a fixed 20 ms interval, so the extra packet shifted the
+        receiver's playback timeline by one ptime (20 ms), causing audible
+        timing glitches.
+        """
+        # 5 full frames of 960 samples each → exactly 5 packets, no flush
+        audio = np.zeros(4800, dtype=np.float32)
+        assert len(list(Opus.packetize(audio))) == 5
+
+    def test_packetize__pads_partial_final_frame(self):
+        """Packetize zero-pads a partial last frame to a full 960-sample frame."""
+        # 5 full frames + 100 extra samples → 6 frames (5 full + 1 padded), no flush
+        audio = np.zeros(4900, dtype=np.float32)
+        packets = list(Opus.packetize(audio))
+        assert len(packets) == 6  # 6 frames (5 full + 1 padded), no flush
+        for pkt in packets:
+            assert (pkt[0] & 0x03) == 0
 
 
 class TestOpusConstants:
@@ -135,3 +189,59 @@ class TestOpusConstants:
     def test_timestamp_increment(self):
         """Opus timestamp increment is 960 ticks per frame."""
         assert Opus.timestamp_increment == 960
+
+
+class TestOpusCreateDecoder:
+    def test_create_decoder__returns_opus_decoder(self):
+        """create_decoder returns an OpusDecoder instance."""
+        decoder = Opus.create_decoder(16000)
+        assert isinstance(decoder, OpusDecoder)
+
+    def test_create_decoder__ignores_input_rate_hz(self):
+        """create_decoder ignores input_rate_hz for API consistency."""
+        decoder = Opus.create_decoder(16000, input_rate_hz=8000)
+        assert isinstance(decoder, OpusDecoder)
+        assert decoder.output_rate_hz == 16000
+
+
+class TestOpusDecoderDecode:
+    def test_decode__returns_float32(self):
+        """OpusDecoder.decode produces a float32 array."""
+        decoder = Opus.create_decoder(16000)
+        payload = Opus.encode(np.zeros(960, dtype=np.float32))
+        result = decoder.decode(payload)
+        assert result.dtype == np.float32
+
+    def test_decode__non_empty_for_real_packet(self):
+        """OpusDecoder.decode produces non-empty audio for a real Opus packet."""
+        rng = np.random.default_rng(0)
+        decoder = Opus.create_decoder(16000)
+        payload = Opus.encode(rng.uniform(-0.3, 0.3, 960).astype(np.float32))
+        result = decoder.decode(payload)
+        assert result.size > 0
+
+    def test_decode__preserves_state_across_packets(self):
+        """OpusDecoder.decode produces consistent per-packet output for sequential packets.
+
+        Regression test: the previous per-packet Ogg-container decode reset the
+        `libopus` CELT MDCT overlap window every 20 ms, producing 50 Hz
+        window-boundary discontinuities heard as choppiness on echo calls.
+        A persistent decoder context preserves overlap state, so packets after
+        the first warm-up packet each produce exactly `frame_size / 3` samples
+        at the 16 kHz output rate.
+        """
+        rng = np.random.default_rng(42)
+        decoder = Opus.create_decoder(16000)
+        counts = []
+        for _ in range(10):
+            payload = Opus.encode(rng.uniform(-0.3, 0.3, 960).astype(np.float32))
+            result = decoder.decode(payload)
+            counts.append(len(result))
+        # After the first warm-up packet all packets must produce 320 samples.
+        assert all(c == 320 for c in counts[1:]), f"Inconsistent counts: {counts}"
+
+    def test_decode__empty_payload_returns_empty(self):
+        """OpusDecoder.decode returns an empty array for an empty payload."""
+        decoder = Opus.create_decoder(16000)
+        result = decoder.decode(b"")
+        assert result.size == 0

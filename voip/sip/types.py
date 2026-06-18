@@ -43,7 +43,7 @@ class SipURI(str):
     stored in header dicts unchanged.  The `parse` classmethod decodes a raw
     SIP URI string into structured fields.  IPv6 addresses in the host part
     must be enclosed in square brackets per [RFC 2732]
-    (e.g. ``sip:alice@[::1]:5060``); the stored `host` is the bare address
+    (e.g. `sip:alice@[::1]:5060`); the stored `host` is the bare address
     without brackets.
 
     [RFC 3261 §19.1]: https://datatracker.ietf.org/doc/html/rfc3261#section-19.1
@@ -194,7 +194,7 @@ class SipURI(str):
     @property
     def transport(self):
         return (
-            self.parameters.get("transport", "TLS").upper()
+            self.parameters.get("transport", "UDP").upper()
             if self.scheme == "sip"
             else "TLS"
         )
@@ -203,8 +203,8 @@ class SipURI(str):
 class CallerID(str):
     """SIP From/To header value with structured access and privacy-safe repr.
 
-    Behaves as a plain ``str`` so it is wire-format compatible and can be
-    stored in header dicts unchanged.  ``repr()`` returns a short anonymized
+    Behaves as a plain `str` so it is wire-format compatible and can be
+    stored in header dicts unchanged.  `repr()` returns a short anonymized
     form that shows only the last four characters of the user part and the
     carrier domain — useful for log messages.
 

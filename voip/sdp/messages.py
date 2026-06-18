@@ -110,8 +110,8 @@ class SessionDescription(ByteSerializableObject):
     def _apply_media_attribute(attr: Attribute, media: MediaDescription) -> bool:
         """Fold a media-level a= attribute into *media* if it is a format-specific attribute.
 
-        Returns ``True`` when the attribute was consumed (``a=rtpmap`` or
-        ``a=fmtp``), ``False`` otherwise so the caller can fall through to the
+        Returns `True` when the attribute was consumed (`a=rtpmap` or
+        `a=fmtp`), `False` otherwise so the caller can fall through to the
         generic attribute list.
         """
         return media.apply_attribute(attr)

@@ -1,5 +1,6 @@
 """Shared fixtures for SIP tests."""
 
+import asyncio
 import dataclasses
 import ipaddress
 
@@ -64,10 +65,13 @@ def fake_transport() -> FakeTransport:
 
 
 @pytest.fixture
-def rtp() -> RealtimeTransportProtocol:
-    """Return a RealtimeTransportProtocol with a pre-set public address."""
+async def rtp() -> RealtimeTransportProtocol:
+    """Return a RealtimeTransportProtocol with a pre-resolved public address."""
     mux = RealtimeTransportProtocol()
-    mux.public_address = NetworkAddress(ipaddress.ip_address("192.0.2.1"), 5004)
+    mux.public_address = asyncio.get_running_loop().create_future()
+    mux.public_address.set_result(
+        NetworkAddress(ipaddress.ip_address("192.0.2.1"), 5004)
+    )
     return mux
 
 

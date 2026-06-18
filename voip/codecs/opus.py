@@ -4,20 +4,27 @@ The [Opus][voip.codecs.opus.Opus] class wraps raw Opus RTP payloads in a
 minimal [Ogg][] container before passing them to PyAV for decoding, and
 encodes float32 PCM via `libopus`.
 
-Requires the ``pyav`` extra: ``pip install voip[pyav]``.
+Requires the `pyav` extra: `pip install voip[pyav]`.
 
 [Ogg]: https://wiki.xiph.org/Ogg
 """
 
+import dataclasses
+import logging
 import os
 import struct
-from typing import ClassVar
+from collections.abc import Iterator
+from typing import ClassVar, cast
 
+import av
+import av.audio.resampler
 import numpy as np
 
 from voip.codecs.av import PyAVCodec
 
-__all__ = ["Opus"]
+logger = logging.getLogger(__name__)
+
+__all__ = ["Opus", "OpusDecoder"]
 
 
 class Opus(PyAVCodec):
@@ -121,8 +128,8 @@ class Opus(PyAVCodec):
             "<8sBBHIhB",
             b"OpusHead",
             1,  # version
-            1,  # channel count (mono)
-            3840,  # pre-skip: 80 ms at 48 kHz (RFC 7587)
+            cls.channels,  # channel count
+            0,  # pre-skip: each RTP payload is decoded as a standalone stream
             cls.sample_rate_hz,
             0,  # output gain
             0,  # channel mapping family (mono/stereo)
@@ -136,7 +143,7 @@ class Opus(PyAVCodec):
             [
                 cls._ogg_page(0x02, 0, serial_number, 0, [opus_head]),  # BOS
                 cls._ogg_page(0x00, 0, serial_number, 1, [opus_tags]),
-                cls._ogg_page(0x04, 0, serial_number, 2, [packet]),
+                cls._ogg_page(0x04, cls.frame_size, serial_number, 2, [packet]),
             ]
         )
 
@@ -152,4 +159,84 @@ class Opus(PyAVCodec):
 
     @classmethod
     def encode(cls, samples: np.ndarray) -> bytes:
-        return cls.encode_pcm(samples, "libopus", cls.sample_rate_hz)
+        return next(cls.packetize(samples), b"")
+
+    @classmethod
+    def packetize(cls, audio: np.ndarray) -> Iterator[bytes]:
+        codec = cast(av.AudioCodecContext, av.CodecContext.create("libopus", "w"))
+        codec.sample_rate = cls.sample_rate_hz
+        codec.format = av.AudioFormat("fltp")
+        codec.layout = av.AudioLayout("mono")
+        codec.open()
+        for i in range(0, len(audio), cls.frame_size):
+            chunk = audio[i : i + cls.frame_size].astype(np.float32)
+            if len(chunk) < cls.frame_size:
+                chunk = np.pad(chunk, (0, cls.frame_size - len(chunk)))
+            frame = av.AudioFrame.from_ndarray(
+                chunk[np.newaxis, :], format="fltp", layout="mono"
+            )
+            frame.sample_rate = cls.sample_rate_hz
+            frame.pts = i
+            yield from (bytes(pkt) for pkt in codec.encode(frame))
+
+    @classmethod
+    def create_decoder(
+        cls, output_rate_hz: int, *, input_rate_hz: int | None = None
+    ) -> OpusDecoder:
+        return OpusDecoder(output_rate_hz)
+
+
+@dataclasses.dataclass(slots=True)
+class OpusDecoder:
+    """Stateful Opus decoder that preserves `libopus` CELT state across packets.
+
+    Creates a single persistent
+    [av.CodecContext](https://pyav.basswood-io.com/docs/stable/api/codec.html#av.codec.context.CodecContext)
+    for the life of the decoder and feeds each incoming RTP payload directly to
+    the same `libopus` context.  This eliminates the per-packet MDCT overlap
+    reset that creates 50 Hz window-boundary discontinuities — heard as
+    choppiness — when each packet is decoded in a fresh context.
+
+    Use [Opus.create_decoder][voip.codecs.opus.Opus.create_decoder] rather
+    than instantiating this class directly.
+
+    Attributes:
+        output_rate_hz: Target PCM sample rate in Hz for decoded audio.
+        codec_context: Persistent `libopus` decoder context shared across all
+            [decode][voip.codecs.opus.OpusDecoder.decode] calls.
+        resampler: Persistent resampler targeting `output_rate_hz` Hz.
+    """
+
+    output_rate_hz: int
+    codec_context: av.AudioCodecContext = dataclasses.field(init=False, repr=False)
+    resampler: av.audio.resampler.AudioResampler = dataclasses.field(
+        init=False, repr=False
+    )
+
+    def __post_init__(self) -> None:
+        self.codec_context = cast(
+            av.AudioCodecContext, av.CodecContext.create("libopus", "r")
+        )
+        self.codec_context.sample_rate = Opus.sample_rate_hz
+        self.codec_context.open()
+        self.resampler = av.audio.resampler.AudioResampler(
+            format="fltp", layout="mono", rate=self.output_rate_hz
+        )
+
+    def decode(self, payload: bytes) -> np.ndarray:
+        """Decode one Opus RTP payload, preserving CELT state from prior packets.
+
+        Args:
+            payload: Raw Opus RTP payload bytes.
+
+        Returns:
+            Float32 mono PCM array at `output_rate_hz` Hz.
+        """
+        return np.concatenate(
+            [
+                resampled.to_ndarray().flatten()
+                for frame in self.codec_context.decode(av.Packet(payload))
+                for resampled in self.resampler.resample(frame)
+            ]
+            or [np.array([], dtype=np.float32)]
+        )

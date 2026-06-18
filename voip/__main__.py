@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
 import asyncio
-import collections.abc
 import dataclasses
-import ipaddress
 import logging
 import socket
-import ssl
 import time
 
 from voip.ai import SayCall
-from voip.rtp import RealtimeTransportProtocol, Session
 from voip.sip import dialog, messages
 from voip.sip.protocol import SessionInitiationProtocol
 from voip.sip.types import SipURI, parse_uri
@@ -37,6 +33,16 @@ def _parse_sip_uri(ctx, param, value) -> SipURI:
         return SipURI.parse(value)
     except ValueError as e:
         raise click.BadParameter(str(e)) from e
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class OutboundDialog(dialog.Dialog):
+    """A dialog that closes the SIP connection when the remote party hangs up."""
+
+    def hangup_received(self) -> None:
+        """Close the SIP connection so the process can exit cleanly."""
+        if self.sip is not None:
+            self.sip.close()
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -135,7 +141,6 @@ def mcp(aor: SipURI, stun_server: NetworkAddress, no_verify_tls: bool, transport
 
     asyncio.run(
         run(
-            lambda: None,
             aor,
             stun_server=stun_server,
             no_verify_tls=no_verify_tls,
@@ -179,114 +184,6 @@ def sip(ctx, aor, stun_server, no_verify_tls):
     )
 
 
-async def _connect_rtp(
-    proxy_addr: NetworkAddress,
-    rtp_stun_server_address: NetworkAddress | None,
-) -> tuple[asyncio.DatagramTransport, RealtimeTransportProtocol]:
-    loop = asyncio.get_running_loop()
-    rtp_bind = (
-        "::" if isinstance(proxy_addr[0], ipaddress.IPv6Address) else "0.0.0.0"  # noqa: S104
-    )
-    return await loop.create_datagram_endpoint(
-        lambda: RealtimeTransportProtocol(stun_server_address=rtp_stun_server_address),
-        local_addr=(rtp_bind, 0),
-    )
-
-
-async def _connect_sip(
-    session_factory,
-    proxy_addr: NetworkAddress,
-    use_tls: bool,
-    no_verify_tls: bool,
-) -> None:
-    loop = asyncio.get_running_loop()
-    ssl_context: ssl.SSLContext | None = None
-    if use_tls:
-        ssl_context = ssl.create_default_context()
-        if no_verify_tls:
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
-    backoff_secs = 1
-    while True:
-        try:
-            _, protocol = await loop.create_connection(
-                session_factory,
-                host=str(proxy_addr[0]),
-                port=proxy_addr[1],
-                ssl=ssl_context,
-            )
-            backoff_secs = 1
-            await protocol.disconnected_event.wait()
-            logger.info("SIP connection closed; reconnecting in %s s", backoff_secs)
-        except (OSError, ssl.SSLError) as exc:
-            logger.warning(
-                "SIP connection failed (%s); retrying in %s s", exc, backoff_secs
-            )
-        await asyncio.sleep(backoff_secs)
-        backoff_secs = min(backoff_secs * 2, 60)
-
-
-async def _connect_sip_once(
-    session_factory: collections.abc.Callable[[], SessionInitiationProtocol],
-    proxy_addr: NetworkAddress,
-    use_tls: bool,
-    no_verify_tls: bool,
-) -> None:
-    loop = asyncio.get_running_loop()
-    ssl_context: ssl.SSLContext | None = None
-    if use_tls:
-        ssl_context = ssl.create_default_context()
-        if no_verify_tls:
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
-    _, protocol = await loop.create_connection(
-        session_factory,
-        host=str(proxy_addr[0]),
-        port=proxy_addr[1],
-        ssl=ssl_context,
-    )
-    await protocol.disconnected_event.wait()
-
-
-def _make_outbound_factory(
-    *,
-    verbose: int,
-    aor: SipURI,
-    rtp_protocol: RealtimeTransportProtocol,
-    target_uri: SipURI,
-    session_class: type[Session],
-    session_kwargs: dict,
-) -> collections.abc.Callable[[], ConsoleMessageProtocol]:
-
-    class OutboundDialog(dialog.Dialog):
-        def hangup_received(self) -> None:
-            if self.sip is not None:
-                self.sip.close()
-
-    @dataclasses.dataclass(kw_only=True, slots=True)
-    class OutboundProtocol(ConsoleMessageProtocol):
-        dial_target: SipURI
-
-        def on_registered(self) -> None:
-            dialog = OutboundDialog(sip=self)
-            asyncio.create_task(
-                dialog.dial(
-                    self.dial_target, session_class=session_class, **session_kwargs
-                )
-            )
-
-    def factory() -> ConsoleMessageProtocol:
-        return OutboundProtocol(
-            verbose=verbose,
-            dialog_class=OutboundDialog,
-            aor=aor,
-            rtp=rtp_protocol,
-            dial_target=target_uri,
-        )
-
-    return factory
-
-
 @sip.command()
 @click.option(
     "--dial",
@@ -308,36 +205,26 @@ def echo(ctx, dial: str | None):
             self.answer(session_class=EchoCall)
 
     async def run():
-        _, rtp_protocol = await _connect_rtp(
-            aor.maddr,
-            obj["stun_server"],
-        )
         if dial is None:
-            await _connect_sip(
-                lambda: ConsoleMessageProtocol(
-                    verbose=obj.get("verbose", 0),
-                    dialog_class=EchoDialog,
-                    aor=aor,
-                    rtp=rtp_protocol,
-                ),
-                aor.maddr,
-                aor.transport == "TLS",
-                obj["no_verify_tls"],
+            await ConsoleMessageProtocol.serve(
+                aor,
+                EchoDialog,
+                verbose=obj.get("verbose", 0),
+                no_verify_tls=obj["no_verify_tls"],
+                stun_server=obj["stun_server"],
             )
         else:
-            await _connect_sip_once(
-                _make_outbound_factory(
-                    verbose=obj.get("verbose", 0),
-                    aor=aor,
-                    rtp_protocol=rtp_protocol,
-                    target_uri=parse_uri(dial, aor),
-                    session_class=EchoCall,
-                    session_kwargs={},
-                ),
-                aor.maddr,
-                aor.transport == "TLS",
-                obj["no_verify_tls"],
+            protocol = await ConsoleMessageProtocol.run(
+                aor,
+                OutboundDialog,
+                verbose=obj.get("verbose", 0),
+                no_verify_tls=obj["no_verify_tls"],
+                stun_server=obj["stun_server"],
             )
+            await OutboundDialog(sip=protocol).dial(
+                parse_uri(dial, aor), session_class=EchoCall
+            )
+            await protocol.disconnected_event.wait()
 
     try:
         asyncio.run(run())
@@ -385,36 +272,28 @@ def transcribe(ctx, stt_model, dial: str | None):
             )
 
     async def run():
-        _, rtp_protocol = await _connect_rtp(
-            aor.maddr,
-            obj["stun_server"],
-        )
         if dial is None:
-            await _connect_sip(
-                lambda: ConsoleMessageProtocol(
-                    verbose=obj.get("verbose", 0),
-                    dialog_class=TranscribeDialog,
-                    aor=aor,
-                    rtp=rtp_protocol,
-                ),
-                aor.maddr,
-                aor.transport == "TLS",
-                obj["no_verify_tls"],
+            await ConsoleMessageProtocol.serve(
+                aor,
+                TranscribeDialog,
+                verbose=obj.get("verbose", 0),
+                no_verify_tls=obj["no_verify_tls"],
+                stun_server=obj["stun_server"],
             )
         else:
-            await _connect_sip_once(
-                _make_outbound_factory(
-                    verbose=obj.get("verbose", 0),
-                    aor=aor,
-                    rtp_protocol=rtp_protocol,
-                    target_uri=parse_uri(dial, aor),
-                    session_class=TranscribingCall,
-                    session_kwargs={"stt_model": WhisperModel(stt_model)},
-                ),
-                aor.maddr,
-                aor.transport == "TLS",
-                obj["no_verify_tls"],
+            protocol = await ConsoleMessageProtocol.run(
+                aor,
+                OutboundDialog,
+                verbose=obj.get("verbose", 0),
+                no_verify_tls=obj["no_verify_tls"],
+                stun_server=obj["stun_server"],
             )
+            await OutboundDialog(sip=protocol).dial(
+                parse_uri(dial, aor),
+                session_class=TranscribingCall,
+                stt_model=WhisperModel(stt_model),
+            )
+            await protocol.disconnected_event.wait()
 
     try:
         asyncio.run(run())
@@ -519,42 +398,32 @@ def agent(
             )
 
     async def run():
-        _, rtp_protocol = await _connect_rtp(
-            aor.maddr,
-            obj["stun_server"],
-        )
         if dial is None:
-            await _connect_sip(
-                lambda: ConsoleMessageProtocol(
-                    verbose=obj.get("verbose", 0),
-                    dialog_class=AgentDialog,
-                    aor=aor,
-                    rtp=rtp_protocol,
-                ),
-                aor.maddr,
-                aor.transport == "TLS",
-                obj["no_verify_tls"],
+            await ConsoleMessageProtocol.serve(
+                aor,
+                AgentDialog,
+                verbose=obj.get("verbose", 0),
+                no_verify_tls=obj["no_verify_tls"],
+                stun_server=obj["stun_server"],
             )
         else:
-            await _connect_sip_once(
-                _make_outbound_factory(
-                    verbose=obj.get("verbose", 0),
-                    aor=aor,
-                    rtp_protocol=rtp_protocol,
-                    target_uri=parse_uri(dial, aor),
-                    session_class=AgentCallWithOutput,
-                    session_kwargs={
-                        "stt_model": WhisperModel(stt_model),
-                        "llm_model": llm_model,
-                        "voice": voice,
-                        "system_prompt": system_prompt,
-                        "salutation": salutation,
-                    },
-                ),
-                aor.maddr,
-                aor.transport == "TLS",
-                obj["no_verify_tls"],
+            protocol = await ConsoleMessageProtocol.run(
+                aor,
+                OutboundDialog,
+                verbose=obj.get("verbose", 0),
+                no_verify_tls=obj["no_verify_tls"],
+                stun_server=obj["stun_server"],
             )
+            await OutboundDialog(sip=protocol).dial(
+                parse_uri(dial, aor),
+                session_class=AgentCallWithOutput,
+                stt_model=WhisperModel(stt_model),
+                llm_model=llm_model,
+                voice=voice,
+                system_prompt=system_prompt,
+                salutation=salutation,
+            )
+            await protocol.disconnected_event.wait()
 
     try:
         asyncio.run(run())
@@ -579,23 +448,20 @@ def say(ctx, target: str, prompt: str, voice: str):
     aor = obj["aor"]
 
     async def run():
-        _, rtp_protocol = await _connect_rtp(
-            aor.maddr,
-            obj["stun_server"],
+        protocol = await ConsoleMessageProtocol.run(
+            aor,
+            OutboundDialog,
+            verbose=obj.get("verbose", 0),
+            no_verify_tls=obj["no_verify_tls"],
+            stun_server=obj["stun_server"],
         )
-        await _connect_sip_once(
-            _make_outbound_factory(
-                verbose=obj.get("verbose", 0),
-                aor=aor,
-                rtp_protocol=rtp_protocol,
-                target_uri=parse_uri(target, aor),
-                session_class=SayCall,
-                session_kwargs={"text": prompt, "voice": voice},
-            ),
-            aor.maddr,
-            aor.transport == "TLS",
-            obj["no_verify_tls"],
+        await OutboundDialog(sip=protocol).dial(
+            parse_uri(target, aor),
+            session_class=SayCall,
+            text=prompt,
+            voice=voice,
         )
+        await protocol.disconnected_event.wait()
 
     try:
         asyncio.run(run())

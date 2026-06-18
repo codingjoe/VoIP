@@ -52,7 +52,7 @@ class Transaction(asyncio.Future):
     """
     Initiated by a request, completed by any number of responses.
 
-    Transactions are awaitable: ``await tx`` suspends until the transaction
+    Transactions are awaitable: `await tx` suspends until the transaction
     reaches its terminal state and resolves to the dialog.
 
     Args:
@@ -214,7 +214,7 @@ class RegistrationTransaction(Transaction):
                 realm = params.get("realm", "")
                 nonce = params.get("nonce", "")
                 opaque = params.get("opaque")
-                algorithm = params.get("algorithm", DigestAlgorithm.SHA_256)
+                algorithm = params.get("algorithm", DigestAlgorithm.MD5)
                 qop_options = params.get("qop", "")
                 qop = (
                     DigestQoP.AUTH.value
@@ -282,7 +282,7 @@ class RegistrationTransaction(Transaction):
         """Parse Digest challenge parameters from a WWW-Authenticate/Proxy-Authenticate header.
 
         Args:
-            header: The raw ``WWW-Authenticate`` or ``Proxy-Authenticate`` header value.
+            header: The raw `WWW-Authenticate` or `Proxy-Authenticate` header value.
 
         Returns:
             A dict mapping parameter names to their unquoted values.
@@ -313,27 +313,27 @@ class RegistrationTransaction(Transaction):
         """Compute a SIP digest response per RFC 3261 §22 and RFC 8760.
 
         RFC 8760 deprecates MD5 and mandates support for SHA-256 and
-        SHA-512-256.  The ``algorithm`` parameter selects the hash function;
-        it defaults to ``SHA-256``.
+        SHA-512-256.  The `algorithm` parameter selects the hash function;
+        it defaults to `SHA-256`.
 
         Args:
             username: SIP username (AOR user part).
             password: SIP password.
             realm: Digest realm from the challenge.
             nonce: Digest nonce from the challenge.
-            method: SIP method string (e.g. ``"REGISTER"``).
+            method: SIP method string (e.g. `"REGISTER"`).
             uri: Request-URI string used in the digest.
-            algorithm: Digest algorithm identifier (default: ``"SHA-256"``).
-            qop: Quality-of-protection value, or ``None``.
-            nc: Nonce count hex string (default: ``"00000001"``).
-            cnonce: Client nonce, required for ``*-sess`` algorithms and ``qop``.
+            algorithm: Digest algorithm identifier (default: `"SHA-256"`).
+            qop: Quality-of-protection value, or `None`.
+            nc: Nonce count hex string (default: `"00000001"`).
+            cnonce: Client nonce, required for `*-sess` algorithms and `qop`.
 
         Returns:
             Hex-encoded digest response string.
 
         Raises:
-            ValueError: If ``algorithm`` is not a recognised `DigestAlgorithm`,
-                or if a ``*-sess`` algorithm is requested without a ``cnonce``.
+            ValueError: If `algorithm` is not a recognised `DigestAlgorithm`,
+                or if a `*-sess` algorithm is requested without a `cnonce`.
         """
         try:
             hash_name = cls.DIGEST_HASH_NAME[algorithm]
@@ -537,7 +537,7 @@ class InviteTransaction(Transaction):
         self.dialog.route_set = list(self.request.headers.getlist("Record-Route"))
         self.sip.register_dialog(self.dialog)
 
-        call_handler = session_class(
+        session = session_class(
             rtp=self.sip.rtp,
             caller=caller,
             media=negotiated_media,
@@ -560,14 +560,13 @@ class InviteTransaction(Transaction):
             )
         else:
             remote_rtp_address = None
-        self.sip.rtp.register_call(remote_rtp_address, call_handler)
+        self.sip.rtp.register_call(remote_rtp_address, session)
 
         if remote_rtp_address is not None:
             self.sip.rtp.send(b"\x00", remote_rtp_address)
 
-        record_route = self.request.headers.get("Record-Route")
         session_id = str(secrets.randbelow(2**32) + 1)
-        rtp_public = self.sip.public_address
+        rtp_public = self.sip.rtp.public_address.result()
         sdp_media_attributes = [Attribute(name="sendrecv")]
         if srtp_session is not None:
             sdp_media_attributes.append(
@@ -580,7 +579,6 @@ class InviteTransaction(Transaction):
                 status_code=SIPStatus.OK,
                 phrase=SIPStatus.OK.phrase,
                 headers={
-                    **({"Record-Route": record_route} if record_route else {}),
                     "Contact": self.sip.contact,
                     "Allow": self.sip.allow_header,
                     "Supported": "replaces",
@@ -632,7 +630,7 @@ class InviteTransaction(Transaction):
 
         Args:
             sip: The SIP session to send from.
-            target: SIP or tel URI of the callee (e.g. ``"sip:+15551234567@carrier.com"`` or ``"tel:+15551234567"``).
+            target: SIP or tel URI of the callee (e.g. `"sip:+15551234567@carrier.com"` or `"tel:+15551234567"`).
             dialog: The dialog to associate with this call.
             session_class: Session implementation that will be initialized for the call.
             **session_kwargs: Additional keyword arguments forwarded to the
@@ -656,7 +654,7 @@ class InviteTransaction(Transaction):
         tx.pending_call_class = session_class
         tx.pending_call_kwargs = session_kwargs
 
-        rtp_public = sip.rtp.public_address
+        rtp_public = sip.rtp.public_address.result()
         session_id = str(secrets.randbelow(2**32) + 1)
         sdp_offer = SessionDescription(
             origin=Origin(
@@ -874,7 +872,7 @@ class ByeTransaction(Transaction):
             {
                 "Via": (
                     f"SIP/2.0/{sip.aor.transport}"
-                    f' {sip.rtp.public_address};oc-algo="loss";oc;rport;branch={tx.branch}'
+                    f' {sip.rtp.public_address.result()};oc-algo="loss";oc;rport;branch={tx.branch}'
                 ),
                 "Max-Forwards": "70",
                 "From": dialog.local_party,

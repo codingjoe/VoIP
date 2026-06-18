@@ -295,10 +295,10 @@ class TestSipURI:
         uri = SipURI.parse("sips:alice@example.com")
         assert uri.transport == "TLS"
 
-    def test_transport__sip_without_parameter_returns_none(self):
-        """Return None for a plain sip: URI without transport parameter."""
+    def test_transport__sip_without_parameter_returns_udp(self):
+        """Return 'UDP' for a plain sip: URI without transport parameter."""
         uri = SipURI.parse("sip:alice@example.com")
-        assert uri.transport == "TLS"
+        assert uri.transport == "UDP"
 
     def test_transport__explicit_parameter(self):
         """Return explicit transport parameter value."""

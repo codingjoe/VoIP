@@ -4,7 +4,7 @@ This module provides [TranscribeCall][voip.ai.TranscribeCall], which transcribes
 with faster-whisper, and [AgentCall][voip.ai.AgentCall], which extends it with an
 Ollama-powered response loop and Pocket TTS voice synthesis.
 
-Requires the ``ai`` extra: ``pip install voip[ai]``.
+Requires the `ai` extra: `pip install voip[ai]`.
 """
 
 import asyncio

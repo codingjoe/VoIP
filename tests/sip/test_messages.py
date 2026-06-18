@@ -290,8 +290,8 @@ class TestResponse:
         parsed = messages.Message.parse(serialized)
         assert parsed.body is None
 
-    def test_from_request__with_dialog_remote_tag(self):
-        """Include dialog remote_tag in To header when dialog has a remote_tag."""
+    def test_from_request__with_dialog_local_tag(self):
+        """Include dialog local_tag in To header when dialog has a remote_tag."""
         data = (
             b"INVITE sip:bob@biloxi.com SIP/2.0\r\n"
             b"Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bKabc\r\n"
@@ -304,7 +304,7 @@ class TestResponse:
         request = messages.Message.parse(data)
         dialog = Dialog(
             uac=SipURI.parse("sip:alice@atlanta.com"),
-            remote_tag="server-tag",
+            local_tag="server-tag",
         )
         response = messages.Response.from_request(
             request, dialog=dialog, status_code=200, phrase="OK"

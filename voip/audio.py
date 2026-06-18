@@ -4,9 +4,9 @@ This module provides [AudioCall][voip.audio.AudioCall], which buffers RTP
 packets, negotiates codecs, and decodes/encodes audio using the codec
 implementations in [voip.codecs][voip.codecs].
 
-Requires the ``audio`` extra: ``pip install voip[audio]``.
+Requires the `audio` extra: `pip install voip[audio]`.
 AI-powered subclasses (Whisper transcription, Ollama agent) live in
-[voip.ai][voip.ai] and require the ``ai`` extra.
+[voip.ai][voip.ai] and require the `ai` extra.
 """
 
 import asyncio
@@ -86,6 +86,14 @@ class AudioCall(Session):
         if fmt.encoding_name is None:
             raise ValueError(f"No encoding name for payload type {fmt.payload_type}")
         self.codec = codecs.get(fmt.encoding_name)
+        if fmt.payload_type != self.codec.payload_type:
+            logger.warning(
+                "negotiated payload type %d differs from codec default %d for %s "
+                "(dynamic PT assignment by remote SDP)",
+                fmt.payload_type,
+                self.codec.payload_type,
+                self.codec.encoding_name,
+            )
         self.payload_decoder = self.codec.create_decoder(
             self.sampling_rate_hz, input_rate_hz=self.sample_rate
         )
@@ -93,7 +101,7 @@ class AudioCall(Session):
     @property
     def payload_type(self) -> int:
         """Negotiated RTP payload type number."""
-        return self.codec.payload_type
+        return self.media.fmt[0].payload_type
 
     @property
     def sample_rate(self) -> int:
@@ -161,13 +169,18 @@ class AudioCall(Session):
         audio = self.decode_payload(packet.payload)
         if audio.size > 0:
             self.audio_received(audio=audio, rms=self.rms(audio))
+        elif packet.payload:
+            logger.warning(
+                "Decoded audio is empty for non-empty RTP payload (size %d bytes)",
+                len(packet.payload),
+            )
 
     def decode_payload(self, payload: bytes) -> np.ndarray:
         return self.payload_decoder.decode(payload)
 
     def next_rtp_packet(self, payload: bytes) -> RTPPacket:
         packet = RTPPacket(
-            payload_type=self.codec.payload_type,
+            payload_type=self.payload_type,
             sequence_number=self.rtp_sequence_number,
             timestamp=self.rtp_timestamp,
             ssrc=self.rtp_ssrc,
@@ -209,7 +222,7 @@ class AudioCall(Session):
         """Handle completion of an outbound audio stream.
 
         Called once the last RTP packet of an outbound stream has been
-        dispatched (i.e. `outbound_handle` transitions to ``None``).
+        dispatched (i.e. `outbound_handle` transitions to `None`).
         The base implementation is a no-op.  Override in subclasses to
         trigger post-audio actions, for example hanging up after
         [SayCall][voip.ai.SayCall] finishes speaking.
@@ -246,18 +259,16 @@ class AudioCall(Session):
         Args:
             audio: Float32 mono PCM at `codec.sample_rate_hz` Hz.
         """
-        remote_addr = next(
-            (addr for addr, call in self.rtp.calls.items() if call is self),
-            None,
-        )
-        match remote_addr:
-            case None:
-                logger.warning(
-                    "No remote RTP address for this call; dropping audio",
-                )
-                return
-            case _:
-                pass
+        if not (
+            remote_addr := next(
+                (addr for addr, call in self.rtp.calls.items() if call is self),
+                None,
+            )
+        ):
+            logger.warning(
+                "No remote RTP address for this call; dropping audio",
+            )
+            return
         async with self.send_audio_lock:
             self.cancel_outbound_audio()
             loop = asyncio.get_running_loop()
