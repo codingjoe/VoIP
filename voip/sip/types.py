@@ -194,7 +194,7 @@ class SipURI(str):
     @property
     def transport(self):
         return (
-            self.parameters.get("transport", "TLS").upper()
+            self.parameters.get("transport", "UDP").upper()
             if self.scheme == "sip"
             else "TLS"
         )

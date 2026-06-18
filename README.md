@@ -30,20 +30,21 @@ Check your ISP's documentation or router for details.
 You will need a SIP AOR (URI), which looks like this:
 
 ```INI
-sip:USER:PASSWORD@SIP_SERVER;transport=TCP
+sip:USER:PASSWORD@SIP_SERVER
 ```
 
 > [!NOTE]
-> This library uses secure defaults (TLS transport on port 5061).
-> However, most SIP servers only support unencrypted connections.
-> Therefore, you will need to provide an explict transport parameter.
+> This library defaults to **UDP transport on port 5060** for `sip:` URIs, which
+> is the most widely supported configuration.  To use TCP or TLS, add an explicit
+> `transport` parameter, e.g. `sip:user@host;transport=TCP` or
+> `sips:user@host` (SIPS always uses TLS on port 5061).
 
 ### CLI
 
 A simple echo call can be started with:
 
 ```console
-uvx 'voip[cli]' sip sips:alice:********@sip.example.com echo
+uvx 'voip[cli]' sip sip:alice:********@sip.example.com echo
 ```
 
 Each command supports an optional `--dial` argument to initiate an
@@ -52,13 +53,13 @@ outbound call instead of waiting for an inbound one.
 To dial a number, say a message, and hang up automatically:
 
 ```console
-uvx 'voip[cli]' sip sips:alice:********@sip.example.com say sip:+15551234567@sip.example.com "Your package has arrived."
+uvx 'voip[cli]' sip sip:alice:********@sip.example.com say sip:+15551234567@sip.example.com "Your package has arrived."
 ```
 
 You can also talk to a local agent (needs [Ollama]):
 
 ```console
-uvx 'voip[cli]' sip sips:alice:********@sip.example.com agent --initial-prompt "Hi, I am looking for a Mr. Ron, first name Mo?"
+uvx 'voip[cli]' sip sip:alice:********@sip.example.com agent --initial-prompt "Hi, I am looking for a Mr. Ron, first name Mo?"
 ```
 
 ### MCP
@@ -96,7 +97,7 @@ Pass it as `session_class` when answering an incoming call:
 ```python
 import asyncio
 import dataclasses
-import ssl
+
 from voip.ai import TranscribeCall
 from voip.sip.protocol import SIP
 from voip.sip.types import SipURI
@@ -126,16 +127,14 @@ async def main():
         RealtimeTransportProtocol,
         local_addr=("0.0.0.0", 0),
     )
-    ssl_context = ssl.create_default_context()
     await loop.create_connection(
         lambda: SIP(
             rtp=rtp_protocol,
-            aor=SipURI.parse("sips:alice:********@example.com"),
+            aor=SipURI.parse("sip:alice:********@example.com"),
             transaction_class=TranscribeInviteTransaction,
         ),
         host="sip.example.com",
-        port=5061,
-        ssl=ssl_context,
+        port=5060,
     )
     await asyncio.Future()
 

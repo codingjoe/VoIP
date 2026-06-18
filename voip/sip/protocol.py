@@ -55,9 +55,9 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
 
     | `aor.transport` | Underlying transport |
     |-----------------|----------------------|
-    | `TLS` (default) | TCP with TLS |
+    | `UDP` (default) | UDP datagram socket |
     | `TCP` | plain TCP |
-    | `UDP` | UDP datagram socket |
+    | `TLS` | TCP with TLS |
 
     Use [`run`][voip.sip.protocol.SessionInitiationProtocol.run] for a single
     outbound connection and [`serve`][voip.sip.protocol.SessionInitiationProtocol.serve]

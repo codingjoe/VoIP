@@ -14,7 +14,6 @@ handle each utterance after a silence gap:
 
 ```python
 import asyncio
-import ssl
 
 from voip.ai import TranscribeCall
 from voip.sip.dialog import Dialog
@@ -40,12 +39,11 @@ async def main():
     loop = asyncio.get_running_loop()
     await loop.create_connection(
         lambda: SIP(
-            aor="sips:alice@example.com",
+            aor="sip:alice@example.com",
             dialog_class=AutoAcceptDialog,
         ),
         host="sip.example.com",
-        port=5061,
-        ssl=ssl.create_default_context(),
+        port=5060,
     )
     await asyncio.Future()
 
@@ -80,7 +78,6 @@ Share both heavy models across calls to avoid reloading them per call:
 
 ```python
 import asyncio
-import ssl
 
 from pocket_tts import TTSModel
 
@@ -112,11 +109,10 @@ async def main():
     loop = asyncio.get_running_loop()
     await loop.create_connection(
         lambda: MySession(
-            aor="sips:alice@example.com", username="alice", password="secret"
+            aor="sip:alice@example.com", username="alice", password="secret"
         ),
         host="sip.example.com",
-        port=5061,
-        ssl=ssl.create_default_context(),
+        port=5060,
     )
     await asyncio.Future()
 
@@ -193,10 +189,10 @@ domain. Pass `outbound_proxy` to route all signalling through it:
 from voip.sip.protocol import SIP
 
 session = SIP(
-    aor="sips:alice@carrier.com",
+    aor="sip:alice@carrier.com",
     username="alice",
     password="secret",
-    outbound_proxy=("proxy.carrier.com", 5061),
+    outbound_proxy=("proxy.carrier.com", 5060),
 )
 ```
 
@@ -209,7 +205,7 @@ discovery round-trip by setting `rtp_stun_server_address=None`:
 from voip.sip.protocol import SIP
 
 session = SIP(
-    aor="sips:alice@example.com",
+    aor="sip:alice@example.com",
     username="alice",
     password="secret",
     rtp_stun_server_address=None,
@@ -230,7 +226,6 @@ the call class when you want to terminate:
 
 ```python
 import asyncio
-import ssl
 
 import numpy as np
 
@@ -263,13 +258,12 @@ async def main():
     loop = asyncio.get_running_loop()
     await loop.create_connection(
         lambda: MySession(
-            aor="sips:alice@example.com",
+            aor="sip:alice@example.com",
             username="alice",
             password="secret",
         ),
         host="sip.example.com",
-        port=5061,
-        ssl=ssl.create_default_context(),
+        port=5060,
     )
     await asyncio.Future()
 
@@ -292,7 +286,6 @@ Create a [Dialog][voip.sip.Dialog] subclass, set it as
 
 ```python
 import asyncio
-import ssl
 
 from voip.audio import AudioCall
 from voip.sip import SipURI
@@ -327,13 +320,12 @@ async def main():
     loop = asyncio.get_running_loop()
     await loop.create_connection(
         lambda: MySession(
-            aor="sips:alice@carrier.com",
+            aor="sip:alice@carrier.com",
             username="alice",
             password="secret",
         ),
         host="sip.carrier.com",
-        port=5061,
-        ssl=ssl.create_default_context(),
+        port=5060,
     )
     await asyncio.Future()
 
