@@ -9,6 +9,7 @@ Requires the ``pyav`` extra: ``pip install voip[pyav]``.
 [Ogg]: https://wiki.xiph.org/Ogg
 """
 
+import dataclasses
 import logging
 import os
 import struct
@@ -16,13 +17,14 @@ from collections.abc import Iterator
 from typing import ClassVar, cast
 
 import av
+import av.audio.resampler
 import numpy as np
 
 from voip.codecs.av import PyAVCodec
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["Opus"]
+__all__ = ["Opus", "OpusDecoder"]
 
 
 class Opus(PyAVCodec):
@@ -212,3 +214,84 @@ class Opus(PyAVCodec):
             frame.sample_rate = cls.sample_rate_hz
             frame.pts = i
             yield from (bytes(pkt) for pkt in codec.encode(frame))
+
+    @classmethod
+    def create_decoder(
+        cls, output_rate_hz: int, *, input_rate_hz: int | None = None
+    ) -> OpusDecoder:
+        """Create a stateful per-call Opus decoder.
+
+        Returns an [OpusDecoder][voip.codecs.opus.OpusDecoder] that preserves
+        the `libopus` decoder's internal MDCT overlap state across consecutive
+        RTP packets.  Without this, each packet is decoded in an independent
+        context, causing CELT window-boundary discontinuities every 20 ms that
+        manifest as audible choppiness in echo and playback scenarios.
+
+        The *input_rate_hz* parameter is accepted for API consistency with
+        [RTPCodec.create_decoder][voip.codecs.base.RTPCodec.create_decoder]
+        but is not used; Opus always decodes at `sample_rate_hz` (48 000 Hz).
+
+        Args:
+            output_rate_hz: Target PCM sample rate in Hz for decoded audio.
+            input_rate_hz: Ignored.  Opus always decodes at `sample_rate_hz`.
+
+        Returns:
+            A new [OpusDecoder][voip.codecs.opus.OpusDecoder] instance.
+        """
+        return OpusDecoder(output_rate_hz)
+
+
+@dataclasses.dataclass(slots=True)
+class OpusDecoder:
+    """Stateful Opus decoder that preserves `libopus` CELT state across packets.
+
+    Creates a single persistent
+    [av.CodecContext](https://pyav.basswood-io.com/docs/stable/api/codec.html#av.codec.context.CodecContext)
+    for the life of the decoder and feeds each incoming RTP payload directly to
+    the same `libopus` context.  This eliminates the per-packet MDCT overlap
+    reset that creates 50 Hz window-boundary discontinuities — heard as
+    choppiness — when each packet is decoded in a fresh context.
+
+    Use [Opus.create_decoder][voip.codecs.opus.Opus.create_decoder] rather
+    than instantiating this class directly.
+
+    Attributes:
+        output_rate_hz: Target PCM sample rate in Hz for decoded audio.
+        codec_context: Persistent `libopus` decoder context shared across all
+            [decode][voip.codecs.opus.OpusDecoder.decode] calls.
+        resampler: Persistent resampler targeting `output_rate_hz` Hz.
+    """
+
+    output_rate_hz: int
+    codec_context: av.AudioCodecContext = dataclasses.field(init=False, repr=False)
+    resampler: av.audio.resampler.AudioResampler = dataclasses.field(
+        init=False, repr=False
+    )
+
+    def __post_init__(self) -> None:
+        self.codec_context = cast(
+            av.AudioCodecContext, av.CodecContext.create("libopus", "r")
+        )
+        self.codec_context.sample_rate = Opus.sample_rate_hz
+        self.codec_context.open()
+        self.resampler = av.audio.resampler.AudioResampler(
+            format="fltp", layout="mono", rate=self.output_rate_hz
+        )
+
+    def decode(self, payload: bytes) -> np.ndarray:
+        """Decode one Opus RTP payload, preserving CELT state from prior packets.
+
+        Args:
+            payload: Raw Opus RTP payload bytes.
+
+        Returns:
+            Float32 mono PCM array at `output_rate_hz` Hz.
+        """
+        return np.concatenate(
+            [
+                resampled.to_ndarray().flatten()
+                for frame in self.codec_context.decode(av.Packet(payload))
+                for resampled in self.resampler.resample(frame)
+            ]
+            or [np.array([], dtype=np.float32)]
+        )
