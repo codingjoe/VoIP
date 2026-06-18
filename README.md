@@ -35,7 +35,7 @@ sip:USER:PASSWORD@SIP_SERVER
 
 > [!NOTE]
 > This library defaults to **UDP transport on port 5060** for `sip:` URIs, which
-> is the most widely supported configuration.  To use TCP or TLS, add an explicit
+> is the most widely supported configuration. To use TCP or TLS, add an explicit
 > `transport` parameter, e.g. `sip:user@host;transport=TCP` or
 > `sips:user@host` (SIPS always uses TLS on port 5061).
 
