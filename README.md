@@ -78,7 +78,7 @@ that exposes tools to make phone calls on your behalf to any MCP client.
         "mcp"
       ],
       "env": {
-        "SIP_AOR": "sip:****:****@example.com:5060?transport=tcp"
+        "SIP_AOR": "sip:number:password@example.com"
       }
     }
   }
