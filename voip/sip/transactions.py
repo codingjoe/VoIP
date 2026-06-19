@@ -695,7 +695,7 @@ class InviteTransaction(Transaction):
                 "To": str(target),
                 "Contact": sip.contact,
                 "Call-ID": dialog.call_id,
-                "Route": f"<sip:{str(rtp_public[0])}:5060;transport=tcp;lr>",
+                "Route": f"<sip:{sip.public_address};transport={sip.aor.transport}>",
                 "Allow": sip.allow_header,
                 "Content-Type": "application/sdp",
             },
