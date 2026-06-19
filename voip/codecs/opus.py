@@ -232,6 +232,8 @@ class OpusDecoder:
         Returns:
             Float32 mono PCM array at `output_rate_hz` Hz.
         """
+        if not payload:
+            return np.array([], dtype=np.float32)
         return np.concatenate(
             [
                 resampled.to_ndarray().flatten()
