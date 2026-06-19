@@ -332,7 +332,7 @@ class RealtimeTransportProtocol(STUNProtocol):
 
         When the matched handler carries an SRTP session, the packet is
         authenticated and decrypted before being forwarded; packets that fail
-        authentication are logged at WARNING level and discarded.  Decryption
+        authentication are logged at WARNING level and discarded. Decryption
         uses the handler's receive session (`srtp_recv`) when set, falling
         back to `srtp` so a single symmetric session still works.
         """
