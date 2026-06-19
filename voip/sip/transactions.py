@@ -141,9 +141,27 @@ class Transaction(asyncio.Future):
         )
 
 
-@dataclasses.dataclass(kw_only=True, slots=True)
-class RegistrationTransaction(Transaction):
-    """SIP REGISTER client transaction [RFC 3261 §10]."""
+class DigestAuthMixin:
+    """Digest authentication for SIP client transactions (RFC 3261 §22, RFC 8760).
+
+    Mix into a [Transaction][voip.sip.transactions.Transaction] subclass whose
+    requests may receive a `401 Unauthorized` or `407 Proxy Authentication
+    Required` challenge.  The mixin supplies the shared digest machinery
+    (challenge parsing, response computation, retry chaining); the host
+    transaction only implements
+    [retry_with_auth][voip.sip.transactions.DigestAuthMixin.retry_with_auth]
+    to rebuild and resend its request carrying the computed credentials.
+
+    A challenge is answered by calling
+    [handle_auth_challenge][voip.sip.transactions.DigestAuthMixin.handle_auth_challenge]
+    from the host's `response_received`.  The caller must drop the original
+    transaction from the registry first (e.g. via `ack` or `drop_transaction`);
+    `handle_auth_challenge` then registers a fresh retry transaction and chains
+    its result back to the original via
+    [forward_result][voip.sip.transactions.DigestAuthMixin.forward_result].
+    """
+
+    __slots__ = ()
 
     #: Map from `DigestAlgorithm` to the hashlib name.
     DIGEST_HASH_NAME: typing.ClassVar[dict[str, str]] = {
@@ -155,120 +173,85 @@ class RegistrationTransaction(Transaction):
         DigestAlgorithm.SHA_512_256_SESS: "sha512_256",
     }
 
-    authorization: str | None = None
-    proxy_authorization: str | None = None
-    cseq: int = 1
+    def digest_uri(self) -> str:
+        """Return the Request-URI used for the digest `uri` parameter.
 
-    def __post_init__(self):
-        super().__post_init__()
-        from .dialog import Dialog
+        Defaults to the request's Request-URI (RFC 3261 §22.1).  Override to
+        customise per transaction.
+        """
+        return str(self.request.uri)  # type: ignore[attr-defined]
 
-        self.dialog = self.dialog or Dialog(uac=self.sip.aor)
-        headers = (
-            self.headers
-            | self.dialog.headers
-            | {
-                "Contact": self.sip.contact,
-                "Expires": "3600",
-                "Max-Forwards": "70",
-                "Supported": "outbound",
-            }
-        )
-        if self.authorization is not None:
-            headers["Authorization"] = self.authorization
-        if self.proxy_authorization is not None:
-            headers["Proxy-Authorization"] = self.proxy_authorization
-        self.request = Request.from_dialog(
-            dialog=self.dialog,
-            method=SIPMethod.REGISTER,
-            uri=types.SipURI(host=self.sip.aor.host, scheme=self.sip.aor.scheme),
-            headers=headers,
-        )
+    def handle_auth_challenge(self, response: Response) -> bool:
+        """Answer a 401/407 by resending the request with digest credentials.
 
-        self.sip.send(self.request)
-
-    def response_received(self, response: Response) -> None:
-        """Handle a REGISTER response including digest auth challenges (RFC 3261 §22).
+        Parses the challenge, computes the digest response, and delegates to
+        [retry_with_auth][voip.sip.transactions.DigestAuthMixin.retry_with_auth]
+        to resend.  The original transaction must already be dropped by the
+        caller.
 
         Args:
-            response: The parsed SIP response.
+            response: The `401`/`407` challenge response.
+
+        Returns:
+            `True` if a retry transaction was started.
         """
-        self.sip.drop_transaction(self)
-        match response.status_code:
-            case SIPStatus.OK:
-                logger.info("Registration successful")
-                self.set_result(self.dialog)
-                return
-            case SIPStatus.UNAUTHORIZED | SIPStatus.PROXY_AUTHENTICATION_REQUIRED:
-                logger.debug(
-                    "Auth challenge received (%s), retrying with credentials",
-                    response.status_code,
-                )
-                is_proxy = (
-                    response.status_code == SIPStatus.PROXY_AUTHENTICATION_REQUIRED
-                )
-                challenge_key = "Proxy-Authenticate" if is_proxy else "WWW-Authenticate"
-                params = self.parse_auth_challenge(
-                    response.headers.get(challenge_key, "")
-                )
-                realm = params.get("realm", "")
-                nonce = params.get("nonce", "")
-                opaque = params.get("opaque")
-                algorithm = params.get("algorithm", DigestAlgorithm.MD5)
-                qop_options = params.get("qop", "")
-                qop = (
-                    DigestQoP.AUTH.value
-                    if DigestQoP.AUTH.value in qop_options.split(",")
-                    else None
-                )
-                nc = "00000001"
-                cnonce = secrets.token_hex(8) if qop else None
-                digest = self.digest_response(
-                    username=self.sip.aor.user,
-                    password=self.sip.aor.password,
-                    realm=realm,
-                    nonce=nonce,
-                    method=SIPMethod.REGISTER,
-                    uri=self.sip.aor.host,
-                    algorithm=algorithm,
-                    qop=qop,
-                    nc=nc,
-                    cnonce=cnonce,
-                )
-                auth_value = (
-                    f'Digest username="{self.sip.aor.user}", realm="{realm}", '
-                    f'nonce="{nonce}", uri="{self.sip.aor.host}", '
-                    f'response="{digest}", algorithm="{algorithm}"'
-                )
-                if qop:
-                    auth_value += f', qop={qop}, nc={nc}, cnonce="{cnonce}"'
-                if opaque:
-                    auth_value += f', opaque="{opaque}"'
-                if is_proxy:
-                    tx = RegistrationTransaction(
-                        sip=self.sip,
-                        dialog=self.dialog,
-                        cseq=2,
-                        method=self.method,
-                        proxy_authorization=auth_value,
-                    )
-                else:
-                    tx = RegistrationTransaction(
-                        sip=self.sip,
-                        dialog=self.dialog,
-                        cseq=2,
-                        method=self.method,
-                        authorization=auth_value,
-                    )
-                self.sip.register_transaction(tx)
-                tx.add_done_callback(self.forward_result)
-            case _:
-                raise NotImplementedError(
-                    f"Unknown SIP status code: {response.status_code}"
-                )
+        is_proxy = response.status_code == SIPStatus.PROXY_AUTHENTICATION_REQUIRED
+        challenge_key = "Proxy-Authenticate" if is_proxy else "WWW-Authenticate"
+        params = self.parse_auth_challenge(response.headers.get(challenge_key, ""))
+        realm = params.get("realm", "")
+        nonce = params.get("nonce", "")
+        opaque = params.get("opaque")
+        algorithm = params.get("algorithm", DigestAlgorithm.MD5)
+        qop_options = params.get("qop", "")
+        qop = (
+            DigestQoP.AUTH.value
+            if DigestQoP.AUTH.value in qop_options.split(",")
+            else None
+        )
+        nc = "00000001"
+        cnonce = secrets.token_hex(8) if qop else None
+        uri = self.digest_uri()
+        digest = self.digest_response(
+            username=self.sip.aor.user,  # type: ignore[attr-defined]
+            password=self.sip.aor.password,  # type: ignore[attr-defined]
+            realm=realm,
+            nonce=nonce,
+            method=self.method,  # type: ignore[attr-defined]
+            uri=uri,
+            algorithm=algorithm,
+            qop=qop,
+            nc=nc,
+            cnonce=cnonce,
+        )
+        auth_value = (
+            f'Digest username="{self.sip.aor.user}", realm="{realm}", '  # type: ignore[attr-defined]
+            f'nonce="{nonce}", uri="{uri}", '
+            f'response="{digest}", algorithm="{algorithm}"'
+        )
+        if qop:
+            auth_value += f', qop={qop}, nc={nc}, cnonce="{cnonce}"'
+        if opaque:
+            auth_value += f', opaque="{opaque}"'
+        return self.retry_with_auth(response, auth_value, is_proxy)
+
+    def retry_with_auth(
+        self, response: Response, auth_value: str, is_proxy: bool
+    ) -> bool:
+        """Rebuild and resend this request carrying *auth_value*.
+
+        Override in host transactions: construct a new transaction with a fresh
+        branch and incremented CSeq, attach `auth_value` as `Authorization`
+        (or `Proxy-Authorization` when *is_proxy*), register it, and chain its
+        result back to the original via
+        [forward_result][voip.sip.transactions.DigestAuthMixin.forward_result].
+
+        Returns:
+            `True` if a retry was started.
+        """
+        raise NotImplementedError
 
     def forward_result(self, fut: asyncio.Future) -> None:
-        """Forward the result of *fut* to this transaction (used for auth retry chaining)."""
+        """Forward the result of *fut* to this transaction (auth retry chaining)."""
         if not self.done():
             if fut.cancelled():
                 self.cancel()
@@ -279,10 +262,10 @@ class RegistrationTransaction(Transaction):
 
     @staticmethod
     def parse_auth_challenge(header: str) -> dict[str, str]:
-        """Parse Digest challenge parameters from a WWW-Authenticate/Proxy-Authenticate header.
+        """Parse Digest challenge parameters from a WWW/Proxy-Authenticate header.
 
         Args:
-            header: The raw `WWW-Authenticate` or `Proxy-Authenticate` header value.
+            header: The raw `WWW-Authenticate` or `Proxy-Authenticate` value.
 
         Returns:
             A dict mapping parameter names to their unquoted values.
@@ -356,7 +339,86 @@ class RegistrationTransaction(Transaction):
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
-class InviteTransaction(Transaction):
+class RegistrationTransaction(DigestAuthMixin, Transaction):
+    """SIP REGISTER client transaction [RFC 3261 §10]."""
+
+    authorization: str | None = None
+    proxy_authorization: str | None = None
+    cseq: int = 1
+
+    def __post_init__(self):
+        super().__post_init__()
+        from .dialog import Dialog
+
+        self.dialog = self.dialog or Dialog(uac=self.sip.aor)
+        headers = (
+            self.headers
+            | self.dialog.headers
+            | {
+                "Contact": self.sip.contact,
+                "Expires": "3600",
+                "Max-Forwards": "70",
+                "Supported": "outbound",
+            }
+        )
+        if self.authorization is not None:
+            headers["Authorization"] = self.authorization
+        if self.proxy_authorization is not None:
+            headers["Proxy-Authorization"] = self.proxy_authorization
+        self.request = Request.from_dialog(
+            dialog=self.dialog,
+            method=SIPMethod.REGISTER,
+            uri=types.SipURI(host=self.sip.aor.host, scheme=self.sip.aor.scheme),
+            headers=headers,
+        )
+
+        self.sip.send(self.request)
+
+    def response_received(self, response: Response) -> None:
+        """Handle a REGISTER response including digest auth challenges (RFC 3261 §22).
+
+        Args:
+            response: The parsed SIP response.
+        """
+        self.sip.drop_transaction(self)
+        match response.status_code:
+            case SIPStatus.OK:
+                logger.info("Registration successful")
+                self.set_result(self.dialog)
+            case SIPStatus.UNAUTHORIZED | SIPStatus.PROXY_AUTHENTICATION_REQUIRED:
+                logger.debug(
+                    "Auth challenge received (%s), retrying with credentials",
+                    response.status_code,
+                )
+                self.handle_auth_challenge(response)
+            case _:
+                raise NotImplementedError(
+                    f"Unknown SIP status code: {response.status_code}"
+                )
+
+    def retry_with_auth(
+        self, response: Response, auth_value: str, is_proxy: bool
+    ) -> bool:
+        """Resend the REGISTER with credentials (RFC 3261 §22)."""
+        tx = RegistrationTransaction(
+            sip=self.sip,
+            dialog=self.dialog,
+            cseq=self.cseq + 1,
+            method=self.method,
+            proxy_authorization=auth_value if is_proxy else None,
+            authorization=None if is_proxy else auth_value,
+        )
+        self.sip.register_transaction(tx)
+        tx.add_done_callback(self.forward_result)
+        return True
+
+    def digest_uri(self) -> str:
+        """Use the registrar host as the digest URI for REGISTER."""
+        return str(self.sip.aor.host)
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class InviteTransaction(DigestAuthMixin, Transaction):
     """SIP INVITE transaction for inbound and outbound calls [RFC 3261 §17].
 
     Handles the SIP signaling state machine for a single INVITE dialog.  The
@@ -653,54 +715,7 @@ class InviteTransaction(Transaction):
         )
         tx.pending_call_class = session_class
         tx.pending_call_kwargs = session_kwargs
-
-        rtp_public = sip.rtp.public_address.result()
-        session_id = str(secrets.randbelow(2**32) + 1)
-        sdp_offer = SessionDescription(
-            origin=Origin(
-                username="-",
-                sess_id=session_id,
-                sess_version=session_id,
-                nettype="IN",
-                addrtype=(
-                    "IP6" if isinstance(rtp_public[0], ipaddress.IPv6Address) else "IP4"
-                ),
-                unicast_address=str(rtp_public[0]),
-            ),
-            timings=[Timing(start_time=0, stop_time=0)],
-            connection=ConnectionData(
-                nettype="IN",
-                addrtype=(
-                    "IP6" if isinstance(rtp_public[0], ipaddress.IPv6Address) else "IP4"
-                ),
-                connection_address=str(rtp_public[0]),
-            ),
-            media=[
-                MediaDescription(
-                    media="audio",
-                    port=rtp_public[1],
-                    proto="RTP/AVP",
-                    fmt=session_class.sdp_formats(),
-                    attributes=[Attribute(name="sendrecv")],
-                )
-            ],
-        )
-        tx.request = Request(
-            method=SIPMethod.INVITE,
-            uri=target,
-            headers={
-                "Max-Forwards": "70",
-                **tx.headers,
-                "From": dialog.from_header,
-                "To": str(target),
-                "Contact": sip.contact,
-                "Call-ID": dialog.call_id,
-                "Route": f"<sip:{sip.public_address};transport={sip.aor.transport}>",
-                "Allow": sip.allow_header,
-                "Content-Type": "application/sdp",
-            },
-            body=sdp_offer,
-        )
+        tx.request = tx._build_invite_request(target)
         sip.register_transaction(tx)
         sip.send(tx.request)
         try:
@@ -709,8 +724,95 @@ class InviteTransaction(Transaction):
             sip.drop_transaction(tx)
             raise
 
+    def _build_invite_request(self, target: types.SipURI) -> messages.Request:
+        """Build the outbound INVITE request (with SDP offer) for *target*.
+
+        Factored out of [send][voip.sip.transactions.InviteTransaction.send]
+        so that an auth retry can rebuild the request with a fresh branch and
+        incremented CSeq via [retry_with_auth][voip.sip.transactions.InviteTransaction.retry_with_auth].
+        """
+        rtp_public = self.sip.rtp.public_address.result()
+        session_id = str(secrets.randbelow(2**32) + 1)
+        addrtype = "IP6" if isinstance(rtp_public[0], ipaddress.IPv6Address) else "IP4"
+        sdp_offer = SessionDescription(
+            origin=Origin(
+                username="-",
+                sess_id=session_id,
+                sess_version=session_id,
+                nettype="IN",
+                addrtype=addrtype,
+                unicast_address=str(rtp_public[0]),
+            ),
+            timings=[Timing(start_time=0, stop_time=0)],
+            connection=ConnectionData(
+                nettype="IN",
+                addrtype=addrtype,
+                connection_address=str(rtp_public[0]),
+            ),
+            media=[
+                MediaDescription(
+                    media="audio",
+                    port=rtp_public[1],
+                    proto="RTP/AVP",
+                    fmt=self.pending_call_class.sdp_formats(),
+                    attributes=[Attribute(name="sendrecv")],
+                )
+            ],
+        )
+        return Request(
+            method=SIPMethod.INVITE,
+            uri=target,
+            headers={
+                "Max-Forwards": "70",
+                **self.headers,
+                "From": self.dialog.from_header,
+                "To": str(target),
+                "Contact": self.sip.contact,
+                "Call-ID": self.dialog.call_id,
+                # "Route": f"<sip:{self.sip.public_address};transport={self.sip.aor.transport}>",
+                "Allow": self.sip.allow_header,
+                "Content-Type": "application/sdp",
+            },
+            body=sdp_offer,
+        )
+
+    def retry_with_auth(
+        self, response: Response, auth_value: str, is_proxy: bool
+    ) -> bool:
+        """Resend the INVITE with credentials after a 401/407 challenge.
+
+        The original transaction is dropped by the caller (via `ack`); this
+        builds a fresh INVITE (new branch, incremented CSeq) carrying the
+        computed credentials and chains its result back to the original.
+        """
+        tx = type(self)(
+            sip=self.sip,
+            method=SIPMethod.INVITE,
+            cseq=self.cseq + 1,
+            dialog=self.dialog,
+        )
+        tx.pending_call_class = self.pending_call_class
+        tx.pending_call_kwargs = self.pending_call_kwargs
+        tx.request = tx._build_invite_request(self.request.uri)
+        header = "Proxy-Authorization" if is_proxy else "Authorization"
+        tx.request.headers[header] = auth_value
+        self.sip.register_transaction(tx)
+        self.sip.send(tx.request)
+        tx.add_done_callback(self.forward_result)
+        return True
+
     def response_received(self, response: Response) -> None:
         """Dispatch responses to an outbound INVITE."""
+        if response.status_code in (
+            SIPStatus.UNAUTHORIZED,
+            SIPStatus.PROXY_AUTHENTICATION_REQUIRED,
+        ):
+            # Acknowledge the challenge (RFC 3261 §13.2.2.4); ack() drops this
+            # transaction, then retry_with_auth registers a fresh INVITE with
+            # credentials and chains its result back here via forward_result.
+            self.ack(response)
+            self.handle_auth_challenge(response)
+            return
         match response.status_code // 100:
             case 1:  # trying/ringing
                 return
