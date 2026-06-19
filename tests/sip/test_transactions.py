@@ -369,28 +369,6 @@ class TestInviteSrtp:
         sip.response_received(_make_srtp_ok_response(invite, SRTPSession.generate()))
         await asyncio.wait_for(send_task, timeout=1)
 
-    async def test_outbound_prefer_srtp_false_offers_plain_rtp(self, sip):
-        """`prefer_srtp=False` offers `RTP/AVP` with no `a=crypto:`."""
-        target = SipURI.parse("sip:+15551234567@example.com:5060")
-        dialog = Dialog(uac=sip.aor, sip=sip)
-        send_task = asyncio.create_task(
-            InviteTransaction.send(
-                sip=sip,
-                target=target,
-                dialog=dialog,
-                session_class=CallFixture,
-                prefer_srtp=False,
-            )
-        )
-        await asyncio.sleep(0)
-        invite = _last_request(sip)
-        media = invite.body.media[0]
-        assert media.proto == "RTP/AVP"
-        assert not any(a.name == "crypto" for a in media.attributes)
-
-        sip.response_received(_make_ok_response(invite))
-        await asyncio.wait_for(send_task, timeout=1)
-
     async def test_outbound_srtp_answer_installs_send_and_recv_sessions(self, sip):
         """A 200 OK with `RTP/SAVP` + remote crypto installs send and recv sessions."""
         target = SipURI.parse("sip:+15551234567@example.com:5060")

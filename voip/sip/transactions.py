@@ -446,8 +446,8 @@ class InviteTransaction(DigestAuthMixin, Transaction):
         default_factory=dict, repr=False
     )
     #: Offer SRTP (`RTP/SAVP` + SDES `a=crypto:`) in the outbound INVITE and
-    #: fall back to plain RTP on rejection.  Flipped to `False` for the RTP
-    #: fallback retry and by `prefer_srtp=False` on the public API.
+    #: fall back to plain RTP on rejection.  Defaults to `True`; flipped to
+    #: `False` internally by the RTP fallback retry.
     offer_srtp: bool = True
     #: SRTP send session generated for the current offer; reused as the
     #: call's send `srtp` once the answer confirms SRTP.  `None` for RTP.
@@ -714,19 +714,18 @@ class InviteTransaction(DigestAuthMixin, Transaction):
         target: types.SipURI,
         dialog: Dialog,
         session_class: type[Session],
-        prefer_srtp: bool = True,
         **session_kwargs: typing.Any,
     ) -> Dialog:
         """Initiate an outgoing call to *target* [RFC 3261 §13.1].
+
+        Offers SRTP (`RTP/SAVP` + SDES `a=crypto:`) and falls back to plain RTP
+        if the far end rejects it (488/606/415) or answers with `RTP/AVP`.
 
         Args:
             sip: The SIP session to send from.
             target: SIP or tel URI of the callee (e.g. `"sip:+15551234567@carrier.com"` or `"tel:+15551234567"`).
             dialog: The dialog to associate with this call.
             session_class: Session implementation that will be initialized for the call.
-            prefer_srtp: Offer SRTP (`RTP/SAVP` + SDES `a=crypto:`) and fall
-                back to plain RTP if the far end rejects it.  Defaults to
-                `True`; pass `False` to offer plain RTP only.
             **session_kwargs: Additional keyword arguments forwarded to the
                 call class constructor.
 
@@ -747,7 +746,6 @@ class InviteTransaction(DigestAuthMixin, Transaction):
         )
         tx.pending_call_class = session_class
         tx.pending_call_kwargs = session_kwargs
-        tx.offer_srtp = prefer_srtp
         tx.request = tx._build_invite_request(target)
         sip.register_transaction(tx)
         sip.send(tx.request)
