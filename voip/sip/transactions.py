@@ -769,7 +769,6 @@ class InviteTransaction(DigestAuthMixin, Transaction):
                 "To": str(target),
                 "Contact": self.sip.contact,
                 "Call-ID": self.dialog.call_id,
-                # "Route": f"<sip:{self.sip.public_address};transport={self.sip.aor.transport}>",
                 "Allow": self.sip.allow_header,
                 "Content-Type": "application/sdp",
             },
@@ -885,35 +884,59 @@ class InviteTransaction(DigestAuthMixin, Transaction):
                 self.sip.rtp.send(b"\x00", remote_rtp_address)
 
     def ack(self, response: Response) -> None:
-        """Send an ACK after receiving a terminal response.
+        """Send an ACK after a terminal response to the INVITE.
 
-        For 2xx responses, establishes the dialog and registers it with the
-        protocol.
+        For 2xx responses the dialog is established (remote tag, parties, route
+        set, remote target) and registered with the protocol; the ACK opens a
+        fresh transaction with a new Via branch and is routed along the dialog
+        route set (reversed `Record-Route`, RFC 3261 §12.1.2).
+
+        For non-2xx final responses the ACK is the transactional ACK of the
+        INVITE client transaction (RFC 3261 §17.1.1.3): it reuses the INVITE's
+        Via header (same branch) and mirrors the INVITE's `Route` header
+        values and Request-URI, so the proxy holding the INVITE server
+        transaction matches and absorbs it (stopping retransmissions) rather
+        than loose-routing it onward.  It must NOT derive routes from the
+        response's `Record-Route` — that forms a dialog route set only on 2xx.
         """
-        if response.status_code // 100 == 2:
+        if is_success := response.status_code // 100 == 2:
+            # RFC 3261 §12.1.2: UAC dialog route set is Record-Route reversed.
+            routes = list(reversed(list(response.headers.getlist("Record-Route"))))
             self.dialog.remote_tag = response.remote_tag
             self.dialog.local_party = str(response.headers["From"])
             self.dialog.remote_party = str(response.headers["To"])
             self.dialog.outbound_cseq = self.cseq + 1
-            # RFC 3261 §12.1.2: UAC route set is Record-Route in reverse order.
-            self.dialog.route_set = list(
-                reversed(list(response.headers.getlist("Record-Route")))
+            self.dialog.route_set = routes
+            self.dialog.remote_contact = response.headers.get("Contact") or str(
+                self.request.uri
             )
             self.sip.register_dialog(self.dialog)
+        else:
+            # RFC 3261 §17.1.1.3: transactional ACK mirrors the INVITE's Route.
+            routes = list(self.request.headers.getlist("Route"))
         self.sip.drop_transaction(self)
 
-        ack_branch = f"{Transaction.branch_prefix}-{uuid.uuid4()}"
+        # Non-2xx ACK: same Request-URI as the INVITE.  2xx ACK: the remote
+        # target (Contact), falling back to the INVITE Request-URI.
         contact = response.headers.get("Contact")
         ack_uri = (
-            contact.split(";")[0].strip("<>") if contact else str(self.request.uri)
+            contact.split(";")[0].strip("<>")
+            if (is_success and contact)
+            else str(self.request.uri)
         )
-        self.dialog.remote_contact = ack_uri
+        if is_success:
+            via = (
+                f"SIP/2.0/{self.sip.aor.transport}"
+                f" {self.sip.public_address};rport"
+                f";branch={Transaction.branch_prefix}-{uuid.uuid4()}"
+            )
+        else:
+            # Reuse the INVITE's Via (same branch + rport) for transaction
+            # matching at the proxy (RFC 3261 §17.1.1.3).
+            via = self.request.headers.getlist("Via")[0]
         ack_headers: SIPHeaderDict = SIPHeaderDict(
             {
-                "Via": (
-                    f"SIP/2.0/{self.sip.aor.transport}"
-                    f" {self.sip.public_address};rport;branch={ack_branch};alias"
-                ),
+                "Via": via,
                 "Max-Forwards": "70",
                 "From": response.headers["From"],
                 "To": response.headers["To"],
@@ -922,7 +945,7 @@ class InviteTransaction(DigestAuthMixin, Transaction):
                 "Content-Length": "0",
             }
         )
-        for route in self.dialog.route_set:
+        for route in routes:
             ack_headers.add("Route", route)
         self.sip.send(
             Request(

@@ -71,6 +71,114 @@ async def _complete_invite(sip: SessionInitiationProtocol, send_task: asyncio.Ta
     await asyncio.wait_for(send_task, timeout=1)
 
 
+def _last_ack(sip: SessionInitiationProtocol) -> messages.Request:
+    """Return the most recently sent ACK."""
+    for raw in reversed(sip.transport.sent):  # type: ignore[attr-defined]
+        request = messages.Message.parse(raw)
+        if isinstance(request, messages.Request) and request.method == SIPMethod.ACK:
+            return request
+    raise AssertionError("no ACK was sent")
+
+
+class TestInviteAck:
+    """The ACK terminating an outbound INVITE must be well-formed."""
+
+    async def test_ack_for_non_2xx_reuses_invite_via_and_mirrors_route(self, sip):
+        """A non-2xx final ACK reuses the INVITE Via/branch and mirrors its Route.
+
+        Per RFC 3261 §17.1.1.3 the transactional ACK must mirror the INVITE's
+        Route header values (not the response's Record-Route) so the proxy
+        holding the INVITE server transaction matches it by branch and absorbs
+        it, rather than loose-routing it onward and retransmitting.
+        """
+        target = SipURI.parse("sip:+15551234567@example.com:5060")
+        dialog = Dialog(uac=sip.aor, sip=sip)
+        send_task = asyncio.create_task(
+            InviteTransaction.send(
+                sip=sip, target=target, dialog=dialog, session_class=CallFixture
+            )
+        )
+        await asyncio.sleep(0)
+        invite = _last_request(sip)
+        invite_via = invite.headers.getlist("Via")[0]
+
+        decline = messages.Message.parse(
+            (
+                "SIP/2.0 603 Decline\r\n"
+                f"Via: {invite_via}\r\n"
+                f"From: {invite.headers['From']}\r\n"
+                f"To: {invite.headers['To']};tag=decline-tag\r\n"
+                f"Call-ID: {invite.headers['Call-ID']}\r\n"
+                f"CSeq: {invite.headers['CSeq']}\r\n"
+                "Record-Route: <sip:proxy-a.example;lr>\r\n"
+                "Record-Route: <sip:proxy-b.example;lr>\r\n"
+                "Content-Length: 0\r\n"
+                "\r\n"
+            ).encode()
+        )
+        sip.response_received(decline)
+
+        ack = _last_ack(sip)
+        # Reuses the INVITE's Via (same branch + rport); no non-standard `alias`.
+        assert ack.headers.getlist("Via")[0] == invite_via
+        assert "alias" not in ack.headers.getlist("Via")[0]
+        # The INVITE carried no Route, so the transactional ACK carries none.
+        # Record-Route in the response must NOT leak into the ACK here.
+        assert invite.headers.getlist("Route") == []
+        assert ack.headers.getlist("Route") == []
+        # Non-2xx ACK mirrors the INVITE Request-URI, not a Contact.
+        assert str(ack.uri) == str(target)
+        # The original transaction completes without establishing a dialog.
+        await asyncio.wait_for(send_task, timeout=1)
+
+    async def test_ack_for_2xx_carries_dialog_route_set(self, sip):
+        """A 2xx ACK opens a fresh transaction and follows the dialog route set.
+
+        On 2xx the route set is the reversed Record-Route (RFC 3261 §12.1.2)
+        and the Request-URI is the Contact.
+        """
+        target = SipURI.parse("sip:+15551234567@example.com:5060")
+        dialog = Dialog(uac=sip.aor, sip=sip)
+        send_task = asyncio.create_task(
+            InviteTransaction.send(
+                sip=sip, target=target, dialog=dialog, session_class=CallFixture
+            )
+        )
+        await asyncio.sleep(0)
+        invite = _last_request(sip)
+        invite_via = invite.headers.getlist("Via")[0]
+
+        ok = messages.Message.parse(
+            (
+                "SIP/2.0 200 OK\r\n"
+                f"Via: {invite_via}\r\n"
+                f"From: {invite.headers['From']}\r\n"
+                f"To: {invite.headers['To']};tag=ok-tag\r\n"
+                f"Call-ID: {invite.headers['Call-ID']}\r\n"
+                f"CSeq: {invite.headers['CSeq']}\r\n"
+                "Record-Route: <sip:proxy-a.example;lr>\r\n"
+                "Record-Route: <sip:proxy-b.example;lr>\r\n"
+                "Contact: <sip:bob@192.0.2.1:5060>\r\n"
+                "Content-Type: application/sdp\r\n"
+                "\r\n"
+            ).encode()
+            + _OK_SDP
+        )
+        sip.response_received(ok)
+
+        ack = _last_ack(sip)
+        # 2xx ACK uses a fresh Via branch (different from the INVITE's).
+        assert ack.headers.getlist("Via")[0] != invite_via
+        # Dialog route set is the reversed Record-Route (first hop first).
+        assert ack.headers.getlist("Route") == [
+            "<sip:proxy-b.example;lr>",
+            "<sip:proxy-a.example;lr>",
+        ]
+        # 2xx ACK targets the Contact, not the INVITE Request-URI.
+        assert str(ack.uri) == "sip:bob@192.0.2.1:5060"
+        await asyncio.wait_for(send_task, timeout=1)
+
+
 class TestInviteAuth:
     """Outbound INVITE must answer 401/407 challenges with credentials."""
 
