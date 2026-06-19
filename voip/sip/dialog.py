@@ -181,6 +181,7 @@ class Dialog:
         target: SipURI,
         *,
         session_class: type[Session],
+        prefer_srtp: bool = True,
         **session_kwargs: typing.Any,
     ) -> None:
         """
@@ -189,6 +190,9 @@ class Dialog:
         Args:
             target: SIP or tel URI of the remote party (e.g. `"sip:+15551234567@carrier.com"` or `"tel:+15551234567"`).
             session_class: Session subclass to create for this call.
+            prefer_srtp: Offer SRTP (`RTP/SAVP` + SDES) and fall back to plain
+                RTP if the far end rejects it.  Defaults to `True`; pass
+                `False` to offer plain RTP only.
             **session_kwargs: Extra keyword arguments forwarded to `session_class`.
 
         [RFC 3261 §13.1]: https://datatracker.ietf.org/doc/html/rfc3261#section-13.1
@@ -200,6 +204,7 @@ class Dialog:
             target=target,
             dialog=self,
             session_class=session_class,
+            prefer_srtp=prefer_srtp,
             **session_kwargs,
         )
 

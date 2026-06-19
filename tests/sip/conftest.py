@@ -49,11 +49,11 @@ class CallFixture(Session):
 
     @classmethod
     def negotiate_codec(cls, remote_media: MediaDescription) -> MediaDescription:
-        """Return the first format from the offered media."""
+        """Return the first format from the offered media, mirroring its proto."""
         return MediaDescription(
             media="audio",
             port=5004,
-            proto="RTP/AVP",
+            proto=remote_media.proto,
             fmt=remote_media.fmt[:1] or [RTPPayloadFormat.from_pt(0)],
         )
 

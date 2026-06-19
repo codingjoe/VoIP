@@ -43,7 +43,7 @@ logger = logging.getLogger("voip.sip")
 __all__ = [
     "ByeTransaction",
     "InviteTransaction",
-    "RegistrationTransaction",
+    "RegisterTransaction",
 ]
 
 
@@ -339,7 +339,7 @@ class DigestAuthMixin:
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
-class RegistrationTransaction(DigestAuthMixin, Transaction):
+class RegisterTransaction(DigestAuthMixin, Transaction):
     """SIP REGISTER client transaction [RFC 3261 §10]."""
 
     authorization: str | None = None
@@ -392,15 +392,13 @@ class RegistrationTransaction(DigestAuthMixin, Transaction):
                 )
                 self.handle_auth_challenge(response)
             case _:
-                raise NotImplementedError(
-                    f"Unknown SIP status code: {response.status_code}"
-                )
+                raise NotImplementedError(f"Unexpected SIP response: {response!r}")
 
     def retry_with_auth(
         self, response: Response, auth_value: str, is_proxy: bool
     ) -> bool:
         """Resend the REGISTER with credentials (RFC 3261 §22)."""
-        tx = RegistrationTransaction(
+        tx = RegisterTransaction(
             sip=self.sip,
             dialog=self.dialog,
             cseq=self.cseq + 1,
@@ -447,6 +445,13 @@ class InviteTransaction(DigestAuthMixin, Transaction):
     pending_call_kwargs: dict[str, typing.Any] = dataclasses.field(
         default_factory=dict, repr=False
     )
+    #: Offer SRTP (`RTP/SAVP` + SDES `a=crypto:`) in the outbound INVITE and
+    #: fall back to plain RTP on rejection.  Flipped to `False` for the RTP
+    #: fallback retry and by `prefer_srtp=False` on the public API.
+    offer_srtp: bool = True
+    #: SRTP send session generated for the current offer; reused as the
+    #: call's send `srtp` once the answer confirms SRTP.  `None` for RTP.
+    srtp_offer: SRTPSession | None = dataclasses.field(default=None, repr=False)
 
     @classmethod
     async def receive(
@@ -589,8 +594,29 @@ class InviteTransaction(DigestAuthMixin, Transaction):
                 fmt=[RTPPayloadFormat.from_pt(0)],
             )
 
-        use_srtp = negotiated_media.proto == "RTP/SAVP"
-        srtp_session = SRTPSession.generate() if use_srtp else None
+        # SRTP when the offer is `RTP/SAVP` (or `SAVPF`) and carries an SDES
+        # `a=crypto:` key.  We generate a fresh send session (its key goes into
+        # our 200-OK `a=crypto:`) and parse the offer's crypto to decrypt the
+        # caller's media — SDES keys each direction independently (RFC 4568).
+        is_srtp = negotiated_media.proto.startswith("RTP/SAVP")
+        srtp_send = SRTPSession.generate() if is_srtp else None
+        offer_crypto = (
+            next(
+                (
+                    attr
+                    for attr in remote_audio.attributes
+                    if attr.name == "crypto" and attr.value
+                ),
+                None,
+            )
+            if remote_audio is not None
+            else None
+        )
+        srtp_recv = (
+            SRTPSession.from_sdes(offer_crypto.value)
+            if is_srtp and offer_crypto is not None
+            else None
+        )
 
         self.dialog.local_party = (
             f"{self.request.headers['To']};tag={self.dialog.local_tag}"
@@ -603,10 +629,12 @@ class InviteTransaction(DigestAuthMixin, Transaction):
             rtp=self.sip.rtp,
             caller=caller,
             media=negotiated_media,
-            srtp=srtp_session,
+            srtp=srtp_send,
+            srtp_recv=srtp_recv,
             dialog=self.dialog,
             **session_kwargs,
         )
+        self.dialog.session = session
         if remote_audio is not None and remote_audio.port != 0:
             media_connection = remote_audio.connection
             session_connection = (
@@ -630,9 +658,9 @@ class InviteTransaction(DigestAuthMixin, Transaction):
         session_id = str(secrets.randbelow(2**32) + 1)
         rtp_public = self.sip.rtp.public_address.result()
         sdp_media_attributes = [Attribute(name="sendrecv")]
-        if srtp_session is not None:
+        if srtp_send is not None:
             sdp_media_attributes.append(
-                Attribute(name="crypto", value=srtp_session.sdes_attribute)
+                Attribute(name="crypto", value=srtp_send.sdes_attribute)
             )
         self.send_response(
             Response.from_request(
@@ -686,6 +714,7 @@ class InviteTransaction(DigestAuthMixin, Transaction):
         target: types.SipURI,
         dialog: Dialog,
         session_class: type[Session],
+        prefer_srtp: bool = True,
         **session_kwargs: typing.Any,
     ) -> Dialog:
         """Initiate an outgoing call to *target* [RFC 3261 §13.1].
@@ -695,6 +724,9 @@ class InviteTransaction(DigestAuthMixin, Transaction):
             target: SIP or tel URI of the callee (e.g. `"sip:+15551234567@carrier.com"` or `"tel:+15551234567"`).
             dialog: The dialog to associate with this call.
             session_class: Session implementation that will be initialized for the call.
+            prefer_srtp: Offer SRTP (`RTP/SAVP` + SDES `a=crypto:`) and fall
+                back to plain RTP if the far end rejects it.  Defaults to
+                `True`; pass `False` to offer plain RTP only.
             **session_kwargs: Additional keyword arguments forwarded to the
                 call class constructor.
 
@@ -715,6 +747,7 @@ class InviteTransaction(DigestAuthMixin, Transaction):
         )
         tx.pending_call_class = session_class
         tx.pending_call_kwargs = session_kwargs
+        tx.offer_srtp = prefer_srtp
         tx.request = tx._build_invite_request(target)
         sip.register_transaction(tx)
         sip.send(tx.request)
@@ -730,10 +763,25 @@ class InviteTransaction(DigestAuthMixin, Transaction):
         Factored out of [send][voip.sip.transactions.InviteTransaction.send]
         so that an auth retry can rebuild the request with a fresh branch and
         incremented CSeq via [retry_with_auth][voip.sip.transactions.InviteTransaction.retry_with_auth].
+
+        When [offer_srtp][voip.sip.transactions.InviteTransaction.offer_srtp]
+        is set (default) the offer advertises `RTP/SAVP` with an SDES
+        `a=crypto:` attribute; otherwise it advertises plain `RTP/AVP`.
         """
         rtp_public = self.sip.rtp.public_address.result()
         session_id = str(secrets.randbelow(2**32) + 1)
         addrtype = "IP6" if isinstance(rtp_public[0], ipaddress.IPv6Address) else "IP4"
+        if self.offer_srtp:
+            proto = "RTP/SAVP"
+            self.srtp_offer = SRTPSession.generate()
+            attributes = [
+                Attribute(name="sendrecv"),
+                Attribute(name="crypto", value=self.srtp_offer.sdes_attribute),
+            ]
+        else:
+            proto = "RTP/AVP"
+            self.srtp_offer = None
+            attributes = [Attribute(name="sendrecv")]
         sdp_offer = SessionDescription(
             origin=Origin(
                 username="-",
@@ -753,9 +801,9 @@ class InviteTransaction(DigestAuthMixin, Transaction):
                 MediaDescription(
                     media="audio",
                     port=rtp_public[1],
-                    proto="RTP/AVP",
+                    proto=proto,
                     fmt=self.pending_call_class.sdp_formats(),
-                    attributes=[Attribute(name="sendrecv")],
+                    attributes=attributes,
                 )
             ],
         )
@@ -782,7 +830,40 @@ class InviteTransaction(DigestAuthMixin, Transaction):
 
         The original transaction is dropped by the caller (via `ack`); this
         builds a fresh INVITE (new branch, incremented CSeq) carrying the
-        computed credentials and chains its result back to the original.
+        computed credentials and chains its result back to the original.  The
+        SRTP/RTP offer mode is preserved across the retry.
+        """
+        header = "Proxy-Authorization" if is_proxy else "Authorization"
+        return self._retry_invite(
+            offer_srtp=self.offer_srtp, auth_headers={header: auth_value}
+        )
+
+    def retry_with_rtp(self, response: Response) -> bool:
+        """Fall back from SRTP to plain RTP after the far end rejects SRTP.
+
+        The original (SRTP-offering) transaction is dropped by the caller (via
+        `ack`); this builds a fresh INVITE (new branch, incremented CSeq)
+        advertising `RTP/AVP` with no `a=crypto:`, carrying over any
+        `Authorization`/`Proxy-Authorization` already obtained, and chains its
+        result back to the original.  Triggered for `488`, `606` and `415`
+        responses to an SRTP offer.
+        """
+        auth_headers = {
+            header: self.request.headers[header]
+            for header in ("Authorization", "Proxy-Authorization")
+            if header in self.request.headers
+        }
+        return self._retry_invite(offer_srtp=False, auth_headers=auth_headers)
+
+    def _retry_invite(self, *, offer_srtp: bool, auth_headers: dict[str, str]) -> bool:
+        """Build, register and send a fresh INVITE retry, chaining its result.
+
+        Shared by [retry_with_auth][voip.sip.transactions.InviteTransaction.retry_with_auth]
+        (which preserves the current SRTP/RTP mode) and
+        [retry_with_rtp][voip.sip.transactions.InviteTransaction.retry_with_rtp]
+        (which switches to plain RTP).  The new transaction carries *auth_headers*
+        (e.g. `Authorization`/`Proxy-Authorization`) so credentials obtained on a
+        prior attempt are not lost when falling back.
         """
         tx = type(self)(
             sip=self.sip,
@@ -792,9 +873,10 @@ class InviteTransaction(DigestAuthMixin, Transaction):
         )
         tx.pending_call_class = self.pending_call_class
         tx.pending_call_kwargs = self.pending_call_kwargs
+        tx.offer_srtp = offer_srtp
         tx.request = tx._build_invite_request(self.request.uri)
-        header = "Proxy-Authorization" if is_proxy else "Authorization"
-        tx.request.headers[header] = auth_value
+        for header, value in auth_headers.items():
+            tx.request.headers[header] = value
         self.sip.register_transaction(tx)
         self.sip.send(tx.request)
         tx.add_done_callback(self.forward_result)
@@ -817,6 +899,15 @@ class InviteTransaction(DigestAuthMixin, Transaction):
                 return
             case 2:  # OK
                 self._start_call(response)
+        # SRTP offer rejected as "not acceptable" → fall back to plain RTP.
+        if self.offer_srtp and response.status_code in (
+            SIPStatus.NOT_ACCEPTABLE_HERE,  # 488
+            SIPStatus.NOT_ACCEPTABLE_ANYWHERE,  # 606
+            SIPStatus.UNSUPPORTED_MEDIA_TYPE,  # 415
+        ):
+            self.ack(response)
+            self.retry_with_rtp(response)
+            return
         self.ack(response)
         self.complete()
 
@@ -852,12 +943,42 @@ class InviteTransaction(DigestAuthMixin, Transaction):
                 fmt=[RTPPayloadFormat.from_pt(0)],
             )
 
+        # The answer confirms SRTP only when it mirrors our `RTP/SAVP` offer
+        # and supplies its own SDES `a=crypto:` key.  Our generated offer
+        # session keys the outbound (send) media; the remote crypto keys the
+        # inbound (recv) media.  A downgrade to `RTP/AVP` yields plain RTP.
+        remote_crypto = (
+            next(
+                (
+                    attr
+                    for attr in remote_audio.attributes
+                    if attr.name == "crypto" and attr.value
+                ),
+                None,
+            )
+            if remote_audio is not None
+            else None
+        )
+        is_srtp = (
+            remote_audio is not None
+            and remote_audio.proto.startswith("RTP/SAVP")
+            and remote_crypto is not None
+            and self.srtp_offer is not None
+        )
+        srtp_send = self.srtp_offer if is_srtp else None
+        srtp_recv = (
+            SRTPSession.from_sdes(remote_crypto.value)  # type: ignore[arg-type]
+            if is_srtp and remote_crypto is not None
+            else None
+        )
+
         if self.pending_call_class is not None:
             self.dialog.session = self.pending_call_class(
                 rtp=self.sip.rtp,
                 caller=CallerID(str(self.sip.aor)),
                 media=negotiated_media,
-                srtp=None,
+                srtp=srtp_send,
+                srtp_recv=srtp_recv,
                 dialog=self.dialog,
                 **self.pending_call_kwargs,
             )

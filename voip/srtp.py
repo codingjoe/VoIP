@@ -99,6 +99,58 @@ class SRTPSession:
             master_salt=os.urandom(_SALT_SIZE),
         )
 
+    @classmethod
+    def from_sdes(cls, value: str) -> SRTPSession:
+        """Build an SRTP session from a remote SDP `a=crypto:` value (RFC 4568).
+
+        Parses the SDES crypto attribute format::
+
+            <tag> <cipher-suite> inline:<base64 key/salt>[|<lifetime>][~<MKI>]
+
+        Only `AES_CM_128_HMAC_SHA1_80` is implemented; any other cipher suite
+        raises `ValueError`.  The `inline:` keying material is base64-decoded
+        into the 16-byte master key followed by the 14-byte master salt;
+        trailing lifetime/MKI fields are ignored.
+
+        Args:
+            value: The `a=crypto:` attribute value (without the `a=crypto:`
+                prefix), as received from the remote SDP.
+
+        Returns:
+            An [`SRTPSession`][voip.srtp.SRTPSession] keyed with the remote
+            master key and salt — use it as the receive session to decrypt
+            the remote's media.
+
+        Raises:
+            ValueError: When the value is malformed or names an unsupported
+                cipher suite.
+        """
+        parts = value.split()
+        if len(parts) < 3 or not parts[2].startswith("inline:"):
+            raise ValueError(f"Malformed SDES crypto attribute: {value!r}")
+        _tag, suite, inline = parts[0], parts[1], parts[2]
+        # The inline parameter may carry trailing |lifetime or ~MKI suffixes.
+        key_material_b64, _, _trailing = inline.removeprefix("inline:").partition("|")
+        key_material_b64 = key_material_b64.split("~", 1)[0]
+        if suite != CIPHER_SUITE:
+            raise ValueError(
+                f"Unsupported SRTP cipher suite {suite!r}; "
+                f"only {CIPHER_SUITE!r} is implemented"
+            )
+        try:
+            key_material = base64.b64decode(key_material_b64, validate=True)
+        except (ValueError, base64.binascii.Error) as exc:  # noqa: PERF203
+            raise ValueError(f"Malformed SDES inline key: {inline!r}") from exc
+        if len(key_material) < _KEY_SIZE + _SALT_SIZE:
+            raise ValueError(
+                f"SDES inline key too short ({len(key_material)} bytes); "
+                f"expected at least {_KEY_SIZE + _SALT_SIZE}"
+            )
+        return cls(
+            master_key=key_material[:_KEY_SIZE],
+            master_salt=key_material[_KEY_SIZE : _KEY_SIZE + _SALT_SIZE],
+        )
+
     @property
     def sdes_attribute(self) -> str:
         """SDP `a=crypto:` attribute value for SDES key exchange (RFC 4568).

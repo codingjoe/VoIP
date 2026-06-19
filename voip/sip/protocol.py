@@ -21,7 +21,7 @@ from .messages import USER_AGENT, Message, Request, Response
 from .transactions import (
     ByeTransaction,
     InviteTransaction,
-    RegistrationTransaction,
+    RegisterTransaction,
     Transaction,
 )
 from .types import (
@@ -41,7 +41,7 @@ __all__ = [
     "SIP",
     "SessionInitiationProtocol",
     "InviteTransaction",
-    "RegistrationTransaction",
+    "RegisterTransaction",
 ]
 
 
@@ -293,7 +293,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
         )
         try:
             loop = asyncio.get_running_loop()
-            tx = RegistrationTransaction(sip=self, method=SIPMethod.REGISTER)
+            tx = RegisterTransaction(sip=self, method=SIPMethod.REGISTER)
             self.register_transaction(tx)
             loop.create_task(self.handle_registration(tx))
             if not isinstance(transport, asyncio.DatagramTransport):
@@ -311,7 +311,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
             logger.info("PING", extra={"addr": self.public_address})
             self.transport.write(PING)
 
-    async def handle_registration(self, tx: RegistrationTransaction) -> None:
+    async def handle_registration(self, tx: RegisterTransaction) -> None:
         await tx
         self.on_registered()
 

@@ -110,6 +110,9 @@ class Message(ByteSerializableObject, abc.ABC):
             (self._first_line().encode(), bytes(self.headers), raw_body)
         )
 
+    def __repr__(self):
+        return self._first_line()
+
     @property
     def branch(self) -> str:
         """Branch parameter from the top Via header (RFC 3261 §20.42)."""
@@ -135,7 +138,7 @@ class Message(ByteSerializableObject, abc.ABC):
     def _first_line(self) -> str: ...
 
 
-@dataclasses.dataclass(kw_only=True)
+@dataclasses.dataclass(slots=True, kw_only=True, repr=False)
 class Request(Message):
     """
     A SIP request message [RFC 3261 §7.1].
@@ -158,7 +161,7 @@ class Request(Message):
         )
 
 
-@dataclasses.dataclass(kw_only=True)
+@dataclasses.dataclass(slots=True, kw_only=True, repr=False)
 class Response(Message):
     """
     A SIP response message [RFC 3261 §7.2].

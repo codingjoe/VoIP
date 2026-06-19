@@ -172,8 +172,14 @@ def mcp(aor: SipURI, stun_server: NetworkAddress, no_verify_tls: bool, transport
     default=False,
     help="Disable TLS certificate verification (insecure; for testing only).",
 )
+@click.option(
+    "--no-srtp",
+    is_flag=True,
+    default=False,
+    help="Offer plain RTP only; do not offer SRTP or fall back from it.",
+)
 @click.pass_context
-def sip(ctx, aor, stun_server, no_verify_tls):
+def sip(ctx, aor, stun_server, no_verify_tls, no_srtp):
     """Session Initiation Protocol (SIP)."""
     ctx.ensure_object(dict)
     ctx.obj.update(
@@ -181,6 +187,7 @@ def sip(ctx, aor, stun_server, no_verify_tls):
         proxy_addr=aor.maddr,
         stun_server=stun_server,
         no_verify_tls=no_verify_tls,
+        prefer_srtp=not no_srtp,
     )
 
 
@@ -222,7 +229,9 @@ def echo(ctx, dial: str | None):
                 stun_server=obj["stun_server"],
             )
             await OutboundDialog(sip=protocol).dial(
-                parse_uri(dial, aor), session_class=EchoCall
+                parse_uri(dial, aor),
+                session_class=EchoCall,
+                prefer_srtp=obj["prefer_srtp"],
             )
             await protocol.disconnected_event.wait()
 
@@ -291,6 +300,7 @@ def transcribe(ctx, stt_model, dial: str | None):
             await OutboundDialog(sip=protocol).dial(
                 parse_uri(dial, aor),
                 session_class=TranscribingCall,
+                prefer_srtp=obj["prefer_srtp"],
                 stt_model=WhisperModel(stt_model),
             )
             await protocol.disconnected_event.wait()
@@ -417,6 +427,7 @@ def agent(
             await OutboundDialog(sip=protocol).dial(
                 parse_uri(dial, aor),
                 session_class=AgentCallWithOutput,
+                prefer_srtp=obj["prefer_srtp"],
                 stt_model=WhisperModel(stt_model),
                 llm_model=llm_model,
                 voice=voice,
@@ -458,6 +469,7 @@ def say(ctx, target: str, prompt: str, voice: str):
         await OutboundDialog(sip=protocol).dial(
             parse_uri(target, aor),
             session_class=SayCall,
+            prefer_srtp=obj["prefer_srtp"],
             text=prompt,
             voice=voice,
         )

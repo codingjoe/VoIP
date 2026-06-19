@@ -479,6 +479,72 @@ class TestSRTPIntegration:
         assert received == []
         assert any("authentication failed" in r.message for r in caplog.records)
 
+    @pytest.mark.asyncio
+    async def test_srtp_recv_session_decrypts_inbound_media(self):
+        """The mux decrypts with `srtp_recv` (remote key), not the send `srtp`."""
+        from voip.srtp import SRTPSession  # noqa: PLC0415
+
+        received: list[RTPPacket] = []
+
+        @dataclasses.dataclass
+        class SRTPCapture(Session):
+            def packet_received(self, packet: RTPPacket, addr) -> None:
+                received.append(packet)
+
+        mux = RealtimeTransportProtocol()
+        send_session = SRTPSession.generate()  # keys our outbound media
+        recv_session = SRTPSession.generate()  # keys the remote's inbound media
+        handler = SRTPCapture(
+            rtp=mux,
+            dialog=Dialog(),
+            media=make_media(),
+            srtp=send_session,
+            srtp_recv=recv_session,
+            caller=CallerID(""),
+        )
+        mux.register_call(None, handler)
+
+        # A packet encrypted with the remote (recv) key is delivered decrypted.
+        remote_packet = make_rtp_packet(payload=b"from-remote")
+        mux.datagram_received(recv_session.encrypt(remote_packet), ("1.2.3.4", 5004))
+        assert len(received) == 1
+        assert received[0].payload == b"from-remote"
+
+        # A packet encrypted with the send key is NOT decryptable by the mux
+        # (it uses the recv key) — auth fails and the packet is discarded.
+        own_packet = make_rtp_packet(payload=b"our-own")
+        mux.datagram_received(send_session.encrypt(own_packet), ("1.2.3.4", 5004))
+        assert len(received) == 1  # still only the recv-keyed packet
+
+    @pytest.mark.asyncio
+    async def test_srtp_falls_back_to_send_session_for_decrypt(self):
+        """With only `srtp` set (legacy symmetric), the mux decrypts with it."""
+        from voip.srtp import SRTPSession  # noqa: PLC0415
+
+        received: list[RTPPacket] = []
+
+        @dataclasses.dataclass
+        class SRTPCapture(Session):
+            def packet_received(self, packet: RTPPacket, addr) -> None:
+                received.append(packet)
+
+        mux = RealtimeTransportProtocol()
+        session = SRTPSession.generate()
+        handler = SRTPCapture(
+            rtp=mux,
+            dialog=Dialog(),
+            media=make_media(),
+            srtp=session,
+            caller=CallerID(""),
+        )
+        mux.register_call(None, handler)
+        # srtp_recv unset → mux falls back to `srtp` for decryption.
+        mux.datagram_received(
+            session.encrypt(make_rtp_packet(payload=b"x")), ("1.2.3.4", 5004)
+        )
+        assert len(received) == 1
+        assert received[0].payload == b"x"
+
 
 class TestSession:
     def test_caller__defaults_to_empty_string(self):
