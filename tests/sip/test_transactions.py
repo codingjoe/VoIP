@@ -2,6 +2,7 @@
 
 import asyncio
 
+from voip.fax import FaxSession
 from voip.sip import messages
 from voip.sip.dialog import Dialog
 from voip.sip.protocol import SessionInitiationProtocol
@@ -551,3 +552,57 @@ class TestInviteSrtp:
         assert session.srtp_recv.master_key == remote_session.master_key
 
         recv_task.cancel()
+
+
+class TestFaxInviteSdp:
+    """Outbound fax INVITE must advertise m=image udptl t38, not m=audio."""
+
+    async def test_fax_invite_media_is_image(self, sip):
+        """The INVITE SDP m= line uses 'image', not 'audio'."""
+        target = SipURI.parse("sip:+4933127375949@example.com:5060")
+        dialog = Dialog(uac=sip.aor, sip=sip)
+        send_task = asyncio.create_task(
+            InviteTransaction.send(
+                sip=sip, target=target, dialog=dialog, session_class=FaxSession
+            )
+        )
+        await asyncio.sleep(0)
+        invite = _last_request(sip)
+        media = invite.body.media[0]
+        assert media.media == "image"
+        assert media.proto == "udptl"
+        assert str(media.fmt[0].payload_type) == "t38"
+        # T.38-specific attributes must be present.
+        assert any(a.name == "T38FaxVersion" for a in media.attributes)
+        assert any(a.name == "T38MaxBitRate" for a in media.attributes)
+        # No SRTP crypto on a T.38 offer.
+        assert not any(a.name == "crypto" for a in media.attributes)
+        send_task.cancel()
+
+    async def test_fax_488_does_not_retry_with_rtp(self, sip):
+        """A 488 to a fax INVITE must not trigger an SRTP→RTP fallback retry.
+
+        T.38 never offers SRTP, so a 488 is a genuine rejection — the
+        transaction should complete, not retry with RTP/AVP.
+        """
+        target = SipURI.parse("sip:+4933127375949@example.com:5060")
+        dialog = Dialog(uac=sip.aor, sip=sip)
+        send_task = asyncio.create_task(
+            InviteTransaction.send(
+                sip=sip, target=target, dialog=dialog, session_class=FaxSession
+            )
+        )
+        await asyncio.sleep(0)
+        invite = _last_request(sip)
+
+        sip.response_received(
+            _make_status_response(invite, SIPStatus.NOT_ACCEPTABLE_HERE)
+        )
+        # Transaction completes (no retry), no second INVITE sent.
+        await asyncio.wait_for(send_task, timeout=1)
+        # Only the original INVITE was sent — no RTP fallback retry.
+        invites = [
+            messages.Message.parse(raw)
+            for raw in sip.transport.sent  # type: ignore[attr-defined]
+        ]
+        assert sum(1 for m in invites if m.method == SIPMethod.INVITE) == 1
