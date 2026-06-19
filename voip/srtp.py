@@ -112,6 +112,11 @@ class SRTPSession:
         into the 16-byte master key followed by the 14-byte master salt;
         trailing lifetime/MKI fields are ignored.
 
+        RFC 4568 §5.1.1 allows several `inline:` key-params separated by `;`
+        within the key-params field (e.g. ``inline:KEY1;inline:KEY2``).  The
+        first key-param is the *active* key used for SRTP processing, while
+        any further key-params are pre-rolled backup keys and are ignored here.
+
         Args:
             value: The `a=crypto:` attribute value (without the `a=crypto:`
                 prefix), as received from the remote SDP.
@@ -128,7 +133,10 @@ class SRTPSession:
         parts = value.split()
         if len(parts) < 3 or not parts[2].startswith("inline:"):
             raise ValueError(f"Malformed SDES crypto attribute: {value!r}")
-        _tag, suite, inline = parts[0], parts[1], parts[2]
+        _tag, suite, key_params = parts[0], parts[1], parts[2]
+        # RFC 4568 §5.1.1: several inline key-params may be joined by ';';
+        # the first is the active key, the rest are pre-rolled backups.
+        inline = key_params.split(";", 1)[0]
         # The inline parameter may carry trailing |lifetime or ~MKI suffixes.
         key_material_b64, _, _trailing = inline.removeprefix("inline:").partition("|")
         key_material_b64 = key_material_b64.split("~", 1)[0]

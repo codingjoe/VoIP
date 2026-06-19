@@ -45,6 +45,21 @@ class TestFromSdes:
         assert parsed.master_key == session.master_key
         assert parsed.master_salt == session.master_salt
 
+    def test_from_sdes__uses_first_of_multiple_inline_keys(self):
+        """RFC 4568 §5.1.1: several inline key-params joined by ';' may be present."""
+        session = SRTPSession.generate()
+        backup = SRTPSession.generate()
+        active_key_salt = base64.b64encode(
+            session.master_key + session.master_salt
+        ).decode()
+        backup_key_salt = base64.b64encode(
+            backup.master_key + backup.master_salt
+        ).decode()
+        value = f"1 {CIPHER_SUITE} inline:{active_key_salt};inline:{backup_key_salt}"
+        parsed = SRTPSession.from_sdes(value)
+        assert parsed.master_key == session.master_key
+        assert parsed.master_salt == session.master_salt
+
     def test_rejects_unsupported_cipher_suite(self):
         """An unknown cipher suite raises `ValueError` (only one suite is implemented)."""
         session = SRTPSession.generate()
