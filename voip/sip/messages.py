@@ -146,8 +146,8 @@ class Request(Message):
     [RFC 3261 §7.1]: https://datatracker.ietf.org/doc/html/rfc3261#section-7.1
     """
 
-    method: SIPMethod | str
-    uri: SipURI | str
+    method: SIPMethod
+    uri: SipURI
 
     def _first_line(self) -> str:
         return f"{self.method} {self.uri} {self.version}"
