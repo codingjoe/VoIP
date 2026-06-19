@@ -52,16 +52,16 @@ class MCPAgentCall(ai.AgentCall):
     def transcript(self) -> str:
         return "\n".join(
             f"{'Caller' if msg['role'] == 'user' else 'Agent'}: {msg['content']}"
-            for msg in self._messages
+            for msg in self.messages
             if msg["role"] != "system"
         )
 
     def transcription_received(self, text: str) -> None:
         self.cancel_outbound_audio()
-        self._messages.append({"role": "user", "content": text})
-        if self._response_task is not None and not self._response_task.done():
-            self._response_task.cancel()
-        self._response_task = asyncio.create_task(self.respond())
+        self.messages.append({"role": "user", "content": text})
+        if self.response_task is not None and not self.response_task.done():
+            self.response_task.cancel()
+        self.response_task = asyncio.create_task(self.respond())
 
     async def respond(self) -> None:
         sampling_messages = [
@@ -69,7 +69,7 @@ class MCPAgentCall(ai.AgentCall):
                 role=typing.cast(typing.Literal["user", "assistant"], msg["role"]),
                 content=TextContent(type="text", text=msg["content"]),
             )
-            for msg in self._messages
+            for msg in self.messages
             if msg["role"] != "system"
         ]
         result = await self.ctx.sample(
@@ -77,7 +77,7 @@ class MCPAgentCall(ai.AgentCall):
             system_prompt=self.system_prompt,
         )
         if result.text and (reply := result.text.strip()):
-            self._messages.append({"role": "assistant", "content": reply})
+            self.messages.append({"role": "assistant", "content": reply})
             await self.send_speech(reply)
 
 

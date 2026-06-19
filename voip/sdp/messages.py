@@ -72,10 +72,10 @@ class SessionDescription(ByteSerializableObject):
         sdp = cls()
         current_media: MediaDescription | None = None
         for line in text.splitlines():
-            current_media = sdp._apply_line(line.rstrip("\r"), current_media)
+            current_media = sdp.apply_line(line.rstrip("\r"), current_media)
         return sdp
 
-    def _apply_line(
+    def apply_line(
         self, line: str, current_media: MediaDescription | None
     ) -> MediaDescription | None:
         """Apply a single SDP line to this session, return the active MediaDescription."""
@@ -94,10 +94,10 @@ class SessionDescription(ByteSerializableObject):
             and isinstance(parsed, Attribute)
             and current_media is not None
         ):
-            if self._apply_media_attribute(parsed, current_media):
+            if self.apply_media_attribute(parsed, current_media):
                 return current_media
         if field.media_attr is not None and current_media is not None:
-            return self._apply_to_media(
+            return self.apply_to_media(
                 current_media, field.media_attr, parsed, field.is_list
             )
         if field.is_list:
@@ -107,7 +107,7 @@ class SessionDescription(ByteSerializableObject):
         return current_media
 
     @staticmethod
-    def _apply_media_attribute(attr: Attribute, media: MediaDescription) -> bool:
+    def apply_media_attribute(attr: Attribute, media: MediaDescription) -> bool:
         """Fold a media-level a= attribute into *media* if it is a format-specific attribute.
 
         Returns `True` when the attribute was consumed (`a=rtpmap` or
@@ -117,7 +117,7 @@ class SessionDescription(ByteSerializableObject):
         return media.apply_attribute(attr)
 
     @staticmethod
-    def _apply_to_media(
+    def apply_to_media(
         media: MediaDescription, attr: str, value: object, is_list: bool
     ) -> MediaDescription:
         """Apply a parsed field value to a MediaDescription, return it unchanged."""
@@ -131,9 +131,9 @@ class SessionDescription(ByteSerializableObject):
         return str(self).encode()
 
     def __str__(self) -> str:
-        return "\r\n".join(self._lines()) + "\r\n"
+        return "\r\n".join(self.lines()) + "\r\n"
 
-    def _lines(self) -> Generator[str]:
+    def lines(self) -> Generator[str]:
         """Yield each SDP line in canonical field order."""
         for field in FIELD_MAP:
             if field.session_attr == "media":

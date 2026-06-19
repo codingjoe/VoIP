@@ -50,7 +50,7 @@ class Opus(PyAVCodec):
     channels: ClassVar[int] = 2
 
     @staticmethod
-    def _ogg_crc32(data: bytes) -> int:
+    def ogg_crc32(data: bytes) -> int:
         """Compute an Ogg CRC32 checksum (polynomial 0x04C11DB7).
 
         Args:
@@ -67,7 +67,7 @@ class Opus(PyAVCodec):
         return crc & 0xFFFFFFFF
 
     @classmethod
-    def _ogg_page(
+    def ogg_page(
         cls,
         header_type: int,
         granule_position: int,
@@ -106,10 +106,10 @@ class Opus(PyAVCodec):
             len(lacing),
         ) + bytes(lacing)
         page = header + b"".join(packets)
-        return page[:22] + struct.pack("<I", cls._ogg_crc32(page)) + page[26:]
+        return page[:22] + struct.pack("<I", cls.ogg_crc32(page)) + page[26:]
 
     @classmethod
-    def _ogg_container(cls, packet: bytes) -> bytes:
+    def ogg_container(cls, packet: bytes) -> bytes:
         """Wrap a raw Opus RTP payload in a minimal Ogg Opus container.
 
         Produces a three-page Ogg stream: BOS (OpusHead), comment
@@ -141,9 +141,9 @@ class Opus(PyAVCodec):
         )
         return b"".join(
             [
-                cls._ogg_page(0x02, 0, serial_number, 0, [opus_head]),  # BOS
-                cls._ogg_page(0x00, 0, serial_number, 1, [opus_tags]),
-                cls._ogg_page(0x04, cls.frame_size, serial_number, 2, [packet]),
+                cls.ogg_page(0x02, 0, serial_number, 0, [opus_head]),  # BOS
+                cls.ogg_page(0x00, 0, serial_number, 1, [opus_tags]),
+                cls.ogg_page(0x04, cls.frame_size, serial_number, 2, [packet]),
             ]
         )
 
@@ -155,7 +155,7 @@ class Opus(PyAVCodec):
         *,
         input_rate_hz: int | None = None,
     ) -> np.ndarray:
-        return cls.decode_pcm(cls._ogg_container(payload), "ogg", output_rate_hz)
+        return cls.decode_pcm(cls.ogg_container(payload), "ogg", output_rate_hz)
 
     @classmethod
     def encode(cls, samples: np.ndarray) -> bytes:

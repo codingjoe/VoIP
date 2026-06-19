@@ -114,13 +114,13 @@ class TTSMixin:
     )
     voice: pathlib.Path | str | torch.Tensor = dataclasses.field(default="marius")
 
-    _voice_state: dict[str, dict[str, torch.Tensor]] = dataclasses.field(
+    voice_state: dict[str, dict[str, torch.Tensor]] = dataclasses.field(
         init=False, repr=False
     )
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self._voice_state = self.tts_model.get_state_for_audio_prompt(self.voice)
+        self.voice_state = self.tts_model.get_state_for_audio_prompt(self.voice)
 
     async def send_speech(self, text: str) -> None:
         """Synthesise `text` and transmit it as outbound RTP audio.
@@ -130,7 +130,7 @@ class TTSMixin:
         """
         await self.send_audio(
             self.resample(
-                self.tts_model.generate_audio(self._voice_state, text).numpy(),
+                self.tts_model.generate_audio(self.voice_state, text).numpy(),
                 self.tts_model.sample_rate,
                 self.codec.sample_rate_hz,
             )
@@ -182,11 +182,11 @@ class AgentCall(TTSMixin, TranscribeCall):
     salutation: str = dataclasses.field(default="Hi.")
     audio_interrupt_duration: datetime.timedelta = datetime.timedelta(seconds=0.75)
 
-    _messages: list[dict] = dataclasses.field(init=False, repr=False)
-    _response_task: asyncio.Task | None = dataclasses.field(
+    messages: list[dict] = dataclasses.field(init=False, repr=False)
+    response_task: asyncio.Task | None = dataclasses.field(
         init=False, repr=False, default=None
     )
-    _cancel_audio_handle: asyncio.Handle | None = dataclasses.field(
+    cancel_audio_handle: asyncio.Handle | None = dataclasses.field(
         init=False, repr=False, default=None
     )
 
@@ -204,37 +204,37 @@ class AgentCall(TTSMixin, TranscribeCall):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self._messages = [
+        self.messages = [
             {
                 "role": "system",
                 "content": self.system_prompt,
             }
         ]
         if self.salutation:
-            self._messages.append({"role": "assistant", "content": self.salutation})
+            self.messages.append({"role": "assistant", "content": self.salutation})
             asyncio.create_task(self.send_speech(self.salutation))
 
     def transcription_received(self, text: str) -> None:
         self.cancel_outbound_audio()
-        self._messages.append({"role": "user", "content": text})
-        if self._response_task is not None and not self._response_task.done():
-            self._response_task.cancel()
-        self._response_task = asyncio.create_task(self.respond())
+        self.messages.append({"role": "user", "content": text})
+        if self.response_task is not None and not self.response_task.done():
+            self.response_task.cancel()
+        self.response_task = asyncio.create_task(self.respond())
 
     async def respond(self) -> None:
         response = await ollama.AsyncClient().chat(
             model=self.llm_model,
-            messages=self._messages,
+            messages=self.messages,
         )
         if reply := self.emoji_pattern.sub("", response.message.content or ""):
-            self._messages.append({"role": "assistant", "content": reply})
+            self.messages.append({"role": "assistant", "content": reply})
             logger.debug("Agent reply: %r", reply)
             await self.send_speech(reply)
 
     def on_audio_speech(self) -> None:
         loop = asyncio.get_event_loop()
-        if self._cancel_audio_handle is None:
-            self._cancel_audio_handle = loop.call_later(
+        if self.cancel_audio_handle is None:
+            self.cancel_audio_handle = loop.call_later(
                 self.audio_interrupt_duration.total_seconds(),
                 self.cancel_outbound_audio,
             )
@@ -242,6 +242,6 @@ class AgentCall(TTSMixin, TranscribeCall):
 
     def on_audio_silence(self) -> None:
         super().on_audio_silence()
-        if self._cancel_audio_handle is not None:
-            self._cancel_audio_handle.cancel()
-            self._cancel_audio_handle = None
+        if self.cancel_audio_handle is not None:
+            self.cancel_audio_handle.cancel()
+            self.cancel_audio_handle = None

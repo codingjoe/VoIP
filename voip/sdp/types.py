@@ -383,7 +383,7 @@ class MediaDescription(ByteSerializableObject):
                     return True
         return False
 
-    def _lines(self) -> Generator[str]:
+    def lines(self) -> Generator[str]:
         """Yield each SDP line in canonical field order."""
         yield f"m={self.media} {self.port} {self.proto} {' '.join(str(f.payload_type) for f in self.fmt)}"
         match self.title:
@@ -403,7 +403,7 @@ class MediaDescription(ByteSerializableObject):
         yield from (f"a={a}" for a in self.attributes)
 
     def __bytes__(self) -> bytes:
-        return "\r\n".join(self._lines()).encode()
+        return "\r\n".join(self.lines()).encode()
 
     @classmethod
     def parse(cls, data: bytes | str) -> MediaDescription:

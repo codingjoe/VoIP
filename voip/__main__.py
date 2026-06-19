@@ -27,7 +27,7 @@ except ImportError as e:
 logger = logging.getLogger("voip")
 
 
-def _parse_sip_uri(ctx, param, value) -> SipURI:
+def parse_sip_uri(ctx, param, value) -> SipURI:
     """Parse a SIP URI."""
     try:
         return SipURI.parse(value)
@@ -112,7 +112,7 @@ def voip(ctx, verbose: int = 0):
     "aor",
     metavar="AOR",
     envvar="SIP_AOR",
-    callback=_parse_sip_uri,
+    callback=parse_sip_uri,
 )
 @click.option(
     "--stun-server",
@@ -154,7 +154,7 @@ def mcp(aor: SipURI, stun_server: NetworkAddress, no_verify_tls: bool, transport
     "aor",
     metavar="AOR",
     envvar="SIP_AOR",
-    callback=_parse_sip_uri,
+    callback=parse_sip_uri,
 )
 @click.option(
     "--stun-server",
@@ -222,7 +222,8 @@ def echo(ctx, dial: str | None):
                 stun_server=obj["stun_server"],
             )
             await OutboundDialog(sip=protocol).dial(
-                parse_uri(dial, aor), session_class=EchoCall
+                parse_uri(dial, aor),
+                session_class=EchoCall,
             )
             await protocol.disconnected_event.wait()
 
@@ -371,7 +372,7 @@ def agent(
             super().transcription_received(text)
 
         async def send_audio(self, audio: np.ndarray) -> None:
-            for msg in self._messages[self.msg_count :]:
+            for msg in self.messages[self.msg_count :]:
                 click.echo(
                     click.style(
                         f"Agent: {msg['content']}",
@@ -382,7 +383,7 @@ def agent(
             await super().send_audio(audio)
 
         async def respond(self) -> None:
-            self.msg_count = len(self._messages)
+            self.msg_count = len(self.messages)
             await super().respond()
 
     class AgentDialog(dialog.Dialog):

@@ -21,7 +21,7 @@ from .messages import USER_AGENT, Message, Request, Response
 from .transactions import (
     ByeTransaction,
     InviteTransaction,
-    RegistrationTransaction,
+    RegisterTransaction,
     Transaction,
 )
 from .types import (
@@ -41,7 +41,7 @@ __all__ = [
     "SIP",
     "SessionInitiationProtocol",
     "InviteTransaction",
-    "RegistrationTransaction",
+    "RegisterTransaction",
 ]
 
 
@@ -101,10 +101,10 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
 
     keepalive_task: asyncio.Task | None = dataclasses.field(init=False, default=None)
     public_address: NetworkAddress = None
-    _dialogs: dict[tuple[str, str], Dialog] = dataclasses.field(
+    dialogs: dict[tuple[str, str], Dialog] = dataclasses.field(
         init=False, default_factory=dict
     )
-    _transactions: dict[str, Transaction] = dataclasses.field(
+    transactions: dict[str, Transaction] = dataclasses.field(
         init=False, default_factory=dict
     )
     disconnected_event: asyncio.Event = dataclasses.field(
@@ -258,7 +258,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
         if dialog.remote_tag is None:
             logger.warning("Dialog without remote tag cannot be registered: %r", dialog)
         else:
-            self._dialogs[dialog.local_tag, dialog.remote_tag] = dialog
+            self.dialogs[dialog.local_tag, dialog.remote_tag] = dialog
 
     def drop_dialog(self, dialog: Dialog) -> None:
         """Remove *dialog* from the registry."""
@@ -266,18 +266,18 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
             logger.warning("Dialog without remote tag cannot be removed: %r", dialog)
         else:
             try:
-                del self._dialogs[dialog.local_tag, dialog.remote_tag]
+                del self.dialogs[dialog.local_tag, dialog.remote_tag]
             except KeyError:
                 logger.warning("Dialog not found for removal: %r", dialog)
 
     def register_transaction(self, tx: Transaction) -> None:
         """Register *tx* by its branch parameter."""
-        self._transactions[tx.branch] = tx
+        self.transactions[tx.branch] = tx
 
     def drop_transaction(self, tx: Transaction) -> None:
         """Remove *tx* from the registry."""
         try:
-            del self._transactions[tx.branch]
+            del self.transactions[tx.branch]
         except KeyError:
             logger.warning("Transaction not found for removal: %r", tx)
 
@@ -293,7 +293,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
         )
         try:
             loop = asyncio.get_running_loop()
-            tx = RegistrationTransaction(sip=self, method=SIPMethod.REGISTER)
+            tx = RegisterTransaction(sip=self, method=SIPMethod.REGISTER)
             self.register_transaction(tx)
             loop.create_task(self.handle_registration(tx))
             if not isinstance(transport, asyncio.DatagramTransport):
@@ -311,24 +311,24 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
             logger.info("PING", extra={"addr": self.public_address})
             self.transport.write(PING)
 
-    async def handle_registration(self, tx: RegistrationTransaction) -> None:
+    async def handle_registration(self, tx: RegisterTransaction) -> None:
         await tx
         self.on_registered()
 
     def data_received(self, data: bytes) -> None:
         self.recv_buffer.extend(data)
-        for frame in self._extract_frames():
-            self._dispatch_frame(frame)
+        for frame in self.extract_frames():
+            self.dispatch_frame(frame)
 
     def datagram_received(self, data: bytes, addr: tuple) -> None:  # type: ignore[override]
         """Dispatch a complete UDP SIP datagram."""
-        self._dispatch_frame(data)
+        self.dispatch_frame(data)
 
     def error_received(self, exc: Exception) -> None:  # type: ignore[override]
         """Log a UDP transport error."""
         logger.warning("UDP error received", exc_info=exc)
 
-    def _extract_frames(self) -> typing.Generator[memoryview | bytes]:  # noqa: C901
+    def extract_frames(self) -> typing.Generator[memoryview | bytes]:  # noqa: C901
         while self.recv_buffer:
             if self.recv_buffer[0:1] != b"\r":
                 # SIP message: wait for the header-body separator.
@@ -364,7 +364,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
                 # Single CR or other incomplete sequence – wait for more data.
                 break
 
-    def _dispatch_frame(self, frame: memoryview | bytes) -> None:
+    def dispatch_frame(self, frame: memoryview | bytes) -> None:
         peer = NetworkAddress(*self.transport.get_extra_info("peername")[:2])
         if frame == PONG:
             logger.info("PONG", extra={"addr": peer})
@@ -458,7 +458,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
             case SIPMethod.ACK:
                 # For non-2xx ACKs the INVITE tx is still present; route by dialog.
                 try:
-                    tx = self._dialogs[
+                    tx = self.dialogs[
                         request.remote_tag, request.local_tag
                     ].invite_transaction
                 except KeyError:
@@ -475,7 +475,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
                 asyncio.create_task(ByeTransaction.receive(request=request, sip=self))
             case SIPMethod.CANCEL:
                 try:
-                    tx = self._transactions[request.branch]
+                    tx = self.transactions[request.branch]
                 except KeyError:
                     self.send(
                         Response.from_request(
@@ -505,7 +505,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
             response: The parsed SIP response.
         """
         try:
-            tx = self._transactions[response.branch]
+            tx = self.transactions[response.branch]
         except KeyError:
             logger.warning(
                 "Received response with unknown branch %r: %r",

@@ -106,7 +106,11 @@ class Session:
         dialog: SIP dialog state for this call leg.
         media: Negotiated SDP media description for this call leg.
         caller: Caller identifier as received in the SIP From header.
-        srtp: Optional SRTP session for encrypting and decrypting media.
+        srtp: Optional SRTP session used to encrypt outbound media (our SDES
+            send key).
+        srtp_recv: Optional SRTP session used to decrypt inbound media (the
+            remote's SDES key).  Falls back to `srtp` when unset, preserving
+            the legacy symmetric single-session behaviour.
     """
 
     rtp: RealtimeTransportProtocol
@@ -114,6 +118,7 @@ class Session:
     media: MediaDescription
     caller: CallerID
     srtp: SRTPSession | None = None
+    srtp_recv: SRTPSession | None = None
 
     def packet_received(self, packet: RTPPacket, addr: NetworkAddress) -> None:
         """Handle a parsed RTP packet. Override in subclasses to process media.
@@ -327,14 +332,17 @@ class RealtimeTransportProtocol(STUNProtocol):
 
         When the matched handler carries an SRTP session, the packet is
         authenticated and decrypted before being forwarded; packets that fail
-        authentication are logged at WARNING level and discarded.
+        authentication are logged at WARNING level and discarded. Decryption
+        uses the handler's receive session (`srtp_recv`) when set, falling
+        back to `srtp` so a single symmetric session still works.
         """
         handler = self.calls.get(addr)
         if handler is None:
             handler = self.calls.get(None)
         if handler is not None:
-            if handler.srtp is not None:
-                decrypted = handler.srtp.decrypt(data)
+            recv_session = handler.srtp_recv or handler.srtp
+            if recv_session is not None:
+                decrypted = recv_session.decrypt(data)
                 if decrypted is None:
                     logger.warning(
                         "SRTP authentication failed for packet from %s:%s, discarding",
