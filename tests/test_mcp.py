@@ -67,8 +67,8 @@ def make_agent_call(
 
     agent = MCPAgentCall(**kwargs)
     if messages is not None:
-        # Inject synthetic _messages (bypasses AgentCall's auto-population).
-        object.__setattr__(agent, "_messages", messages)
+        # Inject synthetic messages (bypasses AgentCall's auto-population).
+        object.__setattr__(agent, "messages", messages)
     return agent
 
 
@@ -107,7 +107,7 @@ class TestTranscriptionReceived:
             with patch("asyncio.create_task"):
                 agent.transcription_received("How are you?")
 
-        user_msgs = [m for m in agent._messages if m["role"] == "user"]
+        user_msgs = [m for m in agent.messages if m["role"] == "user"]
         assert any(m["content"] == "How are you?" for m in user_msgs)
 
     async def test_transcription_received__cancels_pending_task(self) -> None:
@@ -115,7 +115,7 @@ class TestTranscriptionReceived:
         agent = make_agent_call()
         old_task = MagicMock(spec=asyncio.Task)
         old_task.done.return_value = False
-        object.__setattr__(agent, "_response_task", old_task)
+        object.__setattr__(agent, "response_task", old_task)
 
         with patch.object(agent, "cancel_outbound_audio"):
             with patch("asyncio.create_task") as mock_create:
@@ -129,7 +129,7 @@ class TestTranscriptionReceived:
         agent = make_agent_call()
         old_task = MagicMock(spec=asyncio.Task)
         old_task.done.return_value = True
-        object.__setattr__(agent, "_response_task", old_task)
+        object.__setattr__(agent, "response_task", old_task)
 
         with patch.object(agent, "cancel_outbound_audio"):
             with patch("asyncio.create_task"):
@@ -140,7 +140,7 @@ class TestTranscriptionReceived:
 
 class TestRespond:
     async def test_respond__speaks_reply(self) -> None:
-        """respond() speaks the LLM reply and appends it to _messages."""
+        """respond() speaks the LLM reply and appends it to messages."""
         ctx = make_mock_context("Nice to meet you.")
         agent = make_agent_call(
             ctx=ctx,
@@ -153,7 +153,7 @@ class TestRespond:
             await agent.respond()
 
         mock_send.assert_awaited_once_with("Nice to meet you.")
-        assert {"role": "assistant", "content": "Nice to meet you."} in agent._messages
+        assert {"role": "assistant", "content": "Nice to meet you."} in agent.messages
 
     async def test_respond__filters_system_from_sampling(self) -> None:
         """System messages are not forwarded to ctx.sample."""
@@ -493,7 +493,6 @@ class TestRun:
         aor = SipURI.parse("sip:alice@example.com")
         mock_protocol = MagicMock(spec=SessionInitiationProtocol)
 
-        fn = MagicMock()
         with patch.object(
             SessionInitiationProtocol,
             "run",
@@ -501,7 +500,7 @@ class TestRun:
             return_value=mock_protocol,
         ):
             with patch.object(voip.mcp.mcp, "run_async", new_callable=AsyncMock):
-                await run(fn, aor)
+                await run(aor)
 
         assert connection_pool.sip is mock_protocol
 
@@ -519,7 +518,7 @@ class TestRun:
             with patch.object(
                 voip.mcp.mcp, "run_async", new_callable=AsyncMock
             ) as mock_run:
-                await run(lambda: None, aor, transport="stdio")
+                await run(aor, transport="stdio")
 
         mock_run.assert_awaited_once_with(transport="stdio")
 
@@ -535,7 +534,7 @@ class TestRun:
             return_value=mock_protocol,
         ) as mock_sip_run:
             with patch.object(voip.mcp.mcp, "run_async", new_callable=AsyncMock):
-                await run(lambda: None, aor, no_verify_tls=True)
+                await run(aor, no_verify_tls=True)
 
         _, kwargs = mock_sip_run.call_args
         assert kwargs["no_verify_tls"] is True
@@ -553,7 +552,7 @@ class TestRun:
             return_value=mock_protocol,
         ) as mock_sip_run:
             with patch.object(voip.mcp.mcp, "run_async", new_callable=AsyncMock):
-                await run(lambda: None, aor, stun_server=stun)
+                await run(aor, stun_server=stun)
 
         _, kwargs = mock_sip_run.call_args
         assert kwargs["stun_server"] is stun
@@ -564,22 +563,7 @@ class TestRegisteredEvent:
         """on_registered() sets registered_event so run() can unblock."""
         protocol = SessionInitiationProtocol.__new__(SessionInitiationProtocol)
         protocol.registered_event = asyncio.Event()
-        protocol.ready_callback = None
 
         assert not protocol.registered_event.is_set()
         protocol.on_registered()
         assert protocol.registered_event.is_set()
-
-    def test_registered_event__ready_callback_called_after_event(self) -> None:
-        """ready_callback is invoked after registered_event is set."""
-        call_order: list[str] = []
-        protocol = SessionInitiationProtocol.__new__(SessionInitiationProtocol)
-        protocol.registered_event = asyncio.Event()
-
-        def _cb() -> None:
-            call_order.append("cb" if protocol.registered_event.is_set() else "early")
-
-        protocol.ready_callback = _cb
-        protocol.on_registered()
-
-        assert call_order == ["cb"]

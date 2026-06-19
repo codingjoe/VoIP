@@ -186,6 +186,9 @@ class Dialog:
         """
         Initiate an outbound call to *target*.
 
+        Offers SRTP (`RTP/SAVP` + SDES) and falls back to plain RTP if the far
+        end rejects it (488/606/415) or answers with `RTP/AVP`.
+
         Args:
             target: SIP or tel URI of the remote party (e.g. `"sip:+15551234567@carrier.com"` or `"tel:+15551234567"`).
             session_class: Session subclass to create for this call.

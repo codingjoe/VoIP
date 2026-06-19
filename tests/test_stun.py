@@ -11,7 +11,7 @@ from voip.stun import (
     STUNAttributeType,
     STUNMessageType,
     STUNProtocol,
-    _parse_address,
+    parse_address,
 )
 
 
@@ -91,12 +91,12 @@ class TestSTUNAttributeType:
 class TestParseAddress:
     def test_too_short__returns_none(self):
         """Return None when the attribute value is shorter than 4 bytes."""
-        assert _parse_address(b"\x00\x01", b"") is None
+        assert parse_address(b"\x00\x01", b"") is None
 
     def test_unknown_family__returns_none(self):
         """Return None for an unrecognised address family byte."""
         value = struct.pack(">BBH4s", 0x00, 0x03, 1234, b"\x00" * 4)
-        assert _parse_address(value, b"") is None
+        assert parse_address(value, b"") is None
 
 
 class TestSTUNProtocol:
@@ -237,7 +237,7 @@ class TestSTUNProtocol:
         proto = TrackingProto(stun_server_address=("::1", 3478))
         transport = unittest.mock.MagicMock(spec=asyncio.DatagramTransport)
         proto.connection_made(transport)
-        proto._stun_transaction_id = transaction_id
+        proto.stun_transaction_id = transaction_id
         proto.datagram_received(response, ("::1", 3478))
         assert len(received) == 1
         assert received[0] == (ipaddress.IPv6Address("2001:db8::1"), 54321)
@@ -257,7 +257,7 @@ class TestSTUNProtocol:
         proto = TrackingProto(stun_server_address=("::1", 3478))
         transport = unittest.mock.MagicMock(spec=asyncio.DatagramTransport)
         proto.connection_made(transport)
-        proto._stun_transaction_id = transaction_id
+        proto.stun_transaction_id = transaction_id
         proto.datagram_received(response, ("::1", 3478))
         assert len(received) == 1
         assert received[0] == (ipaddress.IPv6Address("::1"), 12345)
@@ -277,7 +277,7 @@ class TestSTUNProtocol:
         proto = TrackingProto(stun_server_address=("127.0.0.1", 3478))
         transport = unittest.mock.MagicMock(spec=asyncio.DatagramTransport)
         proto.connection_made(transport)
-        proto._stun_transaction_id = transaction_id
+        proto.stun_transaction_id = transaction_id
         proto.datagram_received(response, ("127.0.0.1", 3478))
         assert len(received) == 1
         assert received[0] == (ipaddress.IPv4Address("203.0.113.1"), 9999)
@@ -296,7 +296,7 @@ class TestSTUNProtocol:
         proto = TrackingProto(stun_server_address=("127.0.0.1", 3478))
         transport = unittest.mock.MagicMock(spec=asyncio.DatagramTransport)
         proto.connection_made(transport)
-        proto._stun_transaction_id = transaction_id
+        proto.stun_transaction_id = transaction_id
         with caplog.at_level(logging.ERROR):
             proto.datagram_received(response, ("127.0.0.1", 3478))
         assert any("No address attribute" in r.message for r in caplog.records)
@@ -332,22 +332,22 @@ class TestSTUNProtocol:
         assert any("network error" in r.message for r in caplog.records)
 
     def test_send_stun_request__no_op_when_transport_is_none(self):
-        """_send_stun_request() is a no-op when the transport is not set."""
+        """send_stun_request() is a no-op when the transport is not set."""
         proto = STUNProtocol(stun_server_address=("127.0.0.1", 3478))
         # transport is None (never connected)
-        proto._send_stun_request()  # must not raise
+        proto.send_stun_request()  # must not raise
 
     def test_parse_stun_response__too_short__ignored(self):
-        """_parse_stun_response() silently ignores responses shorter than 20 bytes."""
+        """parse_stun_response() silently ignores responses shorter than 20 bytes."""
         proto = STUNProtocol(stun_server_address=("127.0.0.1", 3478))
         transport = unittest.mock.MagicMock(spec=asyncio.DatagramTransport)
         transport.get_extra_info.return_value = ("127.0.0.1", 0)
         proto.connection_made(transport)
-        proto._stun_transaction_id = b"\x05" * 12
-        proto._parse_stun_response(b"\x01\x01" + b"\x00" * 10)  # only 12 bytes
+        proto.stun_transaction_id = b"\x05" * 12
+        proto.parse_stun_response(b"\x01\x01" + b"\x00" * 10)  # only 12 bytes
 
     def test_parse_stun_response__wrong_transaction_id__ignored(self):
-        """_parse_stun_response() ignores responses with a mismatched transaction ID."""
+        """parse_stun_response() ignores responses with a mismatched transaction ID."""
         transaction_id = b"\x06" * 12
         received: list = []
 
@@ -359,10 +359,10 @@ class TestSTUNProtocol:
         transport = unittest.mock.MagicMock(spec=asyncio.DatagramTransport)
         transport.get_extra_info.return_value = ("127.0.0.1", 0)
         proto.connection_made(transport)
-        proto._stun_transaction_id = transaction_id
+        proto.stun_transaction_id = transaction_id
         wrong_tid = b"\xff" * 12
         response = make_success_response(
             wrong_tid, make_xor_mapped_address_attribute("203.0.113.5", 1234)
         )
-        proto._parse_stun_response(response)
+        proto.parse_stun_response(response)
         assert received == []

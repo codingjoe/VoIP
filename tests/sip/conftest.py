@@ -1,5 +1,6 @@
 """Shared fixtures for SIP tests."""
 
+import asyncio
 import dataclasses
 import ipaddress
 
@@ -48,11 +49,11 @@ class CallFixture(Session):
 
     @classmethod
     def negotiate_codec(cls, remote_media: MediaDescription) -> MediaDescription:
-        """Return the first format from the offered media."""
+        """Return the first format from the offered media, mirroring its proto."""
         return MediaDescription(
             media="audio",
             port=5004,
-            proto="RTP/AVP",
+            proto=remote_media.proto,
             fmt=remote_media.fmt[:1] or [RTPPayloadFormat.from_pt(0)],
         )
 
@@ -64,10 +65,13 @@ def fake_transport() -> FakeTransport:
 
 
 @pytest.fixture
-def rtp() -> RealtimeTransportProtocol:
-    """Return a RealtimeTransportProtocol with a pre-set public address."""
+async def rtp() -> RealtimeTransportProtocol:
+    """Return a RealtimeTransportProtocol with a pre-resolved public address."""
     mux = RealtimeTransportProtocol()
-    mux.public_address = NetworkAddress(ipaddress.ip_address("192.0.2.1"), 5004)
+    mux.public_address = asyncio.get_running_loop().create_future()
+    mux.public_address.set_result(
+        NetworkAddress(ipaddress.ip_address("192.0.2.1"), 5004)
+    )
     return mux
 
 

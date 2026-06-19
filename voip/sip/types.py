@@ -150,17 +150,17 @@ class SipURI(str):
                 if match.group("password")
                 else None,
                 port=int(match.group("port")[1:]) if match.group("port") else None,
-                parameters=dict(cls._parse_parameters(match.group("parameters")))
+                parameters=dict(cls.parse_parameters(match.group("parameters")))
                 if match.group("parameters")
                 else {},
-                headers=dict(cls._parse_headers(match.group("headers")[1:]))
+                headers=dict(cls.parse_headers(match.group("headers")[1:]))
                 if match.group("headers")
                 else {},
             )
         raise ValueError(f"Invalid SIP URI: {value!r}")
 
     @classmethod
-    def _parse_parameters(cls, params: str) -> Iterator[tuple[str, str | None]]:
+    def parse_parameters(cls, params: str) -> Iterator[tuple[str, str | None]]:
         for part in params[1:].split(";"):
             if "=" in part:
                 name, val = part.split("=", 1)
@@ -169,7 +169,7 @@ class SipURI(str):
                 yield urllib.parse.unquote(part), None
 
     @classmethod
-    def _parse_headers(cls, headers: str) -> Iterator[tuple[str, str]]:
+    def parse_headers(cls, headers: str) -> Iterator[tuple[str, str]]:
         for part in headers.split("&"):
             if "=" in part:
                 name, val = part.split("=", 1)
@@ -194,7 +194,7 @@ class SipURI(str):
     @property
     def transport(self):
         return (
-            self.parameters.get("transport", "TLS").upper()
+            self.parameters.get("transport", "UDP").upper()
             if self.scheme == "sip"
             else "TLS"
         )
@@ -486,7 +486,7 @@ class DigestQoP(enum.StrEnum):
     AUTH_INT = "auth-int"
 
 
-def _mask_caller(header: str) -> str:
+def mask_caller(header: str) -> str:
     """Return a privacy-safe label from a SIP From/To header value.
 
     Strips the `tag=` parameter, extracts the display name or SIP user part,
@@ -494,9 +494,9 @@ def _mask_caller(header: str) -> str:
 
     Examples:
     ```
-    >>> _mask_caller('"08001234567" <sip:08001234567@example.com>;tag=abc')
+    >>> mask_caller('"08001234567" <sip:08001234567@example.com>;tag=abc')
     '*******4567'
-    >>> _mask_caller('sip:alice@example.com')
+    >>> mask_caller('sip:alice@example.com')
     '*lice'
     ```
     """

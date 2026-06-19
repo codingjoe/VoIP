@@ -295,10 +295,10 @@ class TestSipURI:
         uri = SipURI.parse("sips:alice@example.com")
         assert uri.transport == "TLS"
 
-    def test_transport__sip_without_parameter_returns_none(self):
-        """Return None for a plain sip: URI without transport parameter."""
+    def test_transport__sip_without_parameter_returns_udp(self):
+        """Return 'UDP' for a plain sip: URI without transport parameter."""
         uri = SipURI.parse("sip:alice@example.com")
-        assert uri.transport == "TLS"
+        assert uri.transport == "UDP"
 
     def test_transport__explicit_parameter(self):
         """Return explicit transport parameter value."""
@@ -405,29 +405,29 @@ class TestCallerID:
 class TestMaskCaller:
     def test_mask_caller__with_display_name(self):
         """Mask all but last four chars of a quoted display name."""
-        from voip.sip.types import _mask_caller
+        from voip.sip.types import mask_caller
 
         assert (
-            _mask_caller('"08001234567" <sip:08001234567@example.com>;tag=abc')
+            mask_caller('"08001234567" <sip:08001234567@example.com>;tag=abc')
             == "*******4567"
         )
 
     def test_mask_caller__bare_uri(self):
         """Mask user part from a bare SIP URI."""
-        from voip.sip.types import _mask_caller
+        from voip.sip.types import mask_caller
 
-        assert _mask_caller("sip:alice@example.com") == "*lice"
+        assert mask_caller("sip:alice@example.com") == "*lice"
 
     def test_mask_caller__short_name(self):
         """Return the name unchanged when it is four characters or fewer."""
-        from voip.sip.types import _mask_caller
+        from voip.sip.types import mask_caller
 
-        assert _mask_caller("sip:bob@example.com") == "bob"
+        assert mask_caller("sip:bob@example.com") == "bob"
 
     def test_mask_caller__long_name(self):
         """Mask all but last four characters of a long username."""
-        from voip.sip.types import _mask_caller
+        from voip.sip.types import mask_caller
 
-        result = _mask_caller("sip:verylonguser@example.com")
+        result = mask_caller("sip:verylonguser@example.com")
         assert result.endswith("user")
         assert result.startswith("*")

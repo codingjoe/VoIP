@@ -4,7 +4,7 @@
 
 ### SIP Signalling
 
-SIP User Agent Client (UAC) over TLS/TCP ([RFC 3261]). Handles incoming
+SIP User Agent Client (UAC) over TLS/TCP/UDP ([RFC 3261]). Handles incoming
 `INVITE`, `BYE`, `ACK`, `CANCEL`, and `OPTIONS` requests, carrier
 `REGISTER` with digest authentication ([RFC 8760]: MD5, SHA-256,
 SHA-512/256), and double-CRLF keepalive ping/pong ([RFC 5626 §4.4.1]).

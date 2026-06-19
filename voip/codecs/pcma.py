@@ -16,7 +16,7 @@ __all__ = ["PCMA"]
 # G.711 A-law segment upper bounds (16-bit PCM magnitude, inclusive per segment).
 # Vectorised segment lookup via np.searchsorted uses side='left' to count thresholds
 # strictly exceeded (v > threshold), giving the correct 0–7 segment index.
-_ALAW_SEG_UBOUND: np.ndarray = np.array(
+ALAW_SEG_UBOUND: np.ndarray = np.array(
     (0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF, 0x1FFF, 0x3FFF, 0x7FFF), dtype=np.int32
 )
 
@@ -78,7 +78,7 @@ class PCMA(RTPCodec):
         # Find the segment index (0–7) via vectorised binary search on the upper bounds.
         # side='left' counts thresholds strictly less than magnitude, i.e. exceeded.
         seg = np.minimum(
-            np.searchsorted(_ALAW_SEG_UBOUND, magnitude, side="left").astype(np.int32),
+            np.searchsorted(ALAW_SEG_UBOUND, magnitude, side="left").astype(np.int32),
             7,
         )
         # Extract the 4-bit mantissa in 16-bit space.

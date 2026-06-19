@@ -107,7 +107,11 @@ class Session:
         dialog: SIP dialog state for this call leg.
         media: Negotiated SDP media description for this call leg.
         caller: Caller identifier as received in the SIP From header.
-        srtp: Optional SRTP session for encrypting and decrypting media.
+        srtp: Optional SRTP session used to encrypt outbound media (our SDES
+            send key).
+        srtp_recv: Optional SRTP session used to decrypt inbound media (the
+            remote's SDES key).  Falls back to `srtp` when unset, preserving
+            the legacy symmetric single-session behaviour.
     """
 
     media_type: typing.ClassVar[str] = "audio"
@@ -117,6 +121,7 @@ class Session:
     media: MediaDescription
     caller: CallerID
     srtp: SRTPSession | None = None
+    srtp_recv: SRTPSession | None = None
 
     def packet_received(self, packet: RTPPacket, addr: NetworkAddress) -> None:
         """Handle a parsed RTP packet. Override in subclasses to process media.
@@ -257,14 +262,53 @@ class RealtimeTransportProtocol(STUNProtocol):
     calls: dict[NetworkAddress | None, Session] = dataclasses.field(
         init=False, default_factory=dict
     )
-    public_address: NetworkAddress | None = dataclasses.field(init=False, default=None)
+    public_address: asyncio.Future[NetworkAddress] = dataclasses.field(
+        init=False, default_factory=asyncio.Future
+    )
+
+    def connection_made(self, transport: asyncio.DatagramTransport) -> None:
+        """Create the public-address future, then start STUN negotiation."""
+        self.public_address = asyncio.get_running_loop().create_future()
+        super().connection_made(transport)
 
     def stun_connection_made(
         self,
         transport: asyncio.DatagramTransport,
         addr: NetworkAddress,
     ) -> None:
-        self.public_address = addr
+        logger.debug("RTP socket ready, public address is %s:%s", addr[0], addr[1])
+        if self.public_address is not None and not self.public_address.done():
+            self.public_address.set_result(addr)
+
+    @classmethod
+    async def serve(
+        cls,
+        bind_address: str | None = None,
+        stun_server: NetworkAddress | None = None,
+    ) -> RealtimeTransportProtocol:
+        """Create a bound RTP endpoint and wait for the public address.
+
+        Creates the UDP socket, sends a STUN binding request when configured,
+        and suspends until the public address is confirmed before returning.
+
+        Args:
+            bind_address: Local bind address — `"0.0.0.0"` for IPv4 or
+                `"::"` for IPv6.
+            stun_server: STUN server for NAT traversal.  `None` skips STUN
+                and uses the local socket address instead.
+
+        Returns:
+            A ready [`RealtimeTransportProtocol`][voip.rtp.RealtimeTransportProtocol]
+            with [`public_address`][voip.rtp.RealtimeTransportProtocol.public_address]
+            already resolved.
+        """
+        loop = asyncio.get_running_loop()
+        _, rtp = await loop.create_datagram_endpoint(
+            lambda: cls(stun_server_address=stun_server),
+            local_addr=(bind_address, 0),
+        )
+        await rtp.public_address
+        return rtp
 
     def register_call(
         self,
@@ -322,16 +366,19 @@ class RealtimeTransportProtocol(STUNProtocol):
         `None` handler when no exact match exists.  Drops the packet with a
         debug log when no handler is registered at all.
 
-        When the matched handler carries an SRTP session the packet is
+        When the matched handler carries an SRTP session, the packet is
         authenticated and decrypted before being forwarded; packets that fail
-        authentication are logged at WARNING level and discarded.
+        authentication are logged at WARNING level and discarded. Decryption
+        uses the handler's receive session (`srtp_recv`) when set, falling
+        back to `srtp` so a single symmetric session still works.
         """
         handler = self.calls.get(addr)
         if handler is None:
             handler = self.calls.get(None)
         if handler is not None:
-            if handler.srtp is not None:
-                decrypted = handler.srtp.decrypt(data)
+            recv_session = handler.srtp_recv or handler.srtp
+            if recv_session is not None:
+                decrypted = recv_session.decrypt(data)
                 if decrypted is None:
                     logger.warning(
                         "SRTP authentication failed for packet from %s:%s, discarding",
