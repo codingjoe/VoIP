@@ -228,7 +228,7 @@ class AudioCall(Session):
         [SayCall][voip.ai.SayCall] finishes speaking.
         """
 
-    def _dispatch_next_packet(
+    def dispatch_next_packet(
         self,
         packets: Iterator[bytes],
         remote_addr: tuple[str, int],
@@ -246,7 +246,7 @@ class AudioCall(Session):
             loop = asyncio.get_running_loop()
             self.outbound_handle = loop.call_at(
                 next_deadline,
-                self._dispatch_next_packet,
+                self.dispatch_next_packet,
                 packets,
                 remote_addr,
                 next_deadline,
@@ -273,7 +273,7 @@ class AudioCall(Session):
             self.cancel_outbound_audio()
             loop = asyncio.get_running_loop()
             next_send_at = loop.time()
-            self._dispatch_next_packet(
+            self.dispatch_next_packet(
                 self.codec.packetize(audio),
                 remote_addr,
                 next_send_at,
@@ -343,43 +343,43 @@ class VoiceActivityCall(AudioCall):
         default=datetime.timedelta(milliseconds=200)
     )
 
-    _speech_buffer: np.ndarray = dataclasses.field(
+    speech_buffer: np.ndarray = dataclasses.field(
         init=False, repr=False, default_factory=lambda: np.empty((0,), dtype=np.float32)
     )
-    _flush_voice_buffer_handle: asyncio.TimerHandle | None = dataclasses.field(
+    flush_voice_buffer_handle: asyncio.TimerHandle | None = dataclasses.field(
         init=False, repr=False, default=None
     )
 
     def audio_received(self, *, audio: np.ndarray, rms: float) -> None:
-        self._speech_buffer = np.concatenate((self._speech_buffer, audio))
+        self.speech_buffer = np.concatenate((self.speech_buffer, audio))
         if rms > self.voice_rms_threshold:
             self.on_audio_speech()
         else:
             self.on_audio_silence()
 
     def on_audio_speech(self) -> None:
-        if self._flush_voice_buffer_handle is not None:
-            self._flush_voice_buffer_handle.cancel()
-            self._flush_voice_buffer_handle = None
+        if self.flush_voice_buffer_handle is not None:
+            self.flush_voice_buffer_handle.cancel()
+            self.flush_voice_buffer_handle = None
 
     def on_audio_silence(self) -> None:
-        if self._flush_voice_buffer_handle is None:
+        if self.flush_voice_buffer_handle is None:
             loop = asyncio.get_event_loop()
-            self._flush_voice_buffer_handle = loop.call_later(
+            self.flush_voice_buffer_handle = loop.call_later(
                 self.silence_gap.total_seconds(),
                 self.flush_voice_buffer,
             )
 
     def flush_voice_buffer(self) -> None:
-        self._flush_voice_buffer_handle = None
+        self.flush_voice_buffer_handle = None
         # Ensure at least one second of audio to avoid cutting words in half.
         if not (
-            len(self._speech_buffer)
+            len(self.speech_buffer)
             < self.sampling_rate_hz * self.silence_gap.total_seconds()
-            or self.rms(self._speech_buffer) < self.utterances_rms_threshold
+            or self.rms(self.speech_buffer) < self.utterances_rms_threshold
         ):
-            asyncio.create_task(self.voice_received(self._speech_buffer.copy()))
-        self._speech_buffer = np.empty((0,), dtype=np.float32)
+            asyncio.create_task(self.voice_received(self.speech_buffer.copy()))
+        self.speech_buffer = np.empty((0,), dtype=np.float32)
 
     async def voice_received(self, audio: np.ndarray) -> None:
         """Handle the flushed speech buffer.  Override in subclasses.

@@ -26,14 +26,14 @@ __all__ = ["CIPHER_SUITE", "SRTPSession"]
 CIPHER_SUITE = "AES_CM_128_HMAC_SHA1_80"
 
 #: AES key size in bytes (128-bit).
-_KEY_SIZE = 16
+KEY_SIZE = 16
 #: Master salt size in bytes (112-bit).
-_SALT_SIZE = 14
+SALT_SIZE = 14
 #: HMAC-SHA1-80 authentication tag size in bytes.
-_AUTH_TAG_SIZE = 10
+AUTH_TAG_SIZE = 10
 
 
-def _prf(master_key: bytes, label: int, master_salt: bytes, length: int) -> bytes:
+def prf(master_key: bytes, label: int, master_salt: bytes, length: int) -> bytes:
     """Compute the SRTP pseudo-random function (RFC 3711 §4.3.1).
 
     Uses AES Counter Mode with IV derived from the label and master salt.
@@ -76,27 +76,27 @@ class SRTPSession:
 
     master_key: bytes
     master_salt: bytes
-    _session_key: bytes = dataclasses.field(init=False)
-    _session_auth_key: bytes = dataclasses.field(init=False)
-    _session_salt: bytes = dataclasses.field(init=False)
+    session_key: bytes = dataclasses.field(init=False)
+    session_auth_key: bytes = dataclasses.field(init=False)
+    session_salt: bytes = dataclasses.field(init=False)
     #: Rollover counter and highest sent sequence number for encryption.
-    _send_roc: int = dataclasses.field(init=False, default=0)
-    _last_send_seq: int = dataclasses.field(init=False, default=-1)
+    send_roc: int = dataclasses.field(init=False, default=0)
+    last_send_seq: int = dataclasses.field(init=False, default=-1)
     #: Rollover counter and highest received sequence number for decryption.
-    _recv_roc: int = dataclasses.field(init=False, default=0)
-    _last_recv_seq: int = dataclasses.field(init=False, default=-1)
+    recv_roc: int = dataclasses.field(init=False, default=0)
+    last_recv_seq: int = dataclasses.field(init=False, default=-1)
 
     def __post_init__(self) -> None:
-        self._session_key = _prf(self.master_key, 0x00, self.master_salt, _KEY_SIZE)
-        self._session_auth_key = _prf(self.master_key, 0x01, self.master_salt, 20)
-        self._session_salt = _prf(self.master_key, 0x02, self.master_salt, _SALT_SIZE)
+        self.session_key = prf(self.master_key, 0x00, self.master_salt, KEY_SIZE)
+        self.session_auth_key = prf(self.master_key, 0x01, self.master_salt, 20)
+        self.session_salt = prf(self.master_key, 0x02, self.master_salt, SALT_SIZE)
 
     @classmethod
     def generate(cls) -> SRTPSession:
         """Generate a new SRTP session with a cryptographically random key and salt."""
         return cls(
-            master_key=os.urandom(_KEY_SIZE),
-            master_salt=os.urandom(_SALT_SIZE),
+            master_key=os.urandom(KEY_SIZE),
+            master_salt=os.urandom(SALT_SIZE),
         )
 
     @classmethod
@@ -134,10 +134,7 @@ class SRTPSession:
         if len(parts) < 3 or not parts[2].startswith("inline:"):
             raise ValueError(f"Malformed SDES crypto attribute: {value!r}")
         _tag, suite, key_params = parts[0], parts[1], parts[2]
-        # RFC 4568 §5.1.1: several inline key-params may be joined by ';';
-        # the first is the active key, the rest are pre-rolled backups.
         inline = key_params.split(";", 1)[0]
-        # The inline parameter may carry trailing |lifetime or ~MKI suffixes.
         key_material_b64, _, _trailing = inline.removeprefix("inline:").partition("|")
         key_material_b64 = key_material_b64.split("~", 1)[0]
         if suite != CIPHER_SUITE:
@@ -149,14 +146,14 @@ class SRTPSession:
             key_material = base64.b64decode(key_material_b64, validate=True)
         except (ValueError, base64.binascii.Error) as exc:  # noqa: PERF203
             raise ValueError(f"Malformed SDES inline key: {inline!r}") from exc
-        if len(key_material) < _KEY_SIZE + _SALT_SIZE:
+        if len(key_material) < KEY_SIZE + SALT_SIZE:
             raise ValueError(
                 f"SDES inline key too short ({len(key_material)} bytes); "
-                f"expected at least {_KEY_SIZE + _SALT_SIZE}"
+                f"expected at least {KEY_SIZE + SALT_SIZE}"
             )
         return cls(
-            master_key=key_material[:_KEY_SIZE],
-            master_salt=key_material[_KEY_SIZE : _KEY_SIZE + _SALT_SIZE],
+            master_key=key_material[:KEY_SIZE],
+            master_salt=key_material[KEY_SIZE : KEY_SIZE + SALT_SIZE],
         )
 
     @property
@@ -174,27 +171,27 @@ class SRTPSession:
         key_salt = base64.b64encode(self.master_key + self.master_salt).decode()
         return f"1 {CIPHER_SUITE} inline:{key_salt}"
 
-    def _compute_iv(self, ssrc: int, index: int) -> bytes:
+    def compute_iv(self, ssrc: int, index: int) -> bytes:
         """Compute the 128-bit AES-CM IV for a given SSRC and packet index.
 
         IV = (session_salt * 2^16) XOR (SSRC * 2^64) XOR (index * 2^16)
         per RFC 3711 §4.1.1.
         """
         iv_int = (
-            (int.from_bytes(self._session_salt, "big") << 16)
+            (int.from_bytes(self.session_salt, "big") << 16)
             ^ (ssrc << 64)
             ^ (index << 16)
         )
         return iv_int.to_bytes(16, "big")
 
-    def _auth_tag(self, packet_no_tag: bytes, roc: int) -> bytes:
+    def auth_tag(self, packet_no_tag: bytes, roc: int) -> bytes:
         """Compute the 10-byte HMAC-SHA1 authentication tag (RFC 3711 §4.2)."""
         roc_bytes = struct.pack(">I", roc)
-        mac = hmac.HMAC(self._session_auth_key, hashes.SHA1())  # noqa: S303
+        mac = hmac.HMAC(self.session_auth_key, hashes.SHA1())  # noqa: S303
         mac.update(packet_no_tag + roc_bytes)
-        return mac.finalize()[:_AUTH_TAG_SIZE]
+        return mac.finalize()[:AUTH_TAG_SIZE]
 
-    def _estimate_recv_index(self, seq: int) -> tuple[int, int]:
+    def estimate_recv_index(self, seq: int) -> tuple[int, int]:
         """Estimate the packet index and new ROC for a received sequence number.
 
         Implements the index estimation algorithm from RFC 3711 §3.3.1.
@@ -206,10 +203,9 @@ class SRTPSession:
             A `(index, roc_guess)` tuple where `index` is the estimated
             48-bit packet index and `roc_guess` is the ROC value used.
         """
-        s_l = self._last_recv_seq
-        roc = self._recv_roc
+        s_l = self.last_recv_seq
+        roc = self.recv_roc
         if s_l < 0:
-            # No packets received yet; use the current ROC.
             return (roc << 16) | seq, roc
         if s_l < 0x8000:  # s_l < 2^15
             if seq - s_l > 0x8000:
@@ -243,21 +239,18 @@ class SRTPSession:
         ssrc = struct.unpack(">I", header[8:12])[0]
         seq = struct.unpack(">H", header[2:4])[0]
 
-        # Detect rollover: the sequence number wrapped from ~65535 back to ~0.
-        # For the send side, sequence numbers always increase monotonically so
-        # any decrease indicates a rollover.
-        if self._last_send_seq >= 0 and seq < self._last_send_seq:
-            self._send_roc = (self._send_roc + 1) % (1 << 32)
-        self._last_send_seq = seq
+        if self.last_send_seq >= 0 and seq < self.last_send_seq:
+            self.send_roc = (self.send_roc + 1) % (1 << 32)
+        self.last_send_seq = seq
 
-        index = (self._send_roc << 16) | seq
-        iv = self._compute_iv(ssrc, index)
-        cipher = Cipher(algorithms.AES(self._session_key), modes.CTR(iv))
+        index = (self.send_roc << 16) | seq
+        iv = self.compute_iv(ssrc, index)
+        cipher = Cipher(algorithms.AES(self.session_key), modes.CTR(iv))
         enc = cipher.encryptor()
         encrypted_payload = enc.update(payload) + enc.finalize()
 
         srtp_no_tag = header + encrypted_payload
-        return srtp_no_tag + self._auth_tag(srtp_no_tag, self._send_roc)
+        return srtp_no_tag + self.auth_tag(srtp_no_tag, self.send_roc)
 
     def decrypt(self, packet: bytes) -> bytes | None:
         """Decrypt and authenticate an SRTP packet.
@@ -273,33 +266,31 @@ class SRTPSession:
             Decrypted RTP packet bytes, or `None` when authentication fails
             or the packet is too short.
         """
-        if len(packet) < 12 + _AUTH_TAG_SIZE:
+        if len(packet) < 12 + AUTH_TAG_SIZE:
             return None
-        srtp_no_tag = packet[:-_AUTH_TAG_SIZE]
-        received_tag = packet[-_AUTH_TAG_SIZE:]
+        srtp_no_tag = packet[:-AUTH_TAG_SIZE]
+        received_tag = packet[-AUTH_TAG_SIZE:]
 
         header = packet[:12]
         ssrc = struct.unpack(">I", header[8:12])[0]
         seq = struct.unpack(">H", header[2:4])[0]
 
-        index, roc_guess = self._estimate_recv_index(seq)
+        index, roc_guess = self.estimate_recv_index(seq)
 
-        expected_tag = self._auth_tag(srtp_no_tag, roc_guess)
+        expected_tag = self.auth_tag(srtp_no_tag, roc_guess)
         if not _hmac_stdlib.compare_digest(received_tag, expected_tag):
             return None
 
-        # Authentication passed — update the highest received sequence number
-        # and ROC per RFC 3711 §3.3.1.
-        if roc_guess == self._recv_roc:
-            if self._last_recv_seq < 0 or seq > self._last_recv_seq:
-                self._last_recv_seq = seq
-        elif roc_guess == (self._recv_roc + 1) % (1 << 32):
-            self._recv_roc = roc_guess
-            self._last_recv_seq = seq
+        if roc_guess == self.recv_roc:
+            if self.last_recv_seq < 0 or seq > self.last_recv_seq:
+                self.last_recv_seq = seq
+        elif roc_guess == (self.recv_roc + 1) % (1 << 32):
+            self.recv_roc = roc_guess
+            self.last_recv_seq = seq
 
         encrypted_payload = srtp_no_tag[12:]
-        iv = self._compute_iv(ssrc, index)
-        cipher = Cipher(algorithms.AES(self._session_key), modes.CTR(iv))
+        iv = self.compute_iv(ssrc, index)
+        cipher = Cipher(algorithms.AES(self.session_key), modes.CTR(iv))
         dec = cipher.decryptor()
         payload = dec.update(encrypted_payload) + dec.finalize()
         return header + payload

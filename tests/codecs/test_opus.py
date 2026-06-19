@@ -12,64 +12,64 @@ from voip.codecs.opus import Opus, OpusDecoder  # noqa: E402
 
 class TestOggCRC32:
     def test_ogg_crc32__empty_bytes(self):
-        """_ogg_crc32 of empty bytes is zero."""
-        assert Opus._ogg_crc32(b"") == 0
+        """ogg_crc32 of empty bytes is zero."""
+        assert Opus.ogg_crc32(b"") == 0
 
     def test_ogg_crc32__known_value(self):
-        """_ogg_crc32 produces a deterministic 32-bit value."""
-        crc = Opus._ogg_crc32(b"OggS")
+        """ogg_crc32 produces a deterministic 32-bit value."""
+        crc = Opus.ogg_crc32(b"OggS")
         assert 0 <= crc <= 0xFFFFFFFF
 
 
 class TestOggPage:
     def test_ogg_page__starts_with_capture_pattern(self):
-        """_ogg_page output starts with the Ogg capture pattern 'OggS'."""
-        page = Opus._ogg_page(0x02, 0, 0x12345678, 0, [b"hello"])
+        """ogg_page output starts with the Ogg capture pattern 'OggS'."""
+        page = Opus.ogg_page(0x02, 0, 0x12345678, 0, [b"hello"])
         assert page[:4] == b"OggS"
 
     def test_ogg_page__contains_packet_data(self):
-        """_ogg_page embeds the provided packet bytes."""
-        page = Opus._ogg_page(0x02, 0, 0, 0, [b"payload"])
+        """ogg_page embeds the provided packet bytes."""
+        page = Opus.ogg_page(0x02, 0, 0, 0, [b"payload"])
         assert b"payload" in page
 
     def test_ogg_page__large_packet_uses_255_lacing(self):
-        """_ogg_page correctly laces a packet exceeding 254 bytes."""
-        page = Opus._ogg_page(0x00, 0, 0, 0, [b"x" * 256])
+        """ogg_page correctly laces a packet exceeding 254 bytes."""
+        page = Opus.ogg_page(0x00, 0, 0, 0, [b"x" * 256])
         assert page[:4] == b"OggS"
         assert len(page) > 256
 
 
 class TestOggContainer:
     def test_ogg_container__starts_with_ogg_magic(self):
-        """_ogg_container output starts with the Ogg capture pattern 'OggS'."""
-        assert Opus._ogg_container(b"packet").startswith(b"OggS")
+        """ogg_container output starts with the Ogg capture pattern 'OggS'."""
+        assert Opus.ogg_container(b"packet").startswith(b"OggS")
 
     def test_ogg_container__contains_opus_head(self):
-        """_ogg_container includes the OpusHead identification header."""
-        assert b"OpusHead" in Opus._ogg_container(b"packet")
+        """ogg_container includes the OpusHead identification header."""
+        assert b"OpusHead" in Opus.ogg_container(b"packet")
 
     def test_ogg_container__contains_opus_tags(self):
-        """_ogg_container includes the OpusTags comment header."""
-        assert b"OpusTags" in Opus._ogg_container(b"packet")
+        """ogg_container includes the OpusTags comment header."""
+        assert b"OpusTags" in Opus.ogg_container(b"packet")
 
     def test_ogg_container__non_empty_for_single_packet(self):
-        """_ogg_container produces a non-empty Ogg container for a single Opus packet."""
-        assert len(Opus._ogg_container(b"x" * 100)) > 100
+        """ogg_container produces a non-empty Ogg container for a single Opus packet."""
+        assert len(Opus.ogg_container(b"x" * 100)) > 100
 
     def test_ogg_container__empty_payload(self):
-        """_ogg_container produces a valid Ogg container even for empty payload."""
-        result = Opus._ogg_container(b"")
+        """ogg_container produces a valid Ogg container even for empty payload."""
+        result = Opus.ogg_container(b"")
         assert b"OggS" in result
 
     def test_ogg_container__produces_three_pages(self):
-        """_ogg_container produces exactly three Ogg pages: BOS, tags, and data."""
-        result = Opus._ogg_container(b"x" * 10)
+        """ogg_container produces exactly three Ogg pages: BOS, tags, and data."""
+        result = Opus.ogg_container(b"x" * 10)
         assert result.count(b"OggS") == 3
 
 
 class TestOpusDecode:
     def test_decode__wraps_in_ogg_format(self):
-        """Decode passes the payload through _ogg_container before calling decode_pcm."""
+        """Decode passes the payload through ogg_container before calling decode_pcm."""
         with patch.object(
             Opus, "decode_pcm", return_value=np.zeros(16000, dtype=np.float32)
         ) as mock_decode_pcm:
@@ -146,7 +146,7 @@ class TestOpusPacketize:
 
         Regression test: the previous implementation appended a flush packet
         (`codec.encode(None)`) after all frames, producing N+1 RTP packets
-        for N frames of audio.  `_dispatch_next_packet` sends every yielded
+        for N frames of audio.  `dispatch_next_packet` sends every yielded
         payload at a fixed 20 ms interval, so the extra packet shifted the
         receiver's playback timeline by one ptime (20 ms), causing audible
         timing glitches.

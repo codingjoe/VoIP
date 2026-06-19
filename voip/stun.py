@@ -32,7 +32,7 @@ class STUNAttributeType(enum.IntEnum):
     XOR_MAPPED_ADDRESS = 0x0020
 
 
-def _parse_address(
+def parse_address(
     value: bytes, xor_key: bytes
 ) -> tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int] | None:
     """Decode a STUN MAPPED-ADDRESS or XOR-MAPPED-ADDRESS attribute value.
@@ -115,7 +115,7 @@ class STUNProtocol(asyncio.DatagramProtocol):
     stun_server_address: NetworkAddress | None = NetworkAddress(
         "stun.cloudflare.com", 3478
     )
-    _stun_transaction_id: bytes = dataclasses.field(init=False, default=b"")
+    stun_transaction_id: bytes = dataclasses.field(init=False, default=b"")
     transport: asyncio.DatagramTransport | None = dataclasses.field(
         init=False, default=None
     )
@@ -128,8 +128,8 @@ class STUNProtocol(asyncio.DatagramProtocol):
                 transport, NetworkAddress(host=ipaddress.ip_address(host), port=port)
             )
         else:
-            self._stun_transaction_id = uuid.uuid4().bytes[:12]
-            self._send_stun_request()
+            self.stun_transaction_id = uuid.uuid4().bytes[:12]
+            self.send_stun_request()
 
     def stun_connection_made(
         self,
@@ -173,10 +173,10 @@ class STUNProtocol(asyncio.DatagramProtocol):
             # RFC 7983: first byte in [0, 3] indicates a STUN packet.
             if (
                 len(data) >= 20
-                and self._stun_transaction_id
-                and data[8:20] == self._stun_transaction_id
+                and self.stun_transaction_id
+                and data[8:20] == self.stun_transaction_id
             ):
-                self._parse_stun_response(data)
+                self.parse_stun_response(data)
             return
         self.packet_received(data, NetworkAddress(*addr[:2]))
 
@@ -195,7 +195,7 @@ class STUNProtocol(asyncio.DatagramProtocol):
             addr: Source `(host, port)` of the datagram.
         """
 
-    def _send_stun_request(self) -> None:
+    def send_stun_request(self) -> None:
         """Send a STUN Binding Request through the protocol's own transport.
 
         Sends the request through the transport bound to this protocol so the
@@ -209,12 +209,12 @@ class STUNProtocol(asyncio.DatagramProtocol):
             STUNMessageType.BINDING_REQUEST,
             0,
             MAGIC_COOKIE,
-            self._stun_transaction_id,
+            self.stun_transaction_id,
         )
         logger.debug("Sending STUN Binding Request to %s:%s", *self.stun_server_address)
         self.transport.sendto(request, self.stun_server_address)
 
-    def _parse_stun_response(self, data: bytes) -> None:
+    def parse_stun_response(self, data: bytes) -> None:
         """Parse a STUN Binding Success Response and invoke :meth:`stun_connection_made`."""
         logger.debug("Parsing STUN response (len=%d)", len(data))
         if len(data) < 20:
@@ -224,11 +224,10 @@ class STUNProtocol(asyncio.DatagramProtocol):
         if (
             magic_cookie != MAGIC_COOKIE
             or message_type != STUNMessageType.BINDING_SUCCESS_RESPONSE
-            or response_tid != self._stun_transaction_id
+            or response_tid != self.stun_transaction_id
         ):
             return
-        # Clear transaction ID so duplicate responses are ignored.
-        self._stun_transaction_id = b""
+        self.stun_transaction_id = b""
         offset = 20
         xor_mapped: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int] | None = (
             None
@@ -242,9 +241,9 @@ class STUNProtocol(asyncio.DatagramProtocol):
             attribute_value = data[offset + 4 : offset + 4 + attribute_len]
             match attribute_type:
                 case STUNAttributeType.XOR_MAPPED_ADDRESS:
-                    xor_mapped = _parse_address(attribute_value, xor_key)
+                    xor_mapped = parse_address(attribute_value, xor_key)
                 case STUNAttributeType.MAPPED_ADDRESS:
-                    mapped = _parse_address(attribute_value, b"")
+                    mapped = parse_address(attribute_value, b"")
             offset += 4 + ((attribute_len + 3) & ~3)  # 4-byte aligned
         try:
             host, port = xor_mapped or mapped

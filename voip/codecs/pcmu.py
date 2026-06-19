@@ -13,8 +13,8 @@ from voip.codecs.base import RTPCodec
 
 __all__ = ["PCMU"]
 
-_MU_LAW_BIAS: int = 0x84  # 132: G.711 mu-law bias constant
-_MU_LAW_CLIP: int = 32635  # maximum biased magnitude (14-bit saturate)
+MU_LAW_BIAS: int = 0x84  # 132: G.711 mu-law bias constant
+MU_LAW_CLIP: int = 32635  # maximum biased magnitude (14-bit saturate)
 
 
 class PCMU(RTPCodec):
@@ -49,7 +49,7 @@ class PCMU(RTPCodec):
         exp = ((raw >> 4) & 0x07).astype(np.int32)
         mantissa = (raw & 0x0F).astype(np.int32)
         # ITU-T G.711 §A: magnitude = (((mantissa << 3) + BIAS) << exp) - BIAS
-        magnitude = (((mantissa << 3) + _MU_LAW_BIAS) << exp) - _MU_LAW_BIAS
+        magnitude = (((mantissa << 3) + MU_LAW_BIAS) << exp) - MU_LAW_BIAS
         linear = (magnitude.astype(np.float32) / 32768.0).astype(np.float32)
         source_rate_hz = (
             input_rate_hz if input_rate_hz is not None else cls.sample_rate_hz
@@ -62,7 +62,7 @@ class PCMU(RTPCodec):
     def encode(cls, samples: np.ndarray) -> bytes:
         pcm = np.clip(np.round(samples * 32768.0), -32768, 32767).astype(np.int32)
         sign = np.where(pcm >= 0, 0x80, 0x00).astype(np.uint8)
-        biased = np.minimum(np.abs(pcm) + _MU_LAW_BIAS, _MU_LAW_CLIP)
+        biased = np.minimum(np.abs(pcm) + MU_LAW_BIAS, MU_LAW_CLIP)
         exp = np.clip(
             np.floor(np.log2(np.maximum(biased, 1))).astype(np.int32) - 7, 0, 7
         )

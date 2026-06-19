@@ -128,7 +128,7 @@ class Transaction(asyncio.Future):
         sip: SessionInitiationProtocol,
     ):
         try:
-            dialog = sip._dialogs[request.remote_tag, request.local_tag]
+            dialog = sip.dialogs[request.remote_tag, request.local_tag]
         except KeyError:
             dialog = sip.dialog_class.from_request(request)
         return cls(
@@ -326,16 +326,18 @@ class DigestAuthMixin:
         if is_sess and cnonce is None:
             raise ValueError(f"algorithm={algorithm!r} requires a cnonce value")
 
-        def h(data: str) -> str:
-            return hashlib.new(hash_name, data.encode()).hexdigest()
-
-        ha1 = h(f"{username}:{realm}:{password}")
+        ha1 = cls.hash(hash_name, f"{username}:{realm}:{password}")
         if is_sess:
-            ha1 = h(f"{ha1}:{nonce}:{cnonce}")
-        ha2 = h(f"{method}:{uri}")
+            ha1 = cls.hash(hash_name, f"{ha1}:{nonce}:{cnonce}")
+        ha2 = cls.hash(hash_name, f"{method}:{uri}")
         if qop in (DigestQoP.AUTH, DigestQoP.AUTH_INT):
-            return h(f"{ha1}:{nonce}:{nc}:{cnonce}:{qop}:{ha2}")
-        return h(f"{ha1}:{nonce}:{ha2}")
+            return cls.hash(hash_name, f"{ha1}:{nonce}:{nc}:{cnonce}:{qop}:{ha2}")
+        return cls.hash(hash_name, f"{ha1}:{nonce}:{ha2}")
+
+    @staticmethod
+    def hash(hash_name: str, data: str) -> str:
+        """Return the hex digest of *data* using the named hash algorithm."""
+        return hashlib.new(hash_name, data.encode()).hexdigest()
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -746,7 +748,7 @@ class InviteTransaction(DigestAuthMixin, Transaction):
         )
         tx.pending_call_class = session_class
         tx.pending_call_kwargs = session_kwargs
-        tx.request = tx._build_invite_request(target)
+        tx.request = tx.build_invite_request(target)
         sip.register_transaction(tx)
         sip.send(tx.request)
         try:
@@ -755,7 +757,7 @@ class InviteTransaction(DigestAuthMixin, Transaction):
             sip.drop_transaction(tx)
             raise
 
-    def _build_invite_request(self, target: types.SipURI) -> messages.Request:
+    def build_invite_request(self, target: types.SipURI) -> messages.Request:
         """Build the outbound INVITE request (with SDP offer) for *target*.
 
         Factored out of [send][voip.sip.transactions.InviteTransaction.send]
@@ -832,7 +834,7 @@ class InviteTransaction(DigestAuthMixin, Transaction):
         SRTP/RTP offer mode is preserved across the retry.
         """
         header = "Proxy-Authorization" if is_proxy else "Authorization"
-        return self._retry_invite(
+        return self.retry_invite(
             offer_srtp=self.offer_srtp, auth_headers={header: auth_value}
         )
 
@@ -851,9 +853,9 @@ class InviteTransaction(DigestAuthMixin, Transaction):
             for header in ("Authorization", "Proxy-Authorization")
             if header in self.request.headers
         }
-        return self._retry_invite(offer_srtp=False, auth_headers=auth_headers)
+        return self.retry_invite(offer_srtp=False, auth_headers=auth_headers)
 
-    def _retry_invite(self, *, offer_srtp: bool, auth_headers: dict[str, str]) -> bool:
+    def retry_invite(self, *, offer_srtp: bool, auth_headers: dict[str, str]) -> bool:
         """Build, register and send a fresh INVITE retry, chaining its result.
 
         Shared by [retry_with_auth][voip.sip.transactions.InviteTransaction.retry_with_auth]
@@ -872,7 +874,7 @@ class InviteTransaction(DigestAuthMixin, Transaction):
         tx.pending_call_class = self.pending_call_class
         tx.pending_call_kwargs = self.pending_call_kwargs
         tx.offer_srtp = offer_srtp
-        tx.request = tx._build_invite_request(self.request.uri)
+        tx.request = tx.build_invite_request(self.request.uri)
         for header, value in auth_headers.items():
             tx.request.headers[header] = value
         self.sip.register_transaction(tx)
@@ -896,7 +898,7 @@ class InviteTransaction(DigestAuthMixin, Transaction):
             case 1:  # trying/ringing
                 return
             case 2:  # OK
-                self._start_call(response)
+                self.start_call(response)
         # SRTP offer rejected as "not acceptable" → fall back to plain RTP.
         if self.offer_srtp and response.status_code in (
             SIPStatus.NOT_ACCEPTABLE_HERE,  # 488
@@ -909,7 +911,7 @@ class InviteTransaction(DigestAuthMixin, Transaction):
         self.ack(response)
         self.complete()
 
-    def _start_call(self, response: Response) -> None:
+    def start_call(self, response: Response) -> None:
         """Complete call setup after a 200 OK is received.
 
         Negotiates the codec from the remote SDP answer, creates the call

@@ -81,7 +81,7 @@ class Message(ByteSerializableObject, abc.ABC):
                 status_code=int(status_code_str),
                 phrase=reason.decode("ascii"),
                 headers=headers,
-                body=cls._parse_body(headers, body),
+                body=cls.parse_body(headers, body),
                 version=version.decode("ascii"),
             )
         try:
@@ -92,12 +92,12 @@ class Message(ByteSerializableObject, abc.ABC):
             method=method.decode("ascii"),
             uri=uri.decode("ascii"),
             headers=headers,
-            body=cls._parse_body(headers, body),
+            body=cls.parse_body(headers, body),
             version=version.decode("ascii"),
         )
 
     @staticmethod
-    def _parse_body(headers: dict[str, str], body: bytes) -> SessionDescription | None:
+    def parse_body(headers: dict[str, str], body: bytes) -> SessionDescription | None:
         """Parse the body according to the Content-Type header."""
         if headers.get("Content-Type") == "application/sdp" and body:
             return SessionDescription.parse(body)
@@ -106,12 +106,10 @@ class Message(ByteSerializableObject, abc.ABC):
     def __bytes__(self) -> bytes:
         if raw_body := bytes(self.body) if self.body is not None else b"":
             self.headers["Content-Length"] = str(len(raw_body))
-        return b"\r\n".join(
-            (self._first_line().encode(), bytes(self.headers), raw_body)
-        )
+        return b"\r\n".join((self.first_line().encode(), bytes(self.headers), raw_body))
 
     def __repr__(self):
-        return self._first_line()
+        return self.first_line()
 
     @property
     def branch(self) -> str:
@@ -135,7 +133,7 @@ class Message(ByteSerializableObject, abc.ABC):
         return int(self.headers["CSeq"].split()[0])
 
     @abc.abstractmethod
-    def _first_line(self) -> str: ...
+    def first_line(self) -> str: ...
 
 
 @dataclasses.dataclass(slots=True, kw_only=True, repr=False)
@@ -149,7 +147,7 @@ class Request(Message):
     method: SIPMethod
     uri: SipURI
 
-    def _first_line(self) -> str:
+    def first_line(self) -> str:
         return f"{self.method} {self.uri} {self.version}"
 
     @classmethod
@@ -172,7 +170,7 @@ class Response(Message):
     status_code: SIPStatus | int
     phrase: str
 
-    def _first_line(self) -> str:
+    def first_line(self) -> str:
         return f"{self.version} {self.status_code} {self.phrase}"
 
     @classmethod
