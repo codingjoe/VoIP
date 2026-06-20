@@ -42,8 +42,9 @@ audio = ["numpy"]
 hd-audio = ["numpy", "av"]
 ai = ["faster-whisper", "numpy", "av", "ollama", "pocket-tts"]
 mcp = ["fastmcp>=3.2.4", "faster-whisper", "numpy", "av", "ollama", "pocket-tts"]
-cli = ["click", "pygments", "faster-whisper", "numpy", "ollama", "pocket-tts"]
+cli = ["click", "pygments", "faster-whisper", "numpy", "ollama", "pocket-tts", "pymupdf"]
 pygments = ["Pygments"]
+fax = ["numpy", "pymupdf"]
 
 [project.scripts]
 voip = "voip.__main__:main"

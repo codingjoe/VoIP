@@ -266,7 +266,7 @@ class TestSayTool:
 
 class TestSendFaxTool:
     async def test_send_fax__dials_with_document_path(self, tmp_path) -> None:
-        """send_fax() reads document_path and dials with OutboundFaxSession."""
+        """send_fax() reads document_path and dials with OutboundDualFaxSession."""
         from voip.mcp import send_fax  # noqa: PLC0415
 
         aor = SipURI.parse("sip:alice@carrier.example;transport=TLS")
@@ -291,12 +291,12 @@ class TestSendFaxTool:
                 )
 
         _, kwargs = mock_dialog.dial.call_args
-        assert kwargs["session_class"].__name__ == "OutboundFaxSession"
+        assert kwargs["session_class"].__name__ == "OutboundDualFaxSession"
         assert kwargs["document"] == b"%PDF-1.4"
         assert kwargs["mime_type"] == "application/pdf"
 
     async def test_send_fax__dials_with_text(self) -> None:
-        """send_fax() encodes text as UTF-8 and dials with OutboundFaxSession."""
+        """send_fax() encodes text as UTF-8 and dials with OutboundDualFaxSession."""
         from voip.mcp import send_fax  # noqa: PLC0415
 
         aor = SipURI.parse("sip:alice@carrier.example")

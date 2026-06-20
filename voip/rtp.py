@@ -243,6 +243,40 @@ class Session:
             attributes=[Attribute(name="sendrecv")],
         )
 
+    @classmethod
+    def sdp_media_descriptions(cls, port: int) -> list[MediaDescription]:
+        """Return one or more media descriptions for outbound SDP offers.
+
+        Defaults to a single description from
+        [sdp_media_description][voip.rtp.Session.sdp_media_description].
+        Override in subclasses to offer multiple `m=` lines (e.g. a dual
+        T.38 + G.711 FAX offer) so the remote endpoint can pick whichever
+        transport it supports.
+
+        Args:
+            port: Local port number for the media stream.
+
+        Returns:
+            A list of `MediaDescription` objects for the SDP offer.
+        """
+        return [cls.sdp_media_description(port)]
+
+    @classmethod
+    def select_session_class(cls, remote_media: MediaDescription) -> type[Session]:
+        """Select the concrete session class for the negotiated media.
+
+        Defaults to `cls`.  Override in dual-offer session classes (e.g.
+        `DualFaxSession`) to resolve to the appropriate transport-specific
+        subclass based on which `m=` line the remote endpoint answered with.
+
+        Args:
+            remote_media: The `m=` section from the remote SDP answer.
+
+        Returns:
+            The session class to instantiate for this call leg.
+        """
+        return cls
+
 
 @dataclasses.dataclass(kw_only=True, slots=True)
 class RealtimeTransportProtocol(STUNProtocol):

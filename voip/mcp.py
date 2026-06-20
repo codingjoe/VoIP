@@ -16,7 +16,7 @@ from mcp.types import SamplingMessage, TextContent
 import voip
 from voip import ai
 from voip.ai import SayCall
-from voip.fax import OutboundFaxSession
+from voip.fax import OutboundDualFaxSession
 from voip.sip import Dialog
 from voip.sip.protocol import SessionInitiationProtocol
 from voip.sip.types import SipURI, parse_uri
@@ -111,11 +111,14 @@ async def send_fax(
     text: str = "",
     document_path: str = "",
 ) -> None:
-    """Send a T.38 FAX to a phone number.
+    """Send a FAX to a phone number.
 
     Dials `target` and transmits either the file at `document_path` or
-    `text` (encoded as UTF-8) as a T.38 FAX, then hangs up.
+    `text` (encoded as UTF-8) as a FAX, then hangs up.
     When both are provided, `document_path` takes precedence.
+
+    The SDP offers both T.38 and G.711 pass-through so the remote endpoint
+    can pick whichever it supports.
 
     The MIME type is detected automatically from the file extension
     (e.g. `"application/pdf"` for `.pdf`, `"text/plain"` for `.txt`).
@@ -144,7 +147,7 @@ async def send_fax(
     dialog = Dialog(sip=connection_pool.sip)
     await dialog.dial(
         target_uri,
-        session_class=OutboundFaxSession,
+        session_class=OutboundDualFaxSession,
         document=document,
         mime_type=mime_type,
     )

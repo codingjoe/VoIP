@@ -6,7 +6,7 @@ import socket
 import time
 
 from voip.ai import SayCall
-from voip.fax import OutboundFaxSession
+from voip.fax import OutboundDualFaxSession
 from voip.sip import dialog, messages
 from voip.sip.protocol import SessionInitiationProtocol
 from voip.sip.types import SipURI, parse_uri
@@ -438,7 +438,12 @@ def agent(
 @click.argument("document", type=click.Path(exists=True, readable=True))
 @click.pass_context
 def fax(ctx, target: str, document: str):
-    """Dial TARGET and send DOCUMENT as a T.38 FAX."""
+    """Dial TARGET and send DOCUMENT as a FAX.
+
+    Offers both T.38 and G.711 pass-through in the SDP so the remote endpoint
+    can pick whichever it supports.  When G.711 is negotiated, PDF documents
+    are rendered via the T.30 modem (install the `fax` extra for PDF support).
+    """
     obj = ctx.obj
     aor = obj["aor"]
 
@@ -452,7 +457,7 @@ def fax(ctx, target: str, document: str):
         )
         await OutboundDialog(sip=protocol).dial(
             parse_uri(target, aor),
-            session_class=OutboundFaxSession,
+            session_class=OutboundDualFaxSession,
             document=open(document, "rb").read(),  # noqa: WPS515
         )
         await protocol.disconnected_event.wait()
