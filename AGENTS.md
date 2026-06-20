@@ -20,6 +20,9 @@ Python VoIP is an async VoIP library for Python. It implements SIP (signalling),
 | `voip/ai.py`       | AI/transcription call helpers                                           |
 | `voip/mcp.py`      | MCP (Model Context Protocol) integration                                |
 | `voip/__main__.py` | CLI entry point                                                         |
+| `.claude-plugin/`  | Claude Code plugin manifest                                             |
+| `.mcp.json`        | Claude Code plugin MCP server config                                    |
+| `skills/`          | Claude Code plugin skills (one per VoIP workflow)                       |
 | `docs/`            | MkDocs documentation source                                             |
 | `tests/`           | Pytest test suite mirroring the `voip/` package layout                  |
 

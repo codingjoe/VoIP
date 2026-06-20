@@ -1,0 +1,25 @@
+{
+  "author": {
+    "email": "johannes@maron.family",
+    "name": "Johannes Maron",
+    "url": "https://github.com/codingjoe"
+  },
+  "description": "Make and receive phone calls via agents. Dial numbers, speak messages, hold AI-driven conversations, transcribe calls, and echo speech back over SIP/RTP.",
+  "displayName": "VoIP",
+  "homepage": "https://codingjoe.dev/VoIP/",
+  "keywords": [
+    "voip",
+    "sip",
+    "rtp",
+    "telephony",
+    "phone",
+    "calls",
+    "ai",
+    "transcription",
+    "tts"
+  ],
+  "license": "BSD-2-Clause",
+  "name": "voip",
+  "repository": "https://github.com/codingjoe/VoIP",
+  "version": "0.5.3"
+}
