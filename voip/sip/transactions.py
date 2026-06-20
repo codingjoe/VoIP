@@ -18,7 +18,6 @@ from voip.sdp.types import (
     ConnectionData,
     MediaDescription,
     Origin,
-    RTPPayloadFormat,
     Timing,
 )
 from voip.srtp import SRTPSession
@@ -578,23 +577,29 @@ class InviteTransaction(DigestAuthMixin, Transaction):
             else None
         )
         caller = CallerID(self.request.headers.get("From", ""))
+        # Match any of the media types this session class supports (e.g.
+        # DualFaxSession answers both m=image and m=audio).  In a dual-offer
+        # answer the remote may decline one media type by setting its port to
+        # 0 (RFC 3264 §8.2); prefer the section with a non-zero port — the
+        # actually accepted media — and fall back to the first match.
+        offered_media_types = {
+            desc.media for desc in session_class.sdp_media_descriptions(0)
+        }
+        matching_media = [
+            m
+            for m in (self.request.body.media if self.request.body else [])
+            if m.media in offered_media_types
+        ]
         remote_audio = next(
-            (
-                m
-                for m in (self.request.body.media if self.request.body else [])
-                if m.media == "audio"
-            ),
-            None,
+            (m for m in matching_media if m.port != 0),
+            matching_media[0] if matching_media else None,
         )
         if remote_audio is not None:
-            negotiated_media = session_class.negotiate_codec(remote_audio)
+            answer_class = session_class.select_session_class(remote_audio)
+            negotiated_media = answer_class.negotiate_codec(remote_audio)
         else:
-            negotiated_media = MediaDescription(
-                media="audio",
-                port=0,
-                proto="RTP/SAVP",
-                fmt=[RTPPayloadFormat.from_pt(0)],
-            )
+            answer_class = session_class
+            negotiated_media = answer_class.sdp_media_description(0)
 
         # SRTP when the offer is `RTP/SAVP` (or `SAVPF`) and carries an SDES
         # `a=crypto:` key.  We generate a fresh send session (its key goes into
@@ -627,7 +632,7 @@ class InviteTransaction(DigestAuthMixin, Transaction):
         self.dialog.route_set = list(self.request.headers.getlist("Record-Route"))
         self.sip.register_dialog(self.dialog)
 
-        session = session_class(
+        session = answer_class(
             rtp=self.sip.rtp,
             caller=caller,
             media=negotiated_media,
@@ -659,7 +664,9 @@ class InviteTransaction(DigestAuthMixin, Transaction):
 
         session_id = str(secrets.randbelow(2**32) + 1)
         rtp_public = self.sip.rtp.public_address.result()
-        sdp_media_attributes = [Attribute(name="sendrecv")]
+        sdp_media_attributes = list(negotiated_media.attributes)
+        if not any(attr.name == "sendrecv" for attr in sdp_media_attributes):
+            sdp_media_attributes.append(Attribute(name="sendrecv"))
         if srtp_send is not None:
             sdp_media_attributes.append(
                 Attribute(name="crypto", value=srtp_send.sdes_attribute)
@@ -697,7 +704,7 @@ class InviteTransaction(DigestAuthMixin, Transaction):
                     ),
                     media=[
                         MediaDescription(
-                            media="audio",
+                            media=negotiated_media.media,
                             port=rtp_public[1],
                             proto=negotiated_media.proto,
                             fmt=negotiated_media.fmt,
@@ -764,24 +771,35 @@ class InviteTransaction(DigestAuthMixin, Transaction):
         so that an auth retry can rebuild the request with a fresh branch and
         incremented CSeq via [retry_with_auth][voip.sip.transactions.InviteTransaction.retry_with_auth].
 
+        The media description comes from the session class's
+        [sdp_media_description][voip.rtp.Session.sdp_media_description],
+        so non-audio media (e.g. T.38 FAX `m=image udptl t38`) is advertised
+        correctly.
+
         When [offer_srtp][voip.sip.transactions.InviteTransaction.offer_srtp]
-        is set (default) the offer advertises `RTP/SAVP` with an SDES
-        `a=crypto:` attribute; otherwise it advertises plain `RTP/AVP`.
+        is set (default) and the media uses an RTP-based transport, the offer
+        is upgraded to `RTP/SAVP` with an SDES `a=crypto:` attribute;
+        otherwise it advertises the transport as-is (e.g. `RTP/AVP` for
+        audio, `udptl` for T.38).
         """
         rtp_public = self.sip.rtp.public_address.result()
         session_id = str(secrets.randbelow(2**32) + 1)
         addrtype = "IP6" if isinstance(rtp_public[0], ipaddress.IPv6Address) else "IP4"
-        if self.offer_srtp:
-            proto = "RTP/SAVP"
-            self.srtp_offer = SRTPSession.generate()
-            attributes = [
-                Attribute(name="sendrecv"),
-                Attribute(name="crypto", value=self.srtp_offer.sdes_attribute),
-            ]
-        else:
-            proto = "RTP/AVP"
+        media_descs = list(
+            self.pending_call_class.sdp_media_descriptions(rtp_public[1])
+        )
+        srtp_offered = False
+        for desc in media_descs:
+            if self.offer_srtp and desc.proto.startswith("RTP/"):
+                self.srtp_offer = SRTPSession.generate()
+                desc.proto = "RTP/SAVP"
+                desc.attributes = [
+                    *desc.attributes,
+                    Attribute(name="crypto", value=self.srtp_offer.sdes_attribute),
+                ]
+                srtp_offered = True
+        if not srtp_offered:
             self.srtp_offer = None
-            attributes = [Attribute(name="sendrecv")]
         sdp_offer = SessionDescription(
             origin=Origin(
                 username="-",
@@ -797,15 +815,7 @@ class InviteTransaction(DigestAuthMixin, Transaction):
                 addrtype=addrtype,
                 connection_address=str(rtp_public[0]),
             ),
-            media=[
-                MediaDescription(
-                    media="audio",
-                    port=rtp_public[1],
-                    proto=proto,
-                    fmt=self.pending_call_class.sdp_formats(),
-                    attributes=attributes,
-                )
-            ],
+            media=media_descs,
         )
         return Request(
             method=SIPMethod.INVITE,
@@ -900,7 +910,9 @@ class InviteTransaction(DigestAuthMixin, Transaction):
             case 2:  # OK
                 self.start_call(response)
         # SRTP offer rejected as "not acceptable" → fall back to plain RTP.
-        if self.offer_srtp and response.status_code in (
+        # Only retry when SRTP was actually offered (non-RTP media like T.38
+        # UDPTL never offers SRTP, so a 488 there is a genuine rejection).
+        if self.srtp_offer is not None and response.status_code in (
             SIPStatus.NOT_ACCEPTABLE_HERE,  # 488
             SIPStatus.NOT_ACCEPTABLE_ANYWHERE,  # 606
             SIPStatus.UNSUPPORTED_MEDIA_TYPE,  # 415
@@ -925,23 +937,30 @@ class InviteTransaction(DigestAuthMixin, Transaction):
             if self.sip.transport
             else None
         )
+        # Find the remote answer's m= section that matches any of the media
+        # types we offered (supports dual-offer sessions like DualFaxSession).
+        # In a dual-offer answer the remote may decline one media type by
+        # setting its port to 0 (RFC 3264 §8.2); prefer the section with a
+        # non-zero port — the actually accepted media — and fall back to the
+        # first match.
+        offered_media_types = {
+            desc.media for desc in self.pending_call_class.sdp_media_descriptions(0)
+        }
+        matching_media = [
+            m
+            for m in (response.body.media if response.body else [])
+            if m.media in offered_media_types
+        ]
         remote_audio = next(
-            (
-                m
-                for m in (response.body.media if response.body else [])
-                if m.media == "audio"
-            ),
-            None,
+            (m for m in matching_media if m.port != 0),
+            matching_media[0] if matching_media else None,
         )
         if remote_audio is not None and self.pending_call_class is not None:
-            negotiated_media = self.pending_call_class.negotiate_codec(remote_audio)
+            call_class = self.pending_call_class.select_session_class(remote_audio)
+            negotiated_media = call_class.negotiate_codec(remote_audio)
         else:
-            negotiated_media = MediaDescription(
-                media="audio",
-                port=0,
-                proto="RTP/AVP",
-                fmt=[RTPPayloadFormat.from_pt(0)],
-            )
+            call_class = self.pending_call_class
+            negotiated_media = call_class.sdp_media_description(0)
 
         # The answer confirms SRTP only when it mirrors our `RTP/SAVP` offer
         # and supplies its own SDES `a=crypto:` key.  Our generated offer
@@ -973,7 +992,13 @@ class InviteTransaction(DigestAuthMixin, Transaction):
         )
 
         if self.pending_call_class is not None:
-            self.dialog.session = self.pending_call_class(
+            logger.info(
+                "start_call: instantiating %s with kwargs=%r, remote_audio=%r",
+                call_class.__name__,
+                self.pending_call_kwargs,
+                remote_audio,
+            )
+            self.dialog.session = call_class(
                 rtp=self.sip.rtp,
                 caller=CallerID(str(self.sip.aor)),
                 media=negotiated_media,

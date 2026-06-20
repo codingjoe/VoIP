@@ -31,6 +31,8 @@ Set `SIP_AOR` to your SIP address-of-record.
 
 ::: voip.mcp.say
 
+::: voip.mcp.send_fax
+
 ::: voip.mcp.call
 
 [cc-mcp]: https://docs.anthropic.com/en/docs/claude-code/mcp

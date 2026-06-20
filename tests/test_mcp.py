@@ -19,10 +19,6 @@ from voip.sip.protocol import SessionInitiationProtocol  # noqa: E402
 from voip.sip.types import CallerID, SipURI  # noqa: E402
 from voip.types import NetworkAddress  # noqa: E402
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def make_media() -> MediaDescription:
     """Return a minimal MediaDescription for testing."""
@@ -76,11 +72,6 @@ def make_agent_call(
     return agent
 
 
-# ---------------------------------------------------------------------------
-# MCPAgentCall.transcript
-# ---------------------------------------------------------------------------
-
-
 class TestTranscript:
     def test_transcript__empty(self) -> None:
         """Return empty string when only a system message exists."""
@@ -106,11 +97,6 @@ class TestTranscript:
         agent = make_agent_call(messages=messages)
         assert "secret" not in agent.transcript
         assert "Caller: test" in agent.transcript
-
-
-# ---------------------------------------------------------------------------
-# MCPAgentCall.transcription_received
-# ---------------------------------------------------------------------------
 
 
 class TestTranscriptionReceived:
@@ -150,11 +136,6 @@ class TestTranscriptionReceived:
                 agent.transcription_received("test")
 
         old_task.cancel.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# MCPAgentCall.respond
-# ---------------------------------------------------------------------------
 
 
 class TestRespond:
@@ -229,11 +210,6 @@ class TestRespond:
         mock_send.assert_not_awaited()
 
 
-# ---------------------------------------------------------------------------
-# say tool
-# ---------------------------------------------------------------------------
-
-
 class TestSayTool:
     async def test_say__dials_with_parsed_uri(self) -> None:
         """say() resolves the target via parse_uri relative to the AOR."""
@@ -288,9 +264,139 @@ class TestSayTool:
             await say(ctx=ctx, target="sip:bob@example.com")
 
 
-# ---------------------------------------------------------------------------
-# call tool
-# ---------------------------------------------------------------------------
+class TestSendFaxTool:
+    async def test_send_fax__dials_with_document_path(self, tmp_path) -> None:
+        """send_fax() reads document_path and dials with OutboundDualFaxSession."""
+        from voip.mcp import send_fax  # noqa: PLC0415
+
+        aor = SipURI.parse("sip:alice@carrier.example;transport=TLS")
+        mock_sip = MagicMock(spec=SessionInitiationProtocol)
+        mock_sip.aor = aor
+        connection_pool.sip = mock_sip
+
+        doc = tmp_path / "fax.pdf"
+        doc.write_bytes(b"%PDF-1.4")
+        ctx = make_mock_context()
+        target_uri = SipURI.parse("sip:bob@carrier.example")
+
+        with patch("voip.mcp.parse_uri", return_value=target_uri):
+            with patch("voip.mcp.Dialog") as MockDialog:
+                mock_dialog = MagicMock(spec=Dialog)
+                MockDialog.return_value = mock_dialog
+                mock_dialog.dial = AsyncMock()
+                await send_fax(
+                    ctx=ctx,
+                    target="sip:bob@carrier.example",
+                    document_path=str(doc),
+                )
+
+        _, kwargs = mock_dialog.dial.call_args
+        assert kwargs["session_class"].__name__ == "OutboundDualFaxSession"
+        assert kwargs["document"] == b"%PDF-1.4"
+        assert kwargs["mime_type"] == "application/pdf"
+
+    async def test_send_fax__dials_with_text(self) -> None:
+        """send_fax() encodes text as UTF-8 and dials with OutboundDualFaxSession."""
+        from voip.mcp import send_fax  # noqa: PLC0415
+
+        aor = SipURI.parse("sip:alice@carrier.example")
+        mock_sip = MagicMock(spec=SessionInitiationProtocol)
+        mock_sip.aor = aor
+        connection_pool.sip = mock_sip
+
+        ctx = make_mock_context()
+        target_uri = SipURI.parse("sip:bob@carrier.example")
+
+        with patch("voip.mcp.parse_uri", return_value=target_uri):
+            with patch("voip.mcp.Dialog") as MockDialog:
+                mock_dialog = MagicMock(spec=Dialog)
+                MockDialog.return_value = mock_dialog
+                mock_dialog.dial = AsyncMock()
+                await send_fax(ctx=ctx, target="sip:bob@carrier.example", text="Hello")
+
+        _, kwargs = mock_dialog.dial.call_args
+        assert kwargs["document"] == b"Hello"
+        assert kwargs["mime_type"] == "text/plain"
+
+    async def test_send_fax__document_path_takes_precedence(self, tmp_path) -> None:
+        """send_fax() prefers document_path over text when both are given."""
+        from voip.mcp import send_fax  # noqa: PLC0415
+
+        aor = SipURI.parse("sip:alice@carrier.example")
+        mock_sip = MagicMock(spec=SessionInitiationProtocol)
+        mock_sip.aor = aor
+        connection_pool.sip = mock_sip
+
+        doc = tmp_path / "fax.pdf"
+        doc.write_bytes(b"%PDF-1.4")
+        ctx = make_mock_context()
+
+        with patch("voip.mcp.parse_uri", return_value=aor):
+            with patch("voip.mcp.Dialog") as MockDialog:
+                mock_dialog = MagicMock(spec=Dialog)
+                MockDialog.return_value = mock_dialog
+                mock_dialog.dial = AsyncMock()
+                await send_fax(
+                    ctx=ctx,
+                    target="sip:bob@carrier.example",
+                    text="ignored",
+                    document_path=str(doc),
+                )
+
+        _, kwargs = mock_dialog.dial.call_args
+        assert kwargs["document"] == b"%PDF-1.4"
+        assert kwargs["mime_type"] == "application/pdf"
+
+    async def test_send_fax__unknown_extension_uses_octet_stream(
+        self, tmp_path
+    ) -> None:
+        """send_fax() falls back to application/octet-stream for unknown file types."""
+        from voip.mcp import send_fax  # noqa: PLC0415
+
+        aor = SipURI.parse("sip:alice@carrier.example")
+        mock_sip = MagicMock(spec=SessionInitiationProtocol)
+        mock_sip.aor = aor
+        connection_pool.sip = mock_sip
+
+        doc = tmp_path / "fax.bin"
+        doc.write_bytes(b"binary doc")
+        ctx = make_mock_context()
+
+        with patch("voip.mcp.parse_uri", return_value=aor):
+            with patch("voip.mcp.Dialog") as MockDialog:
+                mock_dialog = MagicMock(spec=Dialog)
+                MockDialog.return_value = mock_dialog
+                mock_dialog.dial = AsyncMock()
+                await send_fax(
+                    ctx=ctx,
+                    target="sip:bob@carrier.example",
+                    document_path=str(doc),
+                )
+
+        _, kwargs = mock_dialog.dial.call_args
+        assert kwargs["mime_type"] == "application/octet-stream"
+
+    async def test_send_fax__raises_when_no_content(self) -> None:
+        """send_fax() raises ValueError when neither text nor document_path is given."""
+        from voip.mcp import send_fax  # noqa: PLC0415
+
+        aor = SipURI.parse("sip:alice@carrier.example")
+        mock_sip = MagicMock(spec=SessionInitiationProtocol)
+        mock_sip.aor = aor
+        connection_pool.sip = mock_sip
+
+        with pytest.raises(ValueError, match="text or document_path"):
+            await send_fax(ctx=make_mock_context(), target="sip:bob@carrier.example")
+
+    async def test_send_fax__raises_when_not_connected(self) -> None:
+        """send_fax() raises RuntimeError when connection_pool.sip is not set."""
+        from voip.mcp import send_fax  # noqa: PLC0415
+
+        if hasattr(connection_pool, "sip"):
+            del connection_pool.sip
+
+        with pytest.raises(RuntimeError, match="run()"):
+            await send_fax(ctx=make_mock_context(), target="sip:bob@carrier.example")
 
 
 class TestCallTool:
@@ -381,11 +487,6 @@ class TestCallTool:
         assert kwargs["salutation"] == ""
 
 
-# ---------------------------------------------------------------------------
-# run()
-# ---------------------------------------------------------------------------
-
-
 class TestRun:
     async def test_run__sets_connection_pool_sip(self) -> None:
         """run() stores the SIP protocol in connection_pool.sip."""
@@ -455,11 +556,6 @@ class TestRun:
 
         _, kwargs = mock_sip_run.call_args
         assert kwargs["stun_server"] is stun
-
-
-# ---------------------------------------------------------------------------
-# SessionInitiationProtocol.registered_event
-# ---------------------------------------------------------------------------
 
 
 class TestRegisteredEvent:

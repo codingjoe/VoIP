@@ -13,7 +13,7 @@ import struct
 import typing
 from typing import TYPE_CHECKING
 
-from voip.sdp.types import MediaDescription, RTPPayloadFormat
+from voip.sdp.types import Attribute, MediaDescription, RTPPayloadFormat
 from voip.srtp import SRTPSession
 from voip.stun import STUNProtocol
 from voip.types import ByteSerializableObject, NetworkAddress
@@ -102,6 +102,7 @@ class Session:
     negotiation, buffering, and decoding.
 
     Attributes:
+        media_type: SDP media type (e.g. `"audio"` or `"image"`).
         rtp: Shared RTP multiplexer socket that delivers packets to this handler.
         dialog: SIP dialog state for this call leg.
         media: Negotiated SDP media description for this call leg.
@@ -112,6 +113,8 @@ class Session:
             remote's SDES key).  Falls back to `srtp` when unset, preserving
             the legacy symmetric single-session behaviour.
     """
+
+    media_type: typing.ClassVar[str] = "audio"
 
     rtp: RealtimeTransportProtocol
     dialog: Dialog
@@ -126,6 +129,18 @@ class Session:
         Args:
             packet: Parsed RTP packet.
             addr: Remote `(host, port)` the packet arrived from.
+        """
+
+    def data_received(self, data: bytes, addr: NetworkAddress) -> None:
+        """Handle a raw datagram for non-RTP media protocols.
+
+        Called when an incoming datagram cannot be parsed as an RTP packet.
+        Override in subclasses to support alternative media transports such as
+        UDPTL (T.38 FAX).
+
+        Args:
+            data: Raw datagram payload.
+            addr: Source `(host, port)` of the datagram.
         """
 
     def send_packet(self, packet: RTPPacket, addr: NetworkAddress) -> None:
@@ -207,6 +222,61 @@ class Session:
 
         return [RTPPayloadFormat.from_pt(StaticPayloadType.PCMU.pt)]
 
+    @classmethod
+    def sdp_media_description(cls, port: int) -> MediaDescription:
+        """Return the media description for outbound SDP offers.
+
+        Override in subclasses to support alternative media types (e.g. T.38
+        FAX uses `m=image udptl t38` instead of `m=audio RTP/AVP`).
+
+        Args:
+            port: Local port number for the media stream.
+
+        Returns:
+            A `MediaDescription` suitable for inclusion in an SDP offer.
+        """
+        return MediaDescription(
+            media=cls.media_type,
+            port=port,
+            proto="RTP/AVP",
+            fmt=cls.sdp_formats(),
+            attributes=[Attribute(name="sendrecv")],
+        )
+
+    @classmethod
+    def sdp_media_descriptions(cls, port: int) -> list[MediaDescription]:
+        """Return one or more media descriptions for outbound SDP offers.
+
+        Defaults to a single description from
+        [sdp_media_description][voip.rtp.Session.sdp_media_description].
+        Override in subclasses to offer multiple `m=` lines (e.g. a dual
+        T.38 + G.711 FAX offer) so the remote endpoint can pick whichever
+        transport it supports.
+
+        Args:
+            port: Local port number for the media stream.
+
+        Returns:
+            A list of `MediaDescription` objects for the SDP offer.
+        """
+        return [cls.sdp_media_description(port)]
+
+    @classmethod
+    def select_session_class(cls, remote_media: MediaDescription) -> type[Session]:
+        """Select the concrete session class for the negotiated media.
+
+        Defaults to `cls`.  Override in dual-offer session classes (e.g.
+        `DualFaxSession`) to resolve to the appropriate transport-specific
+        subclass based on which `m=` line the remote endpoint answered with.
+
+        Args:
+            remote_media: The `m=` section from the remote SDP answer.
+
+        Returns:
+            The session class to instantiate for this call leg.
+        """
+        return cls
+
 
 @dataclasses.dataclass(kw_only=True, slots=True)
 class RealtimeTransportProtocol(STUNProtocol):
@@ -223,7 +293,7 @@ class RealtimeTransportProtocol(STUNProtocol):
     """
 
     rtp_header_size: typing.ClassVar[int] = 12
-    calls: dict[tuple[str, int] | None, Session] = dataclasses.field(
+    calls: dict[NetworkAddress | None, Session] = dataclasses.field(
         init=False, default_factory=dict
     )
     public_address: asyncio.Future[NetworkAddress] = dataclasses.field(
@@ -354,11 +424,7 @@ class RealtimeTransportProtocol(STUNProtocol):
             try:
                 handler.packet_received(RTPPacket.parse(data), addr)
             except ValueError:
-                logger.warning(
-                    "Malformed RTP packet from %s:%s, discarding",
-                    addr[0],
-                    addr[1],
-                )
+                handler.data_received(data, addr)
         else:
             logger.debug(
                 "No call handler registered for %s:%s, dropping RTP packet",

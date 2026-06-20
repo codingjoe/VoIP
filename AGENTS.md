@@ -19,6 +19,8 @@ Python VoIP is an async VoIP library for Python. It implements SIP (signalling),
 | `voip/audio.py`    | Audio I/O helpers                                                       |
 | `voip/ai.py`       | AI/transcription call helpers                                           |
 | `voip/mcp.py`      | MCP (Model Context Protocol) integration                                |
+| `voip/t30/`        | T.30 Group 3 fax protocol (V.21, V.29, HDLC, T.4, messages, modem)      |
+| `voip/fax.py`      | T.38 and G.711 FAX sessions over SIP                                    |
 | `voip/__main__.py` | CLI entry point                                                         |
 | `docs/`            | MkDocs documentation source                                             |
 | `tests/`           | Pytest test suite mirroring the `voip/` package layout                  |

@@ -2,6 +2,8 @@
 
 import asyncio
 
+import pytest
+from voip.fax import DualFaxSession, FaxSession
 from voip.sip import messages
 from voip.sip.dialog import Dialog
 from voip.sip.protocol import SessionInitiationProtocol
@@ -551,3 +553,335 @@ class TestInviteSrtp:
         assert session.srtp_recv.master_key == remote_session.master_key
 
         recv_task.cancel()
+
+
+class TestFaxInviteSdp:
+    """Outbound fax INVITE must advertise m=image udptl t38, not m=audio."""
+
+    async def test_fax_invite_media_is_image(self, sip):
+        """The INVITE SDP m= line uses 'image', not 'audio'."""
+        target = SipURI.parse("sip:+4933127375949@example.com:5060")
+        dialog = Dialog(uac=sip.aor, sip=sip)
+        send_task = asyncio.create_task(
+            InviteTransaction.send(
+                sip=sip, target=target, dialog=dialog, session_class=FaxSession
+            )
+        )
+        await asyncio.sleep(0)
+        invite = _last_request(sip)
+        media = invite.body.media[0]
+        assert media.media == "image"
+        assert media.proto == "udptl"
+        assert str(media.fmt[0].payload_type) == "t38"
+        # T.38-specific attributes must be present.
+        assert any(a.name == "T38FaxVersion" for a in media.attributes)
+        assert any(a.name == "T38MaxBitRate" for a in media.attributes)
+        # No SRTP crypto on a T.38 offer.
+        assert not any(a.name == "crypto" for a in media.attributes)
+        send_task.cancel()
+
+    async def test_fax_488_does_not_retry_with_rtp(self, sip):
+        """A 488 to a fax INVITE must not trigger an SRTP→RTP fallback retry.
+
+        T.38 never offers SRTP, so a 488 is a genuine rejection — the
+        transaction should complete, not retry with RTP/AVP.
+        """
+        target = SipURI.parse("sip:+4933127375949@example.com:5060")
+        dialog = Dialog(uac=sip.aor, sip=sip)
+        send_task = asyncio.create_task(
+            InviteTransaction.send(
+                sip=sip, target=target, dialog=dialog, session_class=FaxSession
+            )
+        )
+        await asyncio.sleep(0)
+        invite = _last_request(sip)
+
+        sip.response_received(
+            _make_status_response(invite, SIPStatus.NOT_ACCEPTABLE_HERE)
+        )
+        # Transaction completes (no retry), no second INVITE sent.
+        await asyncio.wait_for(send_task, timeout=1)
+        # Only the original INVITE was sent — no RTP fallback retry.
+        invites = [
+            messages.Message.parse(raw)
+            for raw in sip.transport.sent  # type: ignore[attr-defined]
+        ]
+        assert sum(1 for m in invites if m.method == SIPMethod.INVITE) == 1
+
+
+class TestDualFaxInviteSdp:
+    """Outbound dual-offer fax INVITE advertises both m=image and m=audio."""
+
+    async def test_dual_fax_invite_has_two_media_lines(self, sip):
+        """The INVITE SDP contains both T.38 (m=image) and G.711 (m=audio)."""
+        target = SipURI.parse("sip:+4933127375949@example.com:5060")
+        dialog = Dialog(uac=sip.aor, sip=sip)
+        send_task = asyncio.create_task(
+            InviteTransaction.send(
+                sip=sip, target=target, dialog=dialog, session_class=DualFaxSession
+            )
+        )
+        await asyncio.sleep(0)
+        invite = _last_request(sip)
+        media_list = invite.body.media
+        assert len(media_list) == 2
+        # First: T.38
+        assert media_list[0].media == "image"
+        assert media_list[0].proto == "udptl"
+        assert str(media_list[0].fmt[0].payload_type) == "t38"
+        # Second: G.711 (upgraded to RTP/SAVP by SRTP offer)
+        assert media_list[1].media == "audio"
+        assert media_list[1].fmt[0].payload_type == 0
+        # T.38 line never gets SRTP (non-RTP transport).
+        assert not any(a.name == "crypto" for a in media_list[0].attributes)
+        # G.711 line gets SRTP since offer_srtp defaults True and proto is RTP/AVP.
+        assert media_list[1].proto == "RTP/SAVP"
+        assert any(a.name == "crypto" for a in media_list[1].attributes)
+        send_task.cancel()
+
+
+class TestDualFaxAnswer:
+    """Inbound dual-offer answer resolves to correct session class by media type."""
+
+    async def test_dual_fax_answer__image_offer_resolves_t38(self, sip):
+        """Answering an m=image INVITE with DualFaxSession selects FaxSession."""
+        from voip.fax import FaxSession
+
+        invite_bytes = (
+            b"INVITE sip:alice@example.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/TLS 192.0.2.1:5061;branch=z9hG4bKt38img\r\n"
+            b"From: sip:bob@biloxi.com;tag=t38-from\r\n"
+            b"To: sip:alice@example.com\r\n"
+            b"Call-ID: t38-call-id@biloxi.com\r\n"
+            b"CSeq: 1 INVITE\r\n"
+            b"Content-Type: application/sdp\r\n"
+            b"\r\n"
+            b"v=0\r\n"
+            b"o=- 1 1 IN IP4 192.0.2.1\r\n"
+            b"s=-\r\n"
+            b"c=IN IP4 192.0.2.1\r\n"
+            b"t=0 0\r\n"
+            b"m=image 5004 udptl t38\r\n"
+            b"a=T38FaxVersion:0\r\n"
+            b"a=T38MaxBitRate:9600\r\n"
+            b"a=sendrecv\r\n"
+        )
+        request = messages.Message.parse(invite_bytes)
+
+        captured: dict = {}
+
+        class AnsweringDialog(Dialog):
+            def call_received(self) -> None:
+                captured["dialog"] = self
+                self.answer(session_class=DualFaxSession)
+
+        sip.dialog_class = AnsweringDialog
+        recv_task = asyncio.create_task(
+            InviteTransaction.receive(request=request, sip=sip)
+        )
+        await asyncio.sleep(0)
+
+        assert isinstance(captured["dialog"].session, FaxSession)
+        ok = messages.Message.parse(sip.transport.sent[-1])
+        assert ok.status_code == SIPStatus.OK
+        ok_media = ok.body.media[0]
+        assert ok_media.media == "image"
+        assert ok_media.proto == "udptl"
+        recv_task.cancel()
+
+    async def test_dual_fax_answer__audio_offer_resolves_g711(self, sip):
+        """Answering an m=audio INVITE with DualFaxSession selects G711FaxSession."""
+        from voip.fax import G711FaxSession
+
+        invite_bytes = (
+            b"INVITE sip:alice@example.com SIP/2.0\r\n"
+            b"Via: SIP/2.0/TLS 192.0.2.1:5061;branch=z9hG4bKg711aud\r\n"
+            b"From: sip:bob@biloxi.com;tag=g711-from\r\n"
+            b"To: sip:alice@example.com\r\n"
+            b"Call-ID: g711-call-id@biloxi.com\r\n"
+            b"CSeq: 1 INVITE\r\n"
+            b"Content-Type: application/sdp\r\n"
+            b"\r\n"
+            b"v=0\r\n"
+            b"o=- 1 1 IN IP4 192.0.2.1\r\n"
+            b"s=-\r\n"
+            b"c=IN IP4 192.0.2.1\r\n"
+            b"t=0 0\r\n"
+            b"m=audio 5004 RTP/AVP 0\r\n"
+            b"a=rtpmap:0 PCMU/8000\r\n"
+            b"a=sendrecv\r\n"
+        )
+        request = messages.Message.parse(invite_bytes)
+
+        captured: dict = {}
+
+        class AnsweringDialog(Dialog):
+            def call_received(self) -> None:
+                captured["dialog"] = self
+                self.answer(session_class=DualFaxSession)
+
+        sip.dialog_class = AnsweringDialog
+        recv_task = asyncio.create_task(
+            InviteTransaction.receive(request=request, sip=sip)
+        )
+        await asyncio.sleep(0)
+
+        assert isinstance(captured["dialog"].session, G711FaxSession)
+        ok = messages.Message.parse(sip.transport.sent[-1])
+        assert ok.status_code == SIPStatus.OK
+        ok_media = ok.body.media[0]
+        assert ok_media.media == "audio"
+        recv_task.cancel()
+
+
+def _make_ok_response_with_media(
+    request: messages.Request, media_sdp: bytes
+) -> messages.Response:
+    """Build a 200 OK with a custom SDP body echoing *request*'s dialog headers."""
+    return messages.Message.parse(  # type: ignore[return-value]
+        (
+            "SIP/2.0 200 OK\r\n"
+            f"Via: {request.headers.getlist('Via')[0]}\r\n"
+            f"From: {request.headers['From']}\r\n"
+            f"To: {request.headers['To']};tag=remote-tag-1\r\n"
+            f"Call-ID: {request.headers['Call-ID']}\r\n"
+            f"CSeq: {request.headers['CSeq']}\r\n"
+            "Contact: <sip:bob@192.0.2.1:5060>\r\n"
+            "Content-Type: application/sdp\r\n"
+            "\r\n"
+        ).encode()
+        + media_sdp
+    )
+
+
+_IMAGE_OK_SDP = (
+    b"v=0\r\n"
+    b"o=- 1 1 IN IP4 192.0.2.1\r\n"
+    b"s=-\r\n"
+    b"c=IN IP4 192.0.2.1\r\n"
+    b"t=0 0\r\n"
+    b"m=image 5004 udptl t38\r\n"
+    b"a=T38FaxVersion:0\r\n"
+    b"a=T38MaxBitRate:9600\r\n"
+    b"a=sendrecv\r\n"
+)
+
+_AUDIO_OK_SDP = (
+    b"v=0\r\n"
+    b"o=- 1 1 IN IP4 192.0.2.1\r\n"
+    b"s=-\r\n"
+    b"c=IN IP4 192.0.2.1\r\n"
+    b"t=0 0\r\n"
+    b"m=audio 5004 RTP/AVP 0\r\n"
+    b"a=rtpmap:0 PCMU/8000\r\n"
+    b"a=sendrecv\r\n"
+)
+
+
+class TestOutboundDualFaxSessionResolution:
+    """Outbound dual-offer fax must resolve to the Outbound* session subclass.
+
+    Regression for ``TypeError: FaxSession.__init__() got an unexpected
+    keyword argument 'document'``: the base ``DualFaxSession.select_session_class``
+    returned ``FaxSession``/``G711FaxSession`` (which do not accept ``document``),
+    so the kwargs carried from ``OutboundDualFaxSession`` crashed on instantiation.
+    The outbound subclass must resolve to ``OutboundFaxSession`` /
+    ``OutboundG711FaxSession`` so ``document=`` is accepted.
+    """
+
+    async def test_image_answer__resolves_outbound_t38(self, sip):
+        """A 200 OK with m=image selects ``OutboundFaxSession`` (accepts document)."""
+        from voip.fax import OutboundDualFaxSession, OutboundFaxSession
+
+        target = SipURI.parse("sip:+4933127375949@example.com:5060")
+        dialog = Dialog(uac=sip.aor, sip=sip)
+        send_task = asyncio.create_task(
+            InviteTransaction.send(
+                sip=sip,
+                target=target,
+                dialog=dialog,
+                session_class=OutboundDualFaxSession,
+                document=b"\x00\x01\x02 fax data",
+            )
+        )
+        await asyncio.sleep(0)
+        invite = _last_request(sip)
+        sip.response_received(_make_ok_response_with_media(invite, _IMAGE_OK_SDP))
+        await asyncio.wait_for(send_task, timeout=1)
+        assert isinstance(dialog.session, OutboundFaxSession)
+
+    async def test_audio_answer__resolves_outbound_g711(self, sip):
+        """A 200 OK with m=audio selects ``OutboundG711FaxSession`` (accepts document)."""
+        from voip.fax import OutboundDualFaxSession, OutboundG711FaxSession
+
+        target = SipURI.parse("sip:+4933127375949@example.com:5060")
+        dialog = Dialog(uac=sip.aor, sip=sip)
+        send_task = asyncio.create_task(
+            InviteTransaction.send(
+                sip=sip,
+                target=target,
+                dialog=dialog,
+                session_class=OutboundDualFaxSession,
+                document=b"\x00\x01\x02 fax data",
+            )
+        )
+        await asyncio.sleep(0)
+        invite = _last_request(sip)
+        sip.response_received(_make_ok_response_with_media(invite, _AUDIO_OK_SDP))
+        await asyncio.wait_for(send_task, timeout=1)
+        assert isinstance(dialog.session, OutboundG711FaxSession)
+
+    async def test_dual_answer__prefers_nonzero_port(
+        self, sip, caplog: pytest.LogCaptureFixture
+    ):
+        """Prefer the accepted (non-zero port) media section in a dual-offer answer.
+
+        A dual-offer 200 OK with m=image port 0 + m=audio port 22280 must
+        select the audio (G.711) session, not the declined T.38 image section.
+
+        Regression for the CLI fax bug where the first matching m= line
+        (``m=image 0 udptl t38`` — port 0 means declined per RFC 3264 §8.2)
+        was selected, yielding ``remote_rtp_address=None`` →
+        "No remote address for FAX call; dropping document data" → hang up.
+        """
+        from voip.fax import OutboundDualFaxSession, OutboundG711FaxSession
+
+        dual_sdp = (
+            b"v=0\r\n"
+            b"o=- 1 1 IN IP4 192.0.2.1\r\n"
+            b"s=-\r\n"
+            b"c=IN IP4 192.0.2.1\r\n"
+            b"t=0 0\r\n"
+            b"m=image 0 udptl t38\r\n"
+            b"c=IN IP4 0.0.0.0\r\n"
+            b"m=audio 22280 RTP/SAVP 0\r\n"
+            b"c=IN IP4 192.0.2.1\r\n"
+            b"a=rtpmap:0 PCMU/8000\r\n"
+            b"a=sendrecv\r\n"
+            b"a=crypto:1 AES_CM_128_HMAC_SHA1_80 "
+            b"inline:Wjio/ZS0GyFR3P62jPlalFzceF2uVOY9HQEMEExN\r\n"
+        )
+
+        target = SipURI.parse("sip:+4933127375949@example.com:5060")
+        dialog = Dialog(uac=sip.aor, sip=sip)
+        send_task = asyncio.create_task(
+            InviteTransaction.send(
+                sip=sip,
+                target=target,
+                dialog=dialog,
+                session_class=OutboundDualFaxSession,
+                document=b"\x00\x01\x02 fax data",
+            )
+        )
+        await asyncio.sleep(0)
+        invite = _last_request(sip)
+        with caplog.at_level("WARNING", logger="voip.fax"):
+            sip.response_received(_make_ok_response_with_media(invite, dual_sdp))
+            await asyncio.wait_for(send_task, timeout=1)
+            # Allow the transmit() task to flush.
+            await asyncio.sleep(0)
+        assert isinstance(dialog.session, OutboundG711FaxSession)
+        # The document must not have been dropped with "No remote address".
+        assert not any(
+            "No remote address" in record.message for record in caplog.records
+        ), f"Document was dropped: {[r.message for r in caplog.records]!r}"

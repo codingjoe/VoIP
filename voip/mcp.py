@@ -5,6 +5,8 @@ Requires the `mcp` extra: `pip install voip[mcp]`.
 
 import asyncio
 import dataclasses
+import mimetypes
+import pathlib
 import threading
 import typing
 
@@ -14,6 +16,7 @@ from mcp.types import SamplingMessage, TextContent
 import voip
 from voip import ai
 from voip.ai import SayCall
+from voip.fax import OutboundDualFaxSession
 from voip.sip import Dialog
 from voip.sip.protocol import SessionInitiationProtocol
 from voip.sip.types import SipURI, parse_uri
@@ -99,6 +102,55 @@ async def say(ctx: Context, target: str, prompt: str = "") -> None:
     target_uri = parse_uri(target, connection_pool.sip.aor)
     dialog = Dialog(sip=connection_pool.sip)
     await dialog.dial(target_uri, session_class=SayCall, text=prompt)
+
+
+@mcp.tool
+async def send_fax(
+    ctx: Context,
+    target: str,
+    text: str = "",
+    document_path: str = "",
+) -> None:
+    """Send a FAX to a phone number.
+
+    Dials `target` and transmits either the file at `document_path` or
+    `text` (encoded as UTF-8) as a FAX, then hangs up.
+    When both are provided, `document_path` takes precedence.
+
+    The SDP offers both T.38 and G.711 pass-through so the remote endpoint
+    can pick whichever it supports.
+
+    The MIME type is detected automatically from the file extension
+    (e.g. `"application/pdf"` for `.pdf`, `"text/plain"` for `.txt`).
+    Plain `text` is always sent with MIME type `"text/plain"`.
+
+    Args:
+        ctx: FastMCP context (injected automatically by the framework).
+        target: Phone number or SIP URI to call, e.g. `"tel:+1234567890"`
+            or `"sip:alice@example.com"`.
+        text: Plain-text content to send as a FAX.
+        document_path: Path to a document file (e.g. PDF) to send as a FAX.
+    """
+    if not hasattr(connection_pool, "sip"):
+        raise RuntimeError("VoIP not connected: call run() before using tools.")
+    if not document_path and not text:
+        raise ValueError("Provide either text or document_path.")
+    if document_path:
+        path = pathlib.Path(document_path)
+        document = path.read_bytes()
+        mime_type, _ = mimetypes.guess_type(str(path))
+        mime_type = mime_type or "application/octet-stream"
+    else:
+        document = text.encode()
+        mime_type = "text/plain"
+    target_uri = parse_uri(target, connection_pool.sip.aor)
+    dialog = Dialog(sip=connection_pool.sip)
+    await dialog.dial(
+        target_uri,
+        session_class=OutboundDualFaxSession,
+        document=document,
+        mime_type=mime_type,
+    )
 
 
 @mcp.tool

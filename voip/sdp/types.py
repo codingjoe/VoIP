@@ -272,21 +272,22 @@ class RTPPayloadFormat(ByteSerializableObject):
     Serialises to the `a=rtpmap` value when codec fields are present.
     """
 
-    payload_type: int
+    payload_type: int | str
     fmtp: str | None = None
     encoding_name: str | None = None
     channels: int = 1
     sample_rate: int | None = None
 
     def __post_init__(self):
-        try:
-            default = StaticPayloadType.from_pt(self.payload_type)
-        except ValueError:
-            pass
-        else:
-            self.sample_rate = self.sample_rate or default.sample_rate
-            self.encoding_name = self.encoding_name or default.encoding_name
-            self.channels = self.channels or default.channels
+        if isinstance(self.payload_type, int):
+            try:
+                default = StaticPayloadType.from_pt(self.payload_type)
+            except ValueError:
+                pass
+            else:
+                self.sample_rate = self.sample_rate or default.sample_rate
+                self.encoding_name = self.encoding_name or default.encoding_name
+                self.channels = self.channels or default.channels
 
     def __bytes__(self) -> bytes:
         base = f"{self.payload_type} {self.encoding_name}/{self.sample_rate}"
@@ -319,17 +320,12 @@ class RTPPayloadFormat(ByteSerializableObject):
     def frame_size(self) -> int:
         """Samples per standard 20 ms RTP frame.
 
-        For static payload types the value comes from `StaticPayloadType`.
+        For static payload types the value comes from `sample_rate` (populated
+        by `__post_init__` from `StaticPayloadType`).
         For dynamic payload types (e.g. Opus, PT ≥ 96) it is derived from
         `sample_rate` assuming a 20 ms packetisation interval.
         """
-        try:
-            spec = StaticPayloadType.from_pt(self.payload_type)
-            if spec.frame_size:
-                return spec.frame_size
-        except ValueError:
-            pass
-        return (self.sample_rate or 8000) * 20 // 1000
+        return (self.sample_rate or 8_000) * 20 // 1000
 
 
 @dataclasses.dataclass(slots=True)
@@ -352,7 +348,10 @@ class MediaDescription(ByteSerializableObject):
 
     def get_format(self, pt: int | str) -> RTPPayloadFormat | None:
         """Return the `RTPPayloadFormat` for payload type *pt*, or `None`."""
-        target = int(pt)
+        try:
+            target: int | str = int(pt)
+        except TypeError, ValueError:
+            target = str(pt)
         return next((f for f in self.fmt if f.payload_type == target), None)
 
     def apply_attribute(self, attr: Attribute) -> bool:
@@ -411,7 +410,12 @@ class MediaDescription(ByteSerializableObject):
         lines = value.splitlines()
         first = lines[0].rstrip("\r").removeprefix("m=")
         media_type, port_str, proto, *fmts = first.split()
-        fmt = [RTPPayloadFormat.from_pt(int(pt)) for pt in fmts]
+        fmt = [
+            RTPPayloadFormat.from_pt(int(pt))
+            if pt.isdigit()
+            else RTPPayloadFormat(payload_type=pt)
+            for pt in fmts
+        ]
         obj = cls(media=media_type, port=int(port_str), proto=proto, fmt=fmt)
         for line in lines[1:]:
             line = line.rstrip("\r")

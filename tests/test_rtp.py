@@ -4,7 +4,7 @@ import asyncio
 import dataclasses
 import ipaddress
 import struct
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from voip.rtp import RTP, RealtimeTransportProtocol, RTPPacket, RTPPayloadType, Session
@@ -605,3 +605,43 @@ class TestSession:
         """negotiate_codec raises NotImplementedError in the base class."""
         with pytest.raises(NotImplementedError):
             Session.negotiate_codec(MagicMock())
+
+    def test_hang_up__no_op_when_no_dialog(self):
+        """hang_up is a no-op when no dialog is attached to the session."""
+        call = make_call(dialog=None)
+        asyncio.run(call.hang_up())  # must not raise
+
+    async def test_hang_up__unregisters_call_and_sends_bye(self):
+        """hang_up deregisters the call from the RTP mux, then sends BYE."""
+        mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
+        mock_dialog = MagicMock()
+        mock_dialog.bye = AsyncMock()
+        call = make_call(rtp=mock_rtp, dialog=mock_dialog)
+        mock_rtp.calls = {("192.0.2.1", 5004): call}
+        await call.hang_up()
+        mock_rtp.unregister_call.assert_called_once_with(("192.0.2.1", 5004))
+        mock_dialog.bye.assert_awaited_once()
+
+    async def test_hang_up__sends_bye_when_not_registered(self):
+        """hang_up still sends BYE even if the call is not in rtp.calls."""
+        mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
+        mock_dialog = MagicMock()
+        mock_dialog.bye = AsyncMock()
+        call = make_call(rtp=mock_rtp, dialog=mock_dialog)
+        mock_rtp.calls = {}
+        await call.hang_up()
+        mock_rtp.unregister_call.assert_not_called()
+        mock_dialog.bye.assert_awaited_once()
+
+    def test_sdp_formats__returns_pcmu(self):
+        """sdp_formats returns PCMU as the default payload format."""
+        formats = Session.sdp_formats()
+        assert len(formats) == 1
+        assert formats[0].payload_type == 0
+
+    def test_sdp_media_description__returns_audio_rtp_avp(self):
+        """sdp_media_description returns an m=audio RTP/AVP description."""
+        description = Session.sdp_media_description(port=5004)
+        assert description.media == "audio"
+        assert description.proto == "RTP/AVP"
+        assert description.port == 5004
