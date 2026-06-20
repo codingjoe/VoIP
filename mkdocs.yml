@@ -6,7 +6,7 @@ watch:
 nav:
   - Usage:
       - Quickstart: index.md
-      - MCP Server: mcp.md
+      - MCP Server & Claude Plugin: mcp.md
       - Cookbook: cookbook.md
       - Sessions: sessions.md
       - SIP: sip.md
