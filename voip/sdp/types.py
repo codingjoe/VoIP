@@ -275,14 +275,14 @@ class RTPPayloadFormat(ByteSerializableObject):
     payload_type: int
     fmtp: str | None = None
     encoding_name: str | None = None
-    channels: int = 1
+    channels: int | None = None
     sample_rate: int | None = None
 
     def __post_init__(self):
         try:
             default = StaticPayloadType.from_pt(self.payload_type)
         except ValueError:
-            pass
+            self.channels = self.channels or 1
         else:
             self.sample_rate = self.sample_rate or default.sample_rate
             self.encoding_name = self.encoding_name or default.encoding_name
