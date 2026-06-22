@@ -146,24 +146,13 @@ class DigestAuthMixin:
 
     Mix into a [Transaction][voip.sip.transactions.Transaction] subclass whose
     requests may receive a `401 Unauthorized` or `407 Proxy Authentication
-    Required` challenge.  The mixin supplies the shared digest machinery
-    (challenge parsing, response computation, retry chaining); the host
-    transaction only implements
+    Required` challenge.  The host transaction implements
     [retry_with_auth][voip.sip.transactions.DigestAuthMixin.retry_with_auth]
     to rebuild and resend its request carrying the computed credentials.
-
-    A challenge is answered by calling
-    [handle_auth_challenge][voip.sip.transactions.DigestAuthMixin.handle_auth_challenge]
-    from the host's `response_received`.  The caller must drop the original
-    transaction from the registry first (e.g. via `ack` or `drop_transaction`);
-    `handle_auth_challenge` then registers a fresh retry transaction and chains
-    its result back to the original via
-    [forward_result][voip.sip.transactions.DigestAuthMixin.forward_result].
     """
 
     __slots__ = ()
 
-    #: Map from `DigestAlgorithm` to the hashlib name.
     DIGEST_HASH_NAME: typing.ClassVar[dict[str, str]] = {
         DigestAlgorithm.MD5: "md5",
         DigestAlgorithm.MD5_SESS: "md5",
@@ -184,10 +173,7 @@ class DigestAuthMixin:
     def handle_auth_challenge(self, response: Response) -> bool:
         """Answer a 401/407 by resending the request with digest credentials.
 
-        Parses the challenge, computes the digest response, and delegates to
-        [retry_with_auth][voip.sip.transactions.DigestAuthMixin.retry_with_auth]
-        to resend.  The original transaction must already be dropped by the
-        caller.
+        The original transaction must already be dropped by the caller.
 
         Args:
             response: The `401`/`407` challenge response.
@@ -421,10 +407,6 @@ class RegisterTransaction(DigestAuthMixin, Transaction):
 class InviteTransaction(DigestAuthMixin, Transaction):
     """SIP INVITE transaction for inbound and outbound calls [RFC 3261 §17].
 
-    Handles the SIP signaling state machine for a single INVITE dialog.  The
-    SIP layer creates one instance per incoming INVITE, keyed by Via branch
-    (RFC 3261 §17.1.3).
-
     For inbound call handling, subclass [Dialog][voip.sip.Dialog]
     and override [call_received][voip.sip.Dialog.call_received]:
 
@@ -447,12 +429,7 @@ class InviteTransaction(DigestAuthMixin, Transaction):
     pending_call_kwargs: dict[str, typing.Any] = dataclasses.field(
         default_factory=dict, repr=False
     )
-    #: Offer SRTP (`RTP/SAVP` + SDES `a=crypto:`) in the outbound INVITE and
-    #: fall back to plain RTP on rejection.  Defaults to `True`; flipped to
-    #: `False` internally by the RTP fallback retry.
     offer_srtp: bool = True
-    #: SRTP send session generated for the current offer; reused as the
-    #: call's send `srtp` once the answer confirms SRTP.  `None` for RTP.
     srtp_offer: SRTPSession | None = dataclasses.field(default=None, repr=False)
 
     @classmethod
@@ -464,8 +441,7 @@ class InviteTransaction(DigestAuthMixin, Transaction):
     ) -> Dialog:
         """Handle an incoming INVITE [RFC 3261 §13.3].
 
-        Registers the transaction, notifies the dialog, and resolves when the
-        ACK is received.
+        Resolve once the call is established (ACK received).
 
         Args:
             request: The incoming SIP INVITE request.
@@ -485,9 +461,6 @@ class InviteTransaction(DigestAuthMixin, Transaction):
 
     def ack_received(self, request: Request) -> None:
         """Handle an ACK confirming dialog establishment (RFC 3261 §17.2.1).
-
-        Removes the INVITE server transaction from the registry and resolves
-        the transaction future with the dialog.
 
         Args:
             request: The SIP ACK request.
@@ -551,7 +524,7 @@ class InviteTransaction(DigestAuthMixin, Transaction):
     def answer(
         self, *, session_class: type[Session], **session_kwargs: typing.Any
     ) -> None:
-        """Answer the call by setting up RTP and sending 200 OK with SDP.
+        """Answer the call and start the multimedia session.
 
         Example:
             Call from within [Dialog.call_received][voip.sip.Dialog.call_received]
@@ -758,11 +731,7 @@ class InviteTransaction(DigestAuthMixin, Transaction):
             raise
 
     def build_invite_request(self, target: types.SipURI) -> messages.Request:
-        """Build the outbound INVITE request (with SDP offer) for *target*.
-
-        Factored out of [send][voip.sip.transactions.InviteTransaction.send]
-        so that an auth retry can rebuild the request with a fresh branch and
-        incremented CSeq via [retry_with_auth][voip.sip.transactions.InviteTransaction.retry_with_auth].
+        """Build the outbound INVITE request with SDP offer for *target*.
 
         When [offer_srtp][voip.sip.transactions.InviteTransaction.offer_srtp]
         is set (default) the offer advertises `RTP/SAVP` with an SDES
@@ -828,10 +797,7 @@ class InviteTransaction(DigestAuthMixin, Transaction):
     ) -> bool:
         """Resend the INVITE with credentials after a 401/407 challenge.
 
-        The original transaction is dropped by the caller (via `ack`); this
-        builds a fresh INVITE (new branch, incremented CSeq) carrying the
-        computed credentials and chains its result back to the original.  The
-        SRTP/RTP offer mode is preserved across the retry.
+        The SRTP/RTP offer mode is preserved across the retry.
         """
         header = "Proxy-Authorization" if is_proxy else "Authorization"
         return self.retry_invite(
@@ -841,12 +807,8 @@ class InviteTransaction(DigestAuthMixin, Transaction):
     def retry_with_rtp(self, response: Response) -> bool:
         """Fall back from SRTP to plain RTP after the far end rejects SRTP.
 
-        The original (SRTP-offering) transaction is dropped by the caller (via
-        `ack`); this builds a fresh INVITE (new branch, incremented CSeq)
-        advertising `RTP/AVP` with no `a=crypto:`, carrying over any
-        `Authorization`/`Proxy-Authorization` already obtained, and chains its
-        result back to the original.  Triggered for `488`, `606` and `415`
-        responses to an SRTP offer.
+        Any `Authorization`/`Proxy-Authorization` already obtained is carried
+        over.  Triggered for `488`, `606` and `415` responses to an SRTP offer.
         """
         auth_headers = {
             header: self.request.headers[header]
@@ -904,9 +866,9 @@ class InviteTransaction(DigestAuthMixin, Transaction):
                 return
         # SRTP offer rejected as "not acceptable" → fall back to plain RTP.
         if self.offer_srtp and response.status_code in (
-            SIPStatus.NOT_ACCEPTABLE_HERE,  # 488
-            SIPStatus.NOT_ACCEPTABLE_ANYWHERE,  # 606
-            SIPStatus.UNSUPPORTED_MEDIA_TYPE,  # 415
+            SIPStatus.NOT_ACCEPTABLE_HERE,
+            SIPStatus.NOT_ACCEPTABLE_ANYWHERE,
+            SIPStatus.UNSUPPORTED_MEDIA_TYPE,
         ):
             self.ack(response)
             self.retry_with_rtp(response)
@@ -916,9 +878,6 @@ class InviteTransaction(DigestAuthMixin, Transaction):
 
     def start_call(self, response: Response) -> None:
         """Complete call setup after a 200 OK is received.
-
-        Negotiates the codec from the remote SDP answer, creates the call
-        handler, registers it with the RTP mux, updates the dialog.
 
         Args:
             response: The 200 OK SIP response containing the remote SDP answer.
@@ -1151,7 +1110,7 @@ class ByeTransaction(Transaction):
     ) -> Dialog:
         """Handle an incoming BYE from the remote party [RFC 3261 §15.1.2].
 
-        Sends 200 OK, removes the dialog, and notifies the application via
+        Notifies the application via
         [hangup_received][voip.sip.Dialog.hangup_received].
 
         Args:

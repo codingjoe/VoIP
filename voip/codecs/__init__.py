@@ -20,7 +20,6 @@ from voip.codecs.pcmu import PCMU
 
 __all__ = ["PCMA", "PCMU", "RTPCodec", "get"]
 
-#: Registry mapping lowercase encoding names to codec classes.
 REGISTRY: dict[str, type[RTPCodec]] = {
     PCMA.encoding_name: PCMA,
     PCMU.encoding_name: PCMU,

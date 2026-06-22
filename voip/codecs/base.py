@@ -107,8 +107,6 @@ class RTPCodec:
     ) -> np.ndarray:
         """Resample *audio* from *source_rate_hz* to *destination_rate_hz*.
 
-        Uses linear interpolation via [numpy.interp][].
-
         Args:
             audio: Float32 mono PCM array.
             source_rate_hz: Sample rate of *audio* in Hz.
@@ -206,9 +204,8 @@ class RTPCodec:
     def packetize(cls, audio: np.ndarray) -> Iterator[bytes]:
         """Encode *audio* and yield one encoded payload per 20 ms RTP frame.
 
-        The default implementation encodes one `frame_size` chunk at a time
-        using `encode`. Override in subclasses (e.g. G.722) where the entire
-        buffer must be encoded at once to preserve codec state.
+        Override in subclasses (e.g. G.722) where the entire buffer must be
+        encoded at once to preserve codec state.
 
         Args:
             audio: Float32 mono PCM at `sample_rate_hz` Hz.
@@ -222,12 +219,9 @@ class RTPCodec:
 
 @dataclasses.dataclass(frozen=True)
 class PerPacketDecoder:
-    """Stateless payload decoder that processes each RTP packet independently.
+    """Process each RTP packet independently as a stateless payload decoder.
 
-    Delegate each call to
-    [RTPCodec.decode][voip.codecs.base.RTPCodec.decode], decoding each
-    payload independently without preserving cross-packet state. Suitable for
-    stateless codecs such as PCMA, PCMU, and Opus.
+    Suitable for stateless codecs such as PCMA, PCMU, and Opus.
 
     Attributes:
         codec: Codec class to delegate decoding to.

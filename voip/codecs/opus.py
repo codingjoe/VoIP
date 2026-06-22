@@ -34,9 +34,6 @@ class Opus(PyAVCodec):
     transmission. It uses dynamic payload type 111 and always operates at
     48 000 Hz internally.
 
-    Incoming RTP payloads are wrapped in a minimal [Ogg][] container before
-    being passed to PyAV. Outbound PCM is encoded via `libopus`.
-
     [RFC 7587]: https://datatracker.ietf.org/doc/html/rfc7587
     [Ogg]: https://wiki.xiph.org/Ogg
     """
@@ -102,7 +99,7 @@ class Opus(PyAVCodec):
             granule_position,
             serial_number,
             sequence_number,
-            0,  # CRC placeholder
+            0,  # CRC placeholder: computed after assembling the page.
             len(lacing),
         ) + bytes(lacing)
         page = header + b"".join(packets)
@@ -112,9 +109,8 @@ class Opus(PyAVCodec):
     def ogg_container(cls, packet: bytes) -> bytes:
         """Wrap a raw Opus RTP payload in a minimal Ogg Opus container.
 
-        Produces a three-page Ogg stream: BOS (OpusHead), comment
-        (OpusTags), and the single data page.  Opus always uses 48 000 Hz
-        internally ([RFC 7587 §4](https://datatracker.ietf.org/doc/html/rfc7587#section-4)).
+        Opus always uses 48 000 Hz internally
+        ([RFC 7587 §4](https://datatracker.ietf.org/doc/html/rfc7587#section-4)).
 
         Args:
             packet: Raw Opus RTP payload bytes.
@@ -129,7 +125,7 @@ class Opus(PyAVCodec):
             b"OpusHead",
             1,  # version
             cls.channels,  # channel count
-            0,  # pre-skip: each RTP payload is decoded as a standalone stream
+            0,  # pre-skip
             cls.sample_rate_hz,
             0,  # output gain
             0,  # channel mapping family (mono/stereo)
@@ -141,8 +137,10 @@ class Opus(PyAVCodec):
         )
         return b"".join(
             [
-                cls.ogg_page(0x02, 0, serial_number, 0, [opus_head]),  # BOS
+                # Beginning-of-stream page carrying the OpusHead header.
+                cls.ogg_page(0x02, 0, serial_number, 0, [opus_head]),
                 cls.ogg_page(0x00, 0, serial_number, 1, [opus_tags]),
+                # End-of-stream page carrying the single Opus data packet.
                 cls.ogg_page(0x04, cls.frame_size, serial_number, 2, [packet]),
             ]
         )
@@ -188,14 +186,11 @@ class Opus(PyAVCodec):
 
 @dataclasses.dataclass(slots=True)
 class OpusDecoder:
-    """Stateful Opus decoder that preserves `libopus` CELT state across packets.
+    """Preserve `libopus` CELT state across packets in a stateful Opus decoder.
 
-    Creates a single persistent
-    [av.CodecContext](https://pyav.basswood-io.com/docs/stable/api/codec.html#av.codec.context.CodecContext)
-    for the life of the decoder and feeds each incoming RTP payload directly to
-    the same `libopus` context.  This eliminates the per-packet MDCT overlap
-    reset that creates 50 Hz window-boundary discontinuities — heard as
-    choppiness — when each packet is decoded in a fresh context.
+    Use a single persistent decoder for the life of a call so the CELT/MDCT
+    overlap state carries across RTP packets, avoiding the window-boundary
+    discontinuities (heard as choppiness) caused by per-packet context resets.
 
     Use [Opus.create_decoder][voip.codecs.opus.Opus.create_decoder] rather
     than instantiating this class directly.

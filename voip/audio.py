@@ -221,8 +221,6 @@ class AudioCall(Session):
     def on_audio_sent(self) -> None:
         """Handle completion of an outbound audio stream.
 
-        Called once the last RTP packet of an outbound stream has been
-        dispatched (i.e. `outbound_handle` transitions to `None`).
         The base implementation is a no-op.  Override in subclasses to
         trigger post-audio actions, for example hanging up after
         [SayCall][voip.ai.SayCall] finishes speaking.
@@ -396,7 +394,7 @@ class VoiceActivityCall(AudioCall):
 
 @dataclasses.dataclass(kw_only=True, slots=True)
 class EchoCall(VoiceActivityCall):
-    """Echo the caller's speech back after they finish speaking.
+    """Replay the caller's speech back to them.
 
     Buffers a full utterance and replays it once a sustained silence lasting
     `silence_gap` seconds is detected. This gives the caller a natural echo

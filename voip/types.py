@@ -6,7 +6,7 @@ from ipaddress import IPv4Address, IPv6Address
 
 
 class ByteSerializableObject(abc.ABC):
-    """Parse and serialize objects to and from raw bytes."""
+    """Byte-serializable objects with a parse/serialize contract."""
 
     __slots__ = ()
 
@@ -45,7 +45,7 @@ NETLOC_PATTERN = re.compile(
 
 
 class NetworkAddress(typing.NamedTuple):
-    """Parse and serialize an address."""
+    """A network host and optional port."""
 
     host: str | IPv4Address | IPv6Address
     port: int | None = None

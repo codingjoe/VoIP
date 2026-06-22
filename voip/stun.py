@@ -181,7 +181,7 @@ class STUNProtocol(asyncio.DatagramProtocol):
         self.packet_received(data, NetworkAddress(*addr[:2]))
 
     def connection_lost(self, exc: Exception | None) -> None:
-        """Clear the internal transport reference on disconnect."""
+        """Respond to loss of the underlying UDP transport."""
         self.transport = None
 
     def error_received(self, exc: Exception) -> None:
@@ -196,11 +196,10 @@ class STUNProtocol(asyncio.DatagramProtocol):
         """
 
     def send_stun_request(self) -> None:
-        """Send a STUN Binding Request through the protocol's own transport.
+        """Send a STUN Binding Request to discover the public address.
 
-        Sends the request through the transport bound to this protocol so the
-        server observes the same NAT mapping as real traffic.  Responses are
-        demultiplexed from normal datagrams via the RFC 7983 first-byte rule.
+        Use the transport bound to this protocol so the server observes the
+        same NAT mapping as real traffic.
         """
         if self.transport is None or self.stun_server_address is None:
             return
@@ -215,7 +214,7 @@ class STUNProtocol(asyncio.DatagramProtocol):
         self.transport.sendto(request, self.stun_server_address)
 
     def parse_stun_response(self, data: bytes) -> None:
-        """Parse a STUN Binding Success Response and invoke :meth:`stun_connection_made`."""
+        """Parse a STUN Binding Success Response and resolve the public address."""
         logger.debug("Parsing STUN response (len=%d)", len(data))
         if len(data) < 20:
             return
