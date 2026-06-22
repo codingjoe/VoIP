@@ -136,10 +136,9 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
     ) -> SessionInitiationProtocol:
         """Connect to the SIP proxy and return once registered.
 
-        Establishes RTP (if not provided) and SIP/TLS connections derived from
-        *aor*, then **suspends until SIP registration is confirmed** before
-        returning the ready protocol. After this call returns, the caller may
-        safely place outbound calls or start an MCP server.
+        Suspend until SIP registration is confirmed before returning the ready
+        protocol. After this call returns, the caller may safely place outbound
+        calls or start an MCP server.
 
         The transport protocol (TLS vs. plain TCP) and proxy address are read
         from *aor* directly — no extra arguments are needed.
@@ -208,10 +207,9 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
     ) -> None:
         """Register with a carrier and handle inbound calls, reconnecting on disconnect.
 
-        Creates one RTP endpoint for the lifetime of the process, then enters a
-        persistent loop: connect to the SIP proxy, wait for the connection to drop,
-        and reconnect with exponential back-off. Use this for long-running
-        inbound-call servers.
+        Enter a persistent loop: connect to the SIP proxy, wait for the
+        connection to drop, and reconnect with exponential back-off. Use this
+        for long-running inbound-call servers.
 
         The transport protocol (TLS vs. plain TCP) and proxy address are read from
         *aor* directly.
@@ -254,7 +252,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
             backoff_secs = min(backoff_secs * 2, 60)
 
     def register_dialog(self, dialog: Dialog) -> None:
-        """Register *dialog* keyed by `(dialog.local_tag, dialog.remote_tag)`."""
+        """Register *dialog* for later lookup by its tag pair."""
         if dialog.remote_tag is None:
             logger.warning("Dialog without remote tag cannot be registered: %r", dialog)
         else:
@@ -282,7 +280,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
             logger.warning("Transaction not found for removal: %r", tx)
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:  # type: ignore[override]
-        """Store the transport and start carrier registration.
+        """Handle transport readiness by starting carrier registration.
 
         Keepalive pings (RFC 5626) are only started for TCP/TLS transports.
         """
@@ -299,7 +297,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
             if not isinstance(transport, asyncio.DatagramTransport):
                 self.keepalive_task = loop.create_task(self.send_keepalive())
         except RuntimeError:
-            pass  # no running loop in synchronous test setups
+            pass
 
     async def send_keepalive(self) -> None:
         while True:
@@ -334,7 +332,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
                 # SIP message: wait for the header-body separator.
                 header_end = self.recv_buffer.find(b"\r\n\r\n")
                 if header_end == -1:
-                    break  # incomplete headers – wait for more data
+                    break
                 content_length = 0
                 for line in self.recv_buffer[:header_end].split(b"\r\n")[1:]:
                     name, sep, value = line.partition(b":")
@@ -346,7 +344,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
                         break
                 message_end = header_end + 4 + content_length
                 if len(self.recv_buffer) < message_end:
-                    break  # incomplete body – wait for more data
+                    break
                 frame = memoryview(self.recv_buffer)[:message_end]
                 yield frame
                 frame.release()
@@ -355,13 +353,12 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
                 yield PING
                 del self.recv_buffer[:4]
             elif len(self.recv_buffer) >= 3 and self.recv_buffer[2:3] == b"\r":
-                # Third byte is CR – could be the start of PING; wait for 4th byte.
+                # Third byte is CR – could be the start of PING; wait for the 4th.
                 break
             elif self.recv_buffer[:2] == PONG:
                 yield PONG
                 del self.recv_buffer[:2]
             else:
-                # Single CR or other incomplete sequence – wait for more data.
                 break
 
     def dispatch_frame(self, frame: memoryview | bytes) -> None:
@@ -499,7 +496,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
                 self.method_not_allowed(request)
 
     def response_received(self, response: Response) -> None:
-        """Delegate REGISTER responses to the registration transaction.
+        """Dispatch an incoming SIP response to its originating transaction.
 
         Args:
             response: The parsed SIP response.
@@ -545,7 +542,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
         return f"<sip:{address};transport={transport_param};ob>"
 
     def connection_lost(self, exc: Exception | None) -> None:
-        """Handle a lost or closed transport connection."""
+        """Respond to a lost or closed transport connection."""
         if exc is not None:
             logger.exception("Connection lost", exc_info=exc)
         if self.keepalive_task is not None:
@@ -555,5 +552,4 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
         self.disconnected_event.set()
 
 
-#: Short alias for `SessionInitiationProtocol`.
 SIP = SessionInitiationProtocol

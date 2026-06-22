@@ -32,21 +32,16 @@ class G722(PyAVCodec):
     16 000 Hz, the RTP timestamp clock runs at 8 000 Hz per RFC 3551 —
     a well-known quirk of the original specification.
 
-    The entire buffer is encoded at once to preserve the ADPCM predictor
-    state across packet boundaries.
-
     [RFC 3551 §4.5.2]: https://datatracker.ietf.org/doc/html/rfc3551#section-4.5.2
     """
 
     payload_type: ClassVar[int] = 9
     encoding_name: ClassVar[str] = "g722"
-    #: Actual wideband audio sample rate in Hz.
     sample_rate_hz: ClassVar[int] = 16000
-    #: RTP timestamp clock rate per RFC 3551 (8 kHz despite 16 kHz audio).
+    #: Per RFC 3551 the RTP clock runs at 8 kHz despite 16 kHz audio.
     rtp_clock_rate_hz: ClassVar[int] = 8000
-    #: Audio samples per 20 ms frame at 16 kHz.
     frame_size: ClassVar[int] = 320
-    #: RTP timestamp ticks per frame at the 8 kHz clock.
+    #: Timestamp ticks per frame use the 8 kHz RTP clock, not the audio rate.
     timestamp_increment: ClassVar[int] = 160
     channels: ClassVar[int] = 1
 
@@ -86,14 +81,11 @@ class G722(PyAVCodec):
 
 @dataclasses.dataclass(slots=True)
 class G722Decoder:
-    """Stateful G.722 decoder that preserves ADPCM predictor state across packets.
+    """Preserve ADPCM predictor state across packets in a stateful G.722 decoder.
 
-    Creates a single persistent
-    [av.CodecContext](https://pyav.basswood-io.com/docs/stable/api/codec.html#av.codec.context.CodecContext)
-    for the life of the decoder and feeds each incoming RTP packet to the
-    same context.  This eliminates the per-packet predictor reset that causes
-    robotic artefacts when decoding a G.722 stream with independent codec
-    contexts.
+    Use a single persistent decoder for the life of a call so the ADPCM
+    predictor state carries across RTP packets, avoiding the robotic
+    artefacts caused by per-packet predictor resets.
 
     Attributes:
         output_rate_hz: Target PCM sample rate in Hz for decoded audio.

@@ -26,7 +26,7 @@ __all__ = ["PyAVCodec"]
 
 
 class PyAVCodec(RTPCodec):
-    """RTP codec that decodes and encodes audio via [PyAV][].
+    """Decode and encode audio via [PyAV][].
 
     Concrete implementations: [Opus][voip.codecs.Opus],
     [G722][voip.codecs.G722].

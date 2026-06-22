@@ -37,7 +37,7 @@ def parse_sip_uri(ctx, param, value) -> SipURI:
 
 @dataclasses.dataclass(kw_only=True, slots=True)
 class OutboundDialog(dialog.Dialog):
-    """A dialog that closes the SIP connection when the remote party hangs up."""
+    """Closes the SIP connection when the remote party hangs up."""
 
     def hangup_received(self) -> None:
         """Close the SIP connection so the process can exit cleanly."""
@@ -47,7 +47,7 @@ class OutboundDialog(dialog.Dialog):
 
 @dataclasses.dataclass(kw_only=True, slots=True)
 class ConsoleMessageProtocol(SessionInitiationProtocol):
-    """Pretty print SIP messages to stdout using pygments."""
+    """SIP protocol printing messages to stdout using pygments."""
 
     verbose: int = 0
 
@@ -353,7 +353,7 @@ def transcribe(ctx, stt_model, dial: str | None):
 def agent(
     ctx, stt_model, llm_model, voice, system_prompt, salutation, dial: str | None
 ):
-    """Register with a SIP carrier and handle calls with an AI voice agent."""
+    """Register with a SIP carrier and start calls with an AI voice agent."""
     from faster_whisper import WhisperModel
 
     from .ai import AgentCall  # noqa: PLC0415
@@ -363,7 +363,7 @@ def agent(
 
     @dataclasses.dataclass(kw_only=True, slots=True)
     class AgentCallWithOutput(AgentCall):
-        """AgentCall that echoes the conversation to the console."""
+        """AgentCall echoing the conversation to the console."""
 
         msg_count: int = dataclasses.field(init=False, default=0)
 

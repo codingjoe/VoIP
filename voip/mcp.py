@@ -32,8 +32,6 @@ mcp = FastMCP(
     website_url="https://codingjoe.dev/VoIP/",
 )
 
-#: Thread-local storage holding the active [`SessionInitiationProtocol`][voip.sip.protocol.SessionInitiationProtocol].
-#: Populated by [`run`][voip.mcp.run] before the MCP server starts.
 connection_pool = threading.local()
 
 

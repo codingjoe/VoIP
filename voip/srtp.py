@@ -22,7 +22,6 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 __all__ = ["CIPHER_SUITE", "SRTPSession"]
 
-#: SRTP cipher suite identifier used in SDP `a=crypto:` attributes.
 CIPHER_SUITE = "AES_CM_128_HMAC_SHA1_80"
 
 #: AES key size in bytes (128-bit).
@@ -61,7 +60,7 @@ def prf(master_key: bytes, label: int, master_salt: bytes, length: int) -> bytes
 class SRTPSession:
     """SRTP session for one call leg using AES_CM_128_HMAC_SHA1_80.
 
-    Handles symmetric encryption and authentication of RTP packets.
+    Symmetric encryption and authentication of RTP packets.
     Key material is derived from `master_key` and `master_salt` via the
     SRTP pseudo-random function (RFC 3711 §4.3.1).
 
@@ -79,11 +78,11 @@ class SRTPSession:
     session_key: bytes = dataclasses.field(init=False)
     session_auth_key: bytes = dataclasses.field(init=False)
     session_salt: bytes = dataclasses.field(init=False)
-    #: Rollover counter and highest sent sequence number for encryption.
     send_roc: int = dataclasses.field(init=False, default=0)
+    #: Rollover counter and highest sent sequence number for encryption.
     last_send_seq: int = dataclasses.field(init=False, default=-1)
-    #: Rollover counter and highest received sequence number for decryption.
     recv_roc: int = dataclasses.field(init=False, default=0)
+    #: Rollover counter and highest received sequence number for decryption.
     last_recv_seq: int = dataclasses.field(init=False, default=-1)
 
     def __post_init__(self) -> None:

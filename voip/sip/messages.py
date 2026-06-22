@@ -21,10 +21,8 @@ __all__ = ["Request", "Response", "Message"]
 
 logger = logging.getLogger("voip.sip")
 
-#: Headers whose values are parsed as `CallerID` objects.
 CALLER_IDS_HEADERS = frozenset({"From", "To", "Route", "Record-Route", "Contact"})
 
-#: User-Agent header value to use in generated messages.
 USER_AGENT = (
     f"VoIP/{voip.__version__}"
     f" {platform.python_implementation()}/{platform.python_version()}"

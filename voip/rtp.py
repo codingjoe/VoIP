@@ -143,22 +143,14 @@ class Session:
         self.rtp.send(data, addr)
 
     async def hang_up(self) -> None:
-        """
-        Terminate the call by sending a SIP BYE request [RFC 3261 §15].
+        """Terminate the call by sending a SIP BYE request [RFC 3261 §15].
 
-        Deregisters this call from the RTP multiplexer, then delegates the
-        BYE signaling to [Dialog.bye][voip.sip.Dialog.bye], which
-        constructs and sends the BYE request, removes the dialog from the
-        SIP session's registry, and awaits the 200 OK acknowledgment.
-
-        The method is a no-op when no dialog is associated with this call.
+        No-op when no dialog is associated with this call.
 
         [RFC 3261 §15]: https://datatracker.ietf.org/doc/html/rfc3261#section-15
         """
         if self.dialog is None:
             return
-        # Deregister the RTP handler for this call so no further media is
-        # dispatched while the BYE is in flight.
         _not_found = object()
         remote_addr = next(
             (addr for addr, call in self.rtp.calls.items() if call is self),
@@ -172,9 +164,8 @@ class Session:
     def negotiate_codec(cls, remote_media: MediaDescription) -> MediaDescription:
         """Negotiate a media codec from the remote SDP offer.
 
-        Override in subclasses to implement codec selection. The SIP layer
-        calls this before sending a 200 OK; if the method raises the exception
-        propagates and the call is not answered.
+        Override in subclasses to implement codec selection. If the method
+        raises, the exception propagates and the call is not answered.
 
         Args:
             remote_media: The SDP `m=audio` section from the remote INVITE.
@@ -231,7 +222,7 @@ class RealtimeTransportProtocol(STUNProtocol):
     )
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
-        """Create the public-address future, then start STUN negotiation."""
+        """Start STUN negotiation upon socket readiness."""
         self.public_address = asyncio.get_running_loop().create_future()
         super().connection_made(transport)
 
@@ -252,8 +243,8 @@ class RealtimeTransportProtocol(STUNProtocol):
     ) -> RealtimeTransportProtocol:
         """Create a bound RTP endpoint and wait for the public address.
 
-        Creates the UDP socket, sends a STUN binding request when configured,
-        and suspends until the public address is confirmed before returning.
+        Suspend until the public address is confirmed (via STUN when configured,
+        otherwise the local socket address) before returning.
 
         Args:
             bind_address: Local bind address — `"0.0.0.0"` for IPv4 or
@@ -326,15 +317,10 @@ class RealtimeTransportProtocol(STUNProtocol):
     def packet_received(self, data: bytes, addr: NetworkAddress) -> None:
         """Route an incoming SRTP datagram to the matching per-call handler.
 
-        Looks up *addr* in the call registry.  Falls back to the wildcard
-        `None` handler when no exact match exists.  Drops the packet with a
-        debug log when no handler is registered at all.
-
-        When the matched handler carries an SRTP session, the packet is
-        authenticated and decrypted before being forwarded; packets that fail
-        authentication are logged at WARNING level and discarded. Decryption
-        uses the handler's receive session (`srtp_recv`) when set, falling
-        back to `srtp` so a single symmetric session still works.
+        Fall back to the wildcard `None` handler when no exact match exists,
+        and drop the packet when no handler is registered at all.  SRTP packets
+        are authenticated and decrypted before being forwarded; packets that
+        fail authentication are discarded.
         """
         handler = self.calls.get(addr)
         if handler is None:

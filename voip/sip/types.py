@@ -343,46 +343,46 @@ class SIPStatus(enum.IntEnum):
     """The server will not accept the request, because the URI scheme of the request is unsupported."""
 
     BAD_EXTENSION = 420, "Bad Extension"
-    """This status code indicates that the server does not recognize the value of any of the parameters that it needs to understand in the request."""
+    """Server does not recognize any of the parameters needed to understand the request."""
 
     EXTENSION_REQUIRED = 421, "Extension Required"
-    """This status code indicates that the server requires the client to identify itself (usually, using the Contact header field) before it will proceed with the request."""
+    """Server requires the client to identify itself (usually, using the Contact header field) before proceeding."""
 
     INTERVAL_TOO_BRIEF = 423, "Interval Too Brief"
-    """This status code indicates that the server is unwilling to process the request because either an individual header field, or all the header fields collectively, are too large."""
+    """Server is unwilling to process the request because header fields are too large."""
 
     TEMPORARILY_UNAVAILABLE = 480, "Temporarily Unavailable"
-    """This status code indicates that the server is currently unable to handle the request due to a temporary overloading or maintenance of the server."""
+    """Server is currently unable to process the request due to temporary overloading or maintenance."""
 
     CALL_TRANSACTION_DOES_NOT_EXIST = 481, "Call/Transaction Does Not Exist"
-    """This status code indicates that the server has received a final response for the transaction which it is still attempting to complete."""
+    """Server has received a final response for the transaction it is still attempting to complete."""
 
     LOOP_DETECTED = 482, "Loop Detected"
-    """This status code indicates that the server has detected an infinite loop while processing the request."""
+    """Server has detected an infinite loop while processing the request."""
 
     TOO_MANY_HOPS = 483, "Too Many Hops"
-    """This status code indicates that the server has exceeded the maximum number of hops allowed in the request URI."""
+    """Server has exceeded the maximum number of hops allowed in the request URI."""
 
     ADDRESS_INCOMPLETE = 484, "Address Incomplete"
-    """This status code indicates that the server has received a final response for the transaction which it is still attempting to complete, but has an invalid value for one or more of the header fields included in the request message."""
+    """Server has received a final response for the transaction it is still attempting to complete, but has an invalid value for one or more header fields."""
 
     AMBIGUOUS = 485, "Ambiguous"
-    """This status code indicates that the server cannot decide on a response to the request because multiple responses are possible."""
+    """Server cannot decide on a response because multiple responses are possible."""
 
     BUSY_HERE = 486, "Busy Here"
-    """This status code indicates that the server is busy here."""
+    """Server is busy."""
 
     REQUEST_TERMINATED = 487, "Request Terminated"
-    """This status code indicates that the server has received a final response for the transaction which it is still attempting to complete, but has received a termination request for that transaction from the client."""
+    """Server has received a final response for the transaction it is still attempting to complete, but has received a termination request for it from the client."""
 
     NOT_ACCEPTABLE_HERE = 488, "Not Acceptable Here"
-    """This status code indicates that the server is not able to produce a response which is acceptable to the client, according to the proactive negotiation header fields received in the request, and the server is unwilling to supply a default reason phrase."""
+    """Server is unable to produce a response acceptable to the client according to proactive negotiation, and is unwilling to supply a default reason phrase."""
 
     REQUEST_PENDING = 491, "Request Pending"
-    """This status code indicates that the server has received a final response for the transaction which it is still attempting to complete, but has not yet delivered that response to the client."""
+    """Server has received a final response for the transaction it is still attempting to complete, but has not yet delivered it to the client."""
 
     UNDECIPHERABLE = 493, "Undecipherable"
-    """This status code indicates that the server was unable to decrypt a message after performing the necessary decryption(s)."""
+    """Server was unable to decrypt a message after performing necessary decryption(s)."""
 
     SERVER_INTERNAL_ERROR = 500, "Server Internal Error"
     """The server encountered an unexpected condition which prevented it from fulfilling the request."""
@@ -394,13 +394,13 @@ class SIPStatus(enum.IntEnum):
     """The server, while acting as a gateway or proxy, received an invalid response from the upstream server it accessed in attempting to fulfill the request."""
 
     SERVICE_UNAVAILABLE = 503, "Service Unavailable"
-    """The server is currently unable to handle the request due to a temporary overloading or maintenance of the server."""
+    """Server is currently unable to process the request due to temporary overloading or maintenance."""
 
     SERVER_TIME_OUT = 504, "Server Time-out"
     """The server, while acting as a gateway or proxy, did not receive a timely response from the upstream server specified by the URI (e.g., HTTP, FTP, LDAP) or some other auxiliary server (e.g., DNS) it needed to access in attempting to complete the request."""
 
     VERSION_NOT_SUPPORTED = 505, "Version Not Supported"
-    """The server does not support, or refuses to support, the protocol version that was used in the request message."""
+    """Server does not support, or refuses to support, the protocol version used in the request."""
 
     MESSAGE_TOO_LARGE = 513, "Message Too Large"
     """The server is unwilling to process the request because its header fields are too large."""
@@ -412,7 +412,7 @@ class SIPStatus(enum.IntEnum):
     """The call has been declined."""
 
     DOES_NOT_EXIST_ANYWHERE = 604, "Does Not Exist Anywhere"
-    """The server has received a final response for the transaction which it is still attempting to complete, but has received a termination request for that transaction from a server which it does not control."""
+    """Server has received a final response for the transaction it is still attempting to complete, but has received a termination request for it from a server it does not control."""
 
     NOT_ACCEPTABLE_ANYWHERE = 606, "Not Acceptable"
     """The server is not able to produce a response which is acceptable to the client, according to the proactive negotiation header fields received in the request, and the server is unwilling to supply a default reason phrase."""
@@ -489,8 +489,8 @@ class DigestQoP(enum.StrEnum):
 def mask_caller(header: str) -> str:
     """Return a privacy-safe label from a SIP From/To header value.
 
-    Strips the `tag=` parameter, extracts the display name or SIP user part,
-    and replaces all but the last four characters with `*`.
+    Replace all but the last four characters of the display name or SIP user
+    part with `*`, ignoring the `tag=` parameter and any other parameters.
 
     Examples:
     ```
@@ -500,7 +500,6 @@ def mask_caller(header: str) -> str:
     '*lice'
     ```
     """
-    # Drop the tag and any subsequent parameters
     value = header.split(";")[0].strip()
     # Extract display name: "Name" <sip:…> or Name <sip:…>
     m = re.match(r'^"?([^"<]+?)"?\s*<', value)

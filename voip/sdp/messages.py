@@ -20,8 +20,6 @@ from .types import (
 __all__ = ["SessionDescription"]
 
 
-# Ordered sequence of field descriptors; each carries letter, session_attr,
-# is_list, media_attr and a parse classmethod/staticmethod.
 FIELD_MAP: tuple[Field, ...] = (
     IntField(letter="v", session_attr="version"),
     Origin,

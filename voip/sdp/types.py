@@ -38,7 +38,7 @@ class Field(Protocol):
 
 @dataclasses.dataclass(slots=True, frozen=True)
 class StrField:
-    """Descriptor for SDP fields that parse and serialize as plain strings."""
+    """Descriptor for SDP fields parsing and serializing as plain strings."""
 
     letter: str
     session_attr: str
@@ -52,7 +52,7 @@ class StrField:
 
 @dataclasses.dataclass(slots=True, frozen=True)
 class IntField:
-    """Descriptor for SDP fields that parse and serialize as integers."""
+    """Descriptor for SDP fields parsing and serializing as integers."""
 
     letter: str
     session_attr: str
@@ -206,7 +206,6 @@ class PayloadTypeSpec(NamedTuple):
     sample_rate: int
     encoding_name: str
     channels: int = 1
-    #: Samples per standard 20 ms RTP frame; 0 = variable or not applicable.
     frame_size: int = 0
 
 
@@ -265,7 +264,6 @@ class StaticPayloadType(PayloadTypeSpec, enum.Enum):
 class RTPPayloadFormat(ByteSerializableObject):
     """RTP payload format descriptor (RFC 3551 §6 / RFC 4566 §6).
 
-    Codec parameters from `a=rtpmap` are merged in by the SDP parser.
     Static payload types fall back to the `StaticPayloadType` table.
     Dynamic payload types (PT ≥ 96) require an explicit `a=rtpmap`.
 
@@ -358,14 +356,13 @@ class MediaDescription(ByteSerializableObject):
     def apply_attribute(self, attr: Attribute) -> bool:
         """Apply a media-level `a=` attribute, returning `True` if consumed.
 
-        Handles `a=rtpmap` and `a=fmtp` by updating the matching
-        `RTPPayloadFormat` entry.  Other attributes go to `attributes`.
+        `a=rtpmap` and `a=fmtp` update the matching `RTPPayloadFormat` entry;
+        other attributes go to `attributes`.
         """
         if attr.name == "rtpmap" and attr.value is not None:
             rtpfmt = RTPPayloadFormat.parse(attr.value)
             for i, f in enumerate(self.fmt):
                 if f.payload_type == rtpfmt.payload_type:
-                    # Preserve fmtp if it was already applied out-of-order.
                     if f.fmtp is not None and rtpfmt.fmtp is None:
                         rtpfmt.fmtp = f.fmtp
                     self.fmt[i] = rtpfmt

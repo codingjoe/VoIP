@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 @dataclasses.dataclass(kw_only=True, slots=True)
 class TranscribeCall(VoiceActivityCall):
-    """Transcribe incoming call audio.
+    """Transcribe spoken audio to text in an inbound call.
 
     Audio is decoded by [AudioCall][voip.audio.AudioCall] on a per-packet
     basis and delivered to [audio_received][voip.audio.AudioCall.audio_received],
@@ -98,7 +98,7 @@ class TranscribeCall(VoiceActivityCall):
 
 @dataclasses.dataclass(kw_only=True)
 class TTSMixin:
-    """Mixin that adds Pocket TTS voice synthesis to a call.
+    """Add Pocket TTS voice synthesis to a call.
 
     Provides shared `tts_model`, `voice`, and `voice_state` fields along with
     the [send_speech][voip.ai.TTSMixin.send_speech] method used by both
@@ -139,7 +139,7 @@ class TTSMixin:
 
 @dataclasses.dataclass(kw_only=True, slots=True)
 class SayCall(TTSMixin, AudioCall):
-    """Dial a number, say a message using TTS, and hang up."""
+    """Outbound call speaking a message using TTS and then hanging up."""
 
     text: str
 
@@ -158,7 +158,7 @@ class SayCall(TTSMixin, AudioCall):
 
 @dataclasses.dataclass(kw_only=True, slots=True)
 class AgentCall(TTSMixin, TranscribeCall):
-    """Respond to caller voice inputs with voice responses.
+    """Reply to caller speech with synthesised voice.
 
     Uses Ollama to generate responses to transcribed
     text and Pocket TTS to synthesize voice replies.
