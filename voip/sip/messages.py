@@ -175,7 +175,12 @@ class Response(Message):
 
     @classmethod
     def from_request(
-        cls, request: Request, *, headers=None, dialog: Dialog = None, **kwargs
+        cls,
+        request: Request,
+        *,
+        headers: dict[str, str] | None = None,
+        dialog: Dialog | None = None,
+        **kwargs,
     ) -> Response:
         """Create a response from a request, copying relevant headers."""
         response_headers = SIPHeaderDict(

@@ -226,13 +226,15 @@ class AgentCall(TTSMixin, TranscribeCall):
             model=self.llm_model,
             messages=self.messages,
         )
-        if reply := self.emoji_pattern.sub("", response.message.content or ""):
+        content = response.message.content or ""
+        reply = self.emoji_pattern.sub("", content)
+        if reply:
             self.messages.append({"role": "assistant", "content": reply})
             logger.debug("Agent reply: %r", reply)
             await self.send_speech(reply)
 
     def on_audio_speech(self) -> None:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         if self.cancel_audio_handle is None:
             self.cancel_audio_handle = loop.call_later(
                 self.audio_interrupt_duration.total_seconds(),

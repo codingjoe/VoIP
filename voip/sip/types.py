@@ -78,7 +78,7 @@ class SipURI(str):
         user: str | None = None,
         password: str | None = None,
         port: int | None = None,
-        parameters: dict[str, str] = None,
+        parameters: dict[str, str] | None = None,
         headers: dict[str, str] | None = None,
     ) -> SipURI:
         try:
@@ -192,7 +192,7 @@ class SipURI(str):
             return None
 
     @property
-    def transport(self):
+    def transport(self) -> str:
         return (
             self.parameters.get("transport", "UDP").upper()
             if self.scheme == "sip"

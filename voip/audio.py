@@ -364,7 +364,7 @@ class VoiceActivityCall(AudioCall):
 
     def on_audio_silence(self) -> None:
         if self.flush_voice_buffer_handle is None:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             self.flush_voice_buffer_handle = loop.call_later(
                 self.silence_gap.total_seconds(),
                 self.flush_voice_buffer,
