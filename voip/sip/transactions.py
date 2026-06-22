@@ -899,6 +899,9 @@ class InviteTransaction(DigestAuthMixin, Transaction):
                 return
             case 2:  # OK
                 self.start_call(response)
+                self.ack(response)
+                self.complete()
+                return
         # SRTP offer rejected as "not acceptable" → fall back to plain RTP.
         if self.offer_srtp and response.status_code in (
             SIPStatus.NOT_ACCEPTABLE_HERE,  # 488

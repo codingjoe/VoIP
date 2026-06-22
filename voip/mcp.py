@@ -97,8 +97,10 @@ async def say(ctx: Context, target: str, prompt: str = "") -> None:
     if not hasattr(connection_pool, "sip"):
         raise RuntimeError("VoIP not connected: call run() before using tools.")
     target_uri = parse_uri(target, connection_pool.sip.aor)
+    await ctx.info(f"Dialling {target_uri}")
     dialog = Dialog(sip=connection_pool.sip)
     await dialog.dial(target_uri, session_class=SayCall, text=prompt)
+    await ctx.info("Call completed")
 
 
 @mcp.tool

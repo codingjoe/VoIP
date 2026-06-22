@@ -142,9 +142,7 @@ class SessionDescription(ByteSerializableObject):
             value = getattr(self, field.session_attr)
             if field.is_list:
                 yield from (f"{field.letter}={v}" for v in value)
-            elif (
-                value is not None
-                and value != ""
-                or field.session_attr in ("version", "name")
+            elif (value is not None and value != "") or (
+                field.session_attr in ("version", "name")
             ):
                 yield f"{field.letter}={value}"
