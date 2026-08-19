@@ -316,11 +316,13 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
     def data_received(self, data: bytes) -> None:
         self.recv_buffer.extend(data)
         for frame in self.extract_frames():
-            self.dispatch_frame(frame)
+            task = asyncio.create_task(self.dispatch_frame(bytes(frame)))
+            task.add_done_callback(self.log_task_failure)
 
     def datagram_received(self, data: bytes, addr: tuple) -> None:  # type: ignore[override]
         """Dispatch a complete UDP SIP datagram."""
-        self.dispatch_frame(data)
+        task = asyncio.create_task(self.dispatch_frame(data))
+        task.add_done_callback(self.log_task_failure)
 
     def error_received(self, exc: Exception) -> None:  # type: ignore[override]
         """Log a UDP transport error."""
@@ -361,7 +363,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
             else:
                 break
 
-    def dispatch_frame(self, frame: memoryview | bytes) -> None:
+    async def dispatch_frame(self, frame: memoryview | bytes) -> None:
         peer = NetworkAddress(*self.transport.get_extra_info("peername")[:2])
         if frame == PONG:
             logger.info("PONG", extra={"addr": peer})
@@ -380,7 +382,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
                         request,
                         extra={"addr": peer},
                     )
-                    self.request_received(request)
+                    await self.request_received(request)
                 case Response() as response:
                     logger.info(
                         "Response received %r",
@@ -445,13 +447,11 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
             ),
         )
 
-    def request_received(self, request: Request) -> None:
+    async def request_received(self, request: Request) -> None:
         """Dispatch an incoming SIP request to the appropriate transaction."""
         match request.method:
             case SIPMethod.INVITE:
-                asyncio.create_task(
-                    InviteTransaction.receive(request=request, sip=self)
-                )
+                await InviteTransaction.receive(request=request, sip=self)
             case SIPMethod.ACK:
                 # For non-2xx ACKs the INVITE tx is still present; route by dialog.
                 try:
@@ -469,7 +469,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
                 else:
                     tx.ack_received(request)
             case SIPMethod.BYE:
-                asyncio.create_task(ByeTransaction.receive(request=request, sip=self))
+                await ByeTransaction.receive(request=request, sip=self)
             case SIPMethod.CANCEL:
                 try:
                     tx = self.transactions[request.branch]
@@ -494,6 +494,11 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
                 )
             case _:
                 self.method_not_allowed(request)
+
+    def log_task_failure(self, task: asyncio.Task) -> None:
+        """Retrieve and log the exception of a failed background task."""
+        if not task.cancelled() and (exc := task.exception()):
+            logger.error("Background task failed", exc_info=exc)
 
     def response_received(self, response: Response) -> None:
         """Dispatch an incoming SIP response to its originating transaction.
