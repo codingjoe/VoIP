@@ -23,6 +23,9 @@ jobs:
       - run: uv run --group docs mkdocs build --strict
   pytest:
     name: pytest
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       matrix:
         os:
@@ -38,9 +41,12 @@ jobs:
       - run: uv run --group test pytest
       - uses: codecov/codecov-action@v7
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
+          use_oidc: true
   pytest-extras:
     name: pytest
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       matrix:
         os:
@@ -62,9 +68,12 @@ jobs:
       - run: uv run --group=test --extra=${{ matrix.extra }} pytest
       - uses: codecov/codecov-action@v7
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
+          use_oidc: true
   pytest-os:
     name: pytest
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       matrix:
         os:
@@ -82,4 +91,4 @@ jobs:
       - run: uv run --group=test pytest
       - uses: codecov/codecov-action@v7
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
+          use_oidc: true
