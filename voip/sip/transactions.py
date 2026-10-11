@@ -82,7 +82,8 @@ class Transaction(asyncio.Future):
     def __post_init__(self):
         asyncio.Future.__init__(self)
         if not self.branch.startswith(self.branch_prefix):
-            raise ValueError(f"Branch parameter must start with {self.branch_prefix!r}")
+            message = f"Branch parameter must start with {self.branch_prefix!r}"
+            raise ValueError(message)
 
     @property
     def headers(self) -> dict[str, str]:
@@ -313,10 +314,12 @@ class DigestAuthMixin:
         try:
             hash_name = cls.DIGEST_HASH_NAME[algorithm]
         except KeyError:
-            raise ValueError(f"Unsupported digest algorithm: {algorithm!r}") from None
+            message = f"Unsupported digest algorithm: {algorithm!r}"
+            raise ValueError(message) from None
         is_sess = algorithm.endswith("-sess")
         if is_sess and cnonce is None:
-            raise ValueError(f"algorithm={algorithm!r} requires a cnonce value")
+            message = f"algorithm={algorithm!r} requires a cnonce value"
+            raise ValueError(message)
 
         ha1 = cls.hash(hash_name, f"{username}:{realm}:{password}")
         if is_sess:

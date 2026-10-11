@@ -1,4 +1,5 @@
 import abc
+import contextlib
 import ipaddress
 import re
 import typing
@@ -61,9 +62,8 @@ class NetworkAddress(typing.NamedTuple):
     def parse(cls, data: str) -> NetworkAddress:
         if match := NETLOC_PATTERN.match(data):
             host, port = match.group("host").strip("[]"), match.group("port")
-            try:
+            with contextlib.suppress(ValueError):
                 host = ipaddress.ip_address(host)
-            except ValueError:
-                pass
             return cls(host=host, port=int(port) if port else None)
-        raise ValueError(f"Invalid network address: {data!r}")
+        message = f"Invalid network address: {data!r}"
+        raise ValueError(message)

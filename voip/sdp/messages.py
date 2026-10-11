@@ -92,9 +92,8 @@ class SessionDescription(ByteSerializableObject):
             letter == "a"
             and isinstance(parsed, Attribute)
             and current_media is not None
-        ):
-            if self.apply_media_attribute(parsed, current_media):
-                return current_media
+        ) and self.apply_media_attribute(parsed, current_media):
+            return current_media
         if field.media_attr is not None and current_media is not None:
             return self.apply_to_media(
                 current_media, field.media_attr, parsed, field.is_list

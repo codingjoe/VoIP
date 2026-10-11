@@ -32,7 +32,7 @@ try:
     from voip.codecs.opus import Opus
 
     REGISTRY |= {G722.encoding_name: G722, Opus.encoding_name: Opus}
-    __all__ = [*__all__, "G722", "Opus", "PyAVCodec"]
+    __all__ += ["G722", "Opus", "PyAVCodec"]
 except ImportError:
     pass
 

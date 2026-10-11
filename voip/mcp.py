@@ -35,6 +35,9 @@ mcp = FastMCP(
 
 connection_pool = threading.local()
 
+#: Error raised when an MCP tool is used before `run` has connected.
+NOT_CONNECTED_MESSAGE = "VoIP not connected: call run() before using tools."
+
 
 @dataclasses.dataclass(kw_only=True, slots=True)
 class MCPAgentCall(ai.AgentCall):
@@ -95,7 +98,7 @@ async def say(ctx: Context, target: str, prompt: str = "") -> None:
         prompt: Text to speak during the call.
     """
     if not hasattr(connection_pool, "sip"):
-        raise RuntimeError("VoIP not connected: call run() before using tools.")
+        raise RuntimeError(NOT_CONNECTED_MESSAGE)
     target_uri = parse_uri(target, connection_pool.sip.aor)
     await ctx.info(f"Dialling {target_uri}")
     dialog = Dialog(sip=connection_pool.sip)
@@ -129,7 +132,7 @@ async def call(
         The full conversation transcript with `Caller:` / `Agent:` prefixes.
     """
     if not hasattr(connection_pool, "sip"):
-        raise RuntimeError("VoIP not connected: call run() before using tools.")
+        raise RuntimeError(NOT_CONNECTED_MESSAGE)
     target_uri = parse_uri(target, connection_pool.sip.aor)
     dialog = Dialog(sip=connection_pool.sip)
     kwargs: dict[str, typing.Any] = {"ctx": ctx, "salutation": initial_prompt}

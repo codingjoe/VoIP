@@ -5,6 +5,7 @@ See also: https://datatracker.ietf.org/doc/html/rfc3261
 """
 
 import asyncio
+import contextlib
 import dataclasses
 import datetime
 import logging
@@ -331,7 +332,7 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
         """Log a UDP transport error."""
         logger.warning("UDP error received", exc_info=exc)
 
-    def extract_frames(self) -> typing.Generator[memoryview | bytes]:  # noqa: C901
+    def extract_frames(self) -> typing.Generator[memoryview | bytes]:
         while self.recv_buffer:
             if self.recv_buffer[0:1] != b"\r":
                 # SIP message: wait for the header-body separator.
@@ -342,10 +343,8 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
                 for line in self.recv_buffer[:header_end].split(b"\r\n")[1:]:
                     name, sep, value = line.partition(b":")
                     if sep and name.strip().lower() == b"content-length":
-                        try:
+                        with contextlib.suppress(ValueError):
                             content_length = int(value.strip())
-                        except ValueError:
-                            pass
                         break
                 message_end = header_end + 4 + content_length
                 if len(self.recv_buffer) < message_end:

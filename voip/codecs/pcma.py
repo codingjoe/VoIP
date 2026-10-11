@@ -62,8 +62,8 @@ class PCMA(RTPCodec):
         # Segments ≥ 1: add 0x108 bias then left-shift by (segment − 1).
         t_bias = mantissa_t + 0x108
         shift = np.maximum(segment - 1, 0)
-        t_segN = np.left_shift(t_bias, shift)
-        t = np.where(segment == 0, t_seg0, t_segN).astype(np.float32)
+        t_seg_n = np.left_shift(t_bias, shift)
+        t = np.where(segment == 0, t_seg0, t_seg_n).astype(np.float32)
         normalized = (sign * t / 32768.0).astype(np.float32)
         source_rate_hz = (
             input_rate_hz if input_rate_hz is not None else cls.sample_rate_hz

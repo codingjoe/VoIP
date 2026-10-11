@@ -12,9 +12,11 @@ class SIPLexer(lexers.HttpLexer):
     tokens = {
         "root": [
             (
-                r"(REGISTER|INVITE|ACK|CANCEL|BYE|OPTIONS|INFO|PRACK"
-                r"|SUBSCRIBE|NOTIFY|REFER|UPDATE|MESSAGE|PUBLISH)"
-                r"( +)([^ ]+)( +)(SIP)(/)(2\.0)(\r?\n|\Z)",
+                (
+                    r"(REGISTER|INVITE|ACK|CANCEL|BYE|OPTIONS|INFO|PRACK"
+                    r"|SUBSCRIBE|NOTIFY|REFER|UPDATE|MESSAGE|PUBLISH)"
+                    r"( +)([^ ]+)( +)(SIP)(/)(2\.0)(\r?\n|\Z)"
+                ),
                 lexer.bygroups(
                     token.Name.Function,
                     token.Text,

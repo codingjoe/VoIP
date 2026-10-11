@@ -71,10 +71,13 @@ class PyAVCodec(RTPCodec):
             ),
         ) as container:
             for frame in container.decode(audio=0):
-                for resampled in resampler.resample(frame):
-                    frames.append(resampled.to_ndarray().flatten())
-        for resampled in resampler.resample(None):
-            frames.append(resampled.to_ndarray().flatten())
+                frames.extend(
+                    resampled.to_ndarray().flatten()
+                    for resampled in resampler.resample(frame)
+                )
+        frames.extend(
+            resampled.to_ndarray().flatten() for resampled in resampler.resample(None)
+        )
         return np.concatenate(frames) if frames else np.array([], dtype=np.float32)
 
     @classmethod

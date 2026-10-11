@@ -6,7 +6,7 @@ from voip.types import NetworkAddress
 
 class TestNetworkAddress:
     @pytest.mark.parametrize(
-        "address,expected",
+        ("address", "expected"),
         [
             # domain
             (NetworkAddress("example.com"), "example.com"),
@@ -26,7 +26,7 @@ class TestNetworkAddress:
         assert str(address) == expected
 
     @pytest.mark.parametrize(
-        "data,expected",
+        ("data", "expected"),
         [
             # domain
             ("example.com", NetworkAddress("example.com")),
@@ -46,7 +46,7 @@ class TestNetworkAddress:
         assert NetworkAddress.parse(data) == expected
 
     def test_parse__value_error__host(self):
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match="Invalid network address") as exc_info:
             NetworkAddress.parse("example.com:invalid_port")
         assert (
             str(exc_info.value) == "Invalid network address: 'example.com:invalid_port'"

@@ -8,7 +8,7 @@ from voip.sip.types import CallerID
 
 class TestSipURI:
     @pytest.mark.parametrize(
-        "uri_str, expected_uri_obj",
+        ("uri_str", "expected_uri_obj"),
         [
             # domain
             (
@@ -140,11 +140,11 @@ class TestSipURI:
     )
     def test_parse_invalid(self, uri_str):
         """Raise ValueError when parsing an invalid SIP URI."""
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Invalid SIP URI"):
             SipURI.parse(uri_str)
 
     @pytest.mark.parametrize(
-        "uri_obj, expected_uri_str",
+        ("uri_obj", "expected_uri_str"),
         [
             (
                 SipURI(scheme="sip", user="alice", host="example.com", port=5061),
@@ -214,7 +214,7 @@ class TestSipURI:
                 SipURI(
                     scheme="sip",
                     user="alice",
-                    password="secret",  # noqa: S106
+                    password="secret",
                     host="example.com",
                     port=5060,
                 ),
@@ -238,7 +238,7 @@ class TestSipURI:
         assert str(uri_obj) == expected_uri_str
 
     @pytest.mark.parametrize(
-        "uri_str, expected_uri_obj",
+        ("uri_str", "expected_uri_obj"),
         [
             # flag URI parameter (;lr with no value)
             (
@@ -394,7 +394,7 @@ class TestCallerID:
 
     def test_uri__unparseable(self):
         """Return None when the URI-like string is not valid for any parser."""
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Invalid SIP URI"):
             assert CallerID("sip:@invalid").uri
 
     def test_host__tel_absent(self):

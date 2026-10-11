@@ -1,3 +1,4 @@
+import contextlib
 import enum
 import ipaddress
 import re
@@ -28,7 +29,8 @@ def parse_uri(uri: str, aor: SipURI) -> SipURI:
         case "tel":
             return SipURI.parse(f"sip:{body}@{aor.host};user=phone")
         case _:
-            raise ValueError(f"Invalid URI scheme: {uri[:3].lower()}")
+            message = f"Invalid URI scheme: {uri[:3].lower()}"
+            raise ValueError(message)
 
 
 class SipURI(str):
@@ -78,11 +80,9 @@ class SipURI(str):
         port: int | None = None,
         parameters: dict[str, str] | None = None,
         headers: dict[str, str] | None = None,
-    ) -> SipURI:
-        try:
+    ) -> typing.Self:
+        with contextlib.suppress(ValueError):
             host = ipaddress.ip_address(host)
-        except ValueError:
-            pass
         port = port if port is not None else (5061 if scheme == "sips" else 5060)
         parameters = parameters or {}
         headers = headers or {}
@@ -155,7 +155,8 @@ class SipURI(str):
                 if match.group("headers")
                 else {},
             )
-        raise ValueError(f"Invalid SIP URI: {value!r}")
+        message = f"Invalid SIP URI: {value!r}"
+        raise ValueError(message)
 
     @classmethod
     def parse_parameters(cls, params: str) -> Iterator[tuple[str, str | None]]:
@@ -216,6 +217,8 @@ class CallerID(str):
         '*lice@example.com'
     """
 
+    __slots__ = ()
+
     @property
     def display_name(self) -> str | None:
         """Display name from the From/To header, if present."""
@@ -228,18 +231,21 @@ class CallerID(str):
         """Parsed SIP or tel URI embedded in the header value, if present."""
         if m := re.search(r"<?((?:sips?|tel):[^>\s]+)>?", self):
             return SipURI.parse(m.group(1))
+        return None
 
     @property
     def user(self) -> str | None:
         """SIP user part (phone number or username)."""
         if m := re.search(r"sips?:([^@>;\s]+)@", self):
             return m.group(1)
+        return None
 
     @property
     def host(self) -> str | None:
         """Carrier domain extracted from the SIP URI."""
         if m := re.search(r"sips?:[^@>;\s]+@([^>;)\s,]+)", self):
             return m.group(1)
+        return None
 
     @property
     def tag(self) -> str | None:
@@ -261,7 +267,7 @@ class SIPStatus(enum.IntEnum):
     [RFC 3261]: https://datatracker.ietf.org/doc/html/rfc3261#section-21
     """
 
-    def __new__(cls, value: int, phrase: str) -> SIPStatus:
+    def __new__(cls, value: int, phrase: str) -> typing.Self:
         obj = int.__new__(cls, value)
         obj._value_ = value
         obj.phrase = phrase
@@ -432,7 +438,7 @@ class SIPMethod(enum.StrEnum):
     [RFC 3311]: https://tools.ietf.org/html/rfc3311
     """
 
-    def __new__(cls, value: str, description: str = "") -> SIPMethod:
+    def __new__(cls, value: str, description: str = "") -> typing.Self:
         obj = str.__new__(cls, value)
         obj._value_ = value
         obj.description = description

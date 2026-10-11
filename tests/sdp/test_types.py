@@ -65,7 +65,7 @@ class TestRTPPayloadFormatParse:
 
     def test_parse__invalid_value_raises(self):
         """An rtpmap value without a clock rate raises ValueError."""
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Invalid rtpmap value"):
             RTPPayloadFormat.parse("0 PCMU")
 
 
@@ -93,5 +93,5 @@ class TestStaticPayloadTypeFromPt:
 
     def test_from_pt__unknown_pt_raises(self):
         """Lookup of an unknown static payload type raises ValueError."""
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="No static payload type"):
             StaticPayloadType.from_pt(96)
