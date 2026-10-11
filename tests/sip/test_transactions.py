@@ -136,7 +136,8 @@ class TestInviteAck:
     """The ACK terminating an outbound INVITE must be well-formed."""
 
     async def test_ack_for_non_2xx_reuses_invite_via_and_mirrors_route(self, sip):
-        """A non-2xx final ACK reuses the INVITE Via/branch and mirrors its Route.
+        """
+        A non-2xx final ACK reuses the INVITE Via/branch and mirrors its Route.
 
         Per RFC 3261 §17.1.1.3 the transactional ACK must mirror the INVITE's
         Route header values (not the response's Record-Route) so the proxy
@@ -184,7 +185,8 @@ class TestInviteAck:
         await asyncio.wait_for(send_task, timeout=1)
 
     async def test_ack_for_2xx_carries_dialog_route_set(self, sip):
-        """A 2xx ACK opens a fresh transaction and follows the dialog route set.
+        """
+        A 2xx ACK opens a fresh transaction and follows the dialog route set.
 
         On 2xx the route set is the reversed Record-Route (RFC 3261 §12.1.2)
         and the Request-URI is the Contact.
@@ -398,7 +400,7 @@ class TestInviteSrtp:
         assert session.srtp_recv is not None
         assert session.srtp_recv.master_key == remote_session.master_key
         # A packet encrypted by the remote is decryptable with the recv session.
-        from voip.rtp import RTPPacket  # noqa: PLC0415
+        from voip.rtp import RTPPacket
 
         packet = RTPPacket(
             payload_type=0, sequence_number=1, timestamp=160, ssrc=42, payload=b"hello"
@@ -492,7 +494,8 @@ class TestInviteSrtp:
         await asyncio.wait_for(send_task, timeout=1)
 
     async def test_inbound_srtp_offer_keys_recv_from_offer_crypto(self, sip):
-        """Answering an SRTP offer installs send (ours) + recv (offer's) sessions.
+        """
+        Answering an SRTP offer installs send (ours) + recv (offer's) sessions.
 
         The 200 OK carries our own fresh SDES key (send); the call's recv
         session is parsed from the offer's `a=crypto:` so the caller's media

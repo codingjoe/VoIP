@@ -1,4 +1,5 @@
-"""Audio call handler for RTP streams.
+"""
+Audio call handler for RTP streams.
 
 This module provides [AudioCall][voip.audio.AudioCall], which buffers RTP
 packets, negotiates codecs, and decodes/encodes audio using the codec
@@ -19,7 +20,7 @@ from typing import ClassVar
 
 import numpy as np
 
-import voip.codecs as codecs
+from voip import codecs
 from voip.codecs import RTPCodec
 from voip.codecs.base import PayloadDecoder
 from voip.rtp import RTPPacket, Session
@@ -32,7 +33,8 @@ logger = logging.getLogger(__name__)
 
 
 def generate_ssrc() -> int:
-    """Generate a cryptographically random 32-bit SSRC for an outbound RTP stream.
+    """
+    Generate a cryptographically random 32-bit SSRC for an outbound RTP stream.
 
     Returns:
         A random 32-bit integer suitable for use as an RTP SSRC.
@@ -105,7 +107,8 @@ class AudioCall(Session):
 
     @property
     def sample_rate(self) -> int:
-        """SDP-negotiated audio sample rate in Hz.
+        """
+        SDP-negotiated audio sample rate in Hz.
 
         Reflects the value from the remote `a=rtpmap` line.  For G.722 this
         is 8000 per RFC 3551 even though the codec runs at 16000 Hz
@@ -150,7 +153,8 @@ class AudioCall(Session):
 
     @classmethod
     def sdp_formats(cls) -> list[RTPPayloadFormat]:
-        """Return all supported payload formats for outbound SDP offers.
+        """
+        Return all supported payload formats for outbound SDP offers.
 
         Lists all codecs in `supported_codecs` priority order so the remote
         can select the best available codec.
@@ -219,7 +223,8 @@ class AudioCall(Session):
             self.outbound_handle = None
 
     def on_audio_sent(self) -> None:
-        """Handle completion of an outbound audio stream.
+        """
+        Handle completion of an outbound audio stream.
 
         The base implementation is a no-op.  Override in subclasses to
         trigger post-audio actions, for example hanging up after
@@ -380,7 +385,8 @@ class VoiceActivityCall(AudioCall):
         self.speech_buffer = np.empty((0,), dtype=np.float32)
 
     async def voice_received(self, audio: np.ndarray) -> None:
-        """Handle the flushed speech buffer.  Override in subclasses.
+        """
+        Handle the flushed speech buffer.  Override in subclasses.
 
         This base implementation is a no-op.  Subclasses must override this
         method to process the buffered utterance (e.g. echo it back, transcribe
@@ -394,7 +400,8 @@ class VoiceActivityCall(AudioCall):
 
 @dataclasses.dataclass(kw_only=True, slots=True)
 class EchoCall(VoiceActivityCall):
-    """Replay the caller's speech back to them.
+    """
+    Replay the caller's speech back to them.
 
     Buffers a full utterance and replays it once a sustained silence lasting
     `silence_gap` seconds is detected. This gives the caller a natural echo

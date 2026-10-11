@@ -114,7 +114,7 @@ class TestG722Packetize:
 class TestG722CreateDecoder:
     def test_create_decoder__returns_g722_decoder(self):
         """create_decoder returns a G722Decoder instance."""
-        from voip.codecs.g722 import G722Decoder  # noqa: PLC0415
+        from voip.codecs.g722 import G722Decoder
 
         decoder = G722.create_decoder(16000)
         assert isinstance(decoder, G722Decoder)
@@ -126,7 +126,7 @@ class TestG722CreateDecoder:
 
     def test_create_decoder__ignores_input_rate_hz(self):
         """create_decoder ignores input_rate_hz (G.722 always decodes at 16 kHz)."""
-        from voip.codecs.g722 import G722Decoder  # noqa: PLC0415
+        from voip.codecs.g722 import G722Decoder
 
         decoder = G722.create_decoder(16000, input_rate_hz=8000)
         assert isinstance(decoder, G722Decoder)
@@ -136,7 +136,7 @@ class TestG722CreateDecoder:
 class TestG722Decoder:
     def _make_encoded_packets(self, packet_count: int = 3) -> list[bytes]:
         """Encode *packet_count* 20 ms G.722 packets from a continuous sine wave."""
-        import av  # noqa: PLC0415
+        import av
 
         encoder = av.CodecContext.create("g722", "w")
         encoder.sample_rate = 16000
@@ -157,23 +157,23 @@ class TestG722Decoder:
 
     def test_decoder__initialises_codec_context(self):
         """G722Decoder creates a persistent PyAV codec context on init."""
-        import av  # noqa: PLC0415
-        from voip.codecs.g722 import G722Decoder  # noqa: PLC0415
+        import av
+        from voip.codecs.g722 import G722Decoder
 
         decoder = G722Decoder(16000)
         assert isinstance(decoder.codec_context, av.CodecContext)
 
     def test_decoder__initialises_resampler(self):
         """G722Decoder creates an AudioResampler targeting output_rate_hz."""
-        import av  # noqa: PLC0415
-        from voip.codecs.g722 import G722Decoder  # noqa: PLC0415
+        import av
+        from voip.codecs.g722 import G722Decoder
 
         decoder = G722Decoder(8000)
         assert isinstance(decoder.resampler, av.audio.resampler.AudioResampler)
 
     def test_decoder__decode_returns_float32(self):
         """Decode produces a float32 array for a real G.722 encoded packet."""
-        from voip.codecs.g722 import G722Decoder  # noqa: PLC0415
+        from voip.codecs.g722 import G722Decoder
 
         packet = self._make_encoded_packets(1)[0]
         decoder = G722Decoder(16000)
@@ -182,7 +182,7 @@ class TestG722Decoder:
 
     def test_decoder__decode_yields_correct_sample_count(self):
         """Decode returns 320 float32 samples for a 160-byte G.722 packet at 16 kHz."""
-        from voip.codecs.g722 import G722Decoder  # noqa: PLC0415
+        from voip.codecs.g722 import G722Decoder
 
         packet = self._make_encoded_packets(1)[0]
         assert len(packet) == 160
@@ -191,17 +191,18 @@ class TestG722Decoder:
         assert len(result) == G722.frame_size  # 320
 
     def test_decoder__preserves_adpcm_state_across_packets(self):
-        """Stateful G722Decoder matches decoding all bytes together (reference).
+        """
+        Stateful G722Decoder matches decoding all bytes together (reference).
 
         A per-packet stateless decoder resets the ADPCM predictor and produces
         near-silent output for packets 1+.  A stateful G722Decoder feeds each
         packet into the same persistent context and matches the reference (all
         packets decoded together in one container).
         """
-        import io  # noqa: PLC0415
+        import io
 
-        import av  # noqa: PLC0415
-        from voip.codecs.g722 import G722Decoder  # noqa: PLC0415
+        import av
+        from voip.codecs.g722 import G722Decoder
 
         packets = self._make_encoded_packets(3)
 
@@ -233,15 +234,16 @@ class TestG722Decoder:
         )
 
     def test_stateless_decode__diverges_after_first_packet(self):
-        """Per-packet stateless decoding diverges from reference for packets 1+.
+        """
+        Per-packet stateless decoding diverges from reference for packets 1+.
 
         This test documents the original bug: resetting ADPCM state each
         packet causes the decoded signal to be near-silent for all but the
         first packet, making the echo 'too short' and 'robotic'.
         """
-        import io  # noqa: PLC0415
+        import io
 
-        import av  # noqa: PLC0415
+        import av
 
         packets = self._make_encoded_packets(3)
 

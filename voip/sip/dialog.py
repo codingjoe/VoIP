@@ -17,7 +17,8 @@ logger = logging.getLogger("voip.sip")
 
 @dataclasses.dataclass(kw_only=True, slots=True)
 class Dialog:
-    """Peer-to-peer SIP relationship between two user agents [RFC 3261 §12].
+    """
+    Peer-to-peer SIP relationship between two user agents [RFC 3261 §12].
 
     Subclass `Dialog` to implement call handling.  Set the subclass as
     `dialog_class` on the SIP session for inbound calls:
@@ -161,7 +162,7 @@ class Dialog:
 
     async def bye(self) -> None:
         """End the call and terminate the dialog and multimedia session."""
-        from voip.sip.transactions import ByeTransaction  # noqa: PLC0415
+        from voip.sip.transactions import ByeTransaction
 
         try:
             await asyncio.wait_for(
@@ -196,7 +197,7 @@ class Dialog:
 
         [RFC 3261 §13.1]: https://datatracker.ietf.org/doc/html/rfc3261#section-13.1
         """
-        from voip.sip.transactions import InviteTransaction  # noqa: PLC0415
+        from voip.sip.transactions import InviteTransaction
 
         await InviteTransaction.send(
             sip=self.sip,

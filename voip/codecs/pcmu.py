@@ -1,4 +1,5 @@
-"""PCMU (G.711 mu-law) codec implementation for RTP audio streams (RFC 3551).
+"""
+PCMU (G.711 mu-law) codec implementation for RTP audio streams (RFC 3551).
 
 The [PCMU][voip.codecs.pcmu.PCMU] class decodes and encodes mu-law RTP
 payloads using a pure-NumPy implementation of ITU-T G.711 mu-law companding.
@@ -18,7 +19,8 @@ MU_LAW_CLIP: int = 32635  # maximum biased magnitude (14-bit saturate)
 
 
 class PCMU(RTPCodec):
-    """G.711 mu-law codec ([RFC 3551 §4.5.14][]).
+    """
+    G.711 mu-law codec ([RFC 3551 §4.5.14][]).
 
     PCMU is the ITU-T G.711 mu-law logarithmic companding codec for PSTN
     telephony, standardised in RFC 3551 with static payload type 0.

@@ -7,7 +7,7 @@ import pytest
 
 pytest.importorskip("numpy")
 
-from voip.codecs import PCMA, PCMU, get  # noqa: E402
+from voip.codecs import PCMA, PCMU, get
 
 
 class TestGet:
@@ -22,14 +22,14 @@ class TestGet:
     def test_get__opus(self):
         """Get returns Opus for the encoding name 'opus'."""
         pytest.importorskip("av")
-        from voip.codecs import Opus  # noqa: PLC0415
+        from voip.codecs import Opus
 
         assert get("opus") is Opus
 
     def test_get__g722(self):
         """Get returns G722 for the encoding name 'g722'."""
         pytest.importorskip("av")
-        from voip.codecs import G722  # noqa: PLC0415
+        from voip.codecs import G722
 
         assert get("g722") is G722
 
@@ -52,21 +52,21 @@ _PYAV_MODULE_KEYS: frozenset[str] = frozenset(
 class TestRegistry:
     def test_registry__always_contains_numpy_codecs(self):
         """REGISTRY always contains PCMA and PCMU regardless of PyAV availability."""
-        import voip.codecs as m  # noqa: PLC0415
+        import voip.codecs as m
 
         assert "pcma" in m.REGISTRY
         assert "pcmu" in m.REGISTRY
 
     def test_registry__excludes_pyav_codecs_when_av_unavailable(self):
         """REGISTRY excludes G722 and Opus when av is not importable."""
-        import voip.codecs as target  # noqa: PLC0415
+        import voip.codecs as target
 
         keys_to_remove = [k for k in sys.modules if k in _PYAV_MODULE_KEYS]
         saved = {k: sys.modules.pop(k) for k in keys_to_remove}
         sys.modules["av"] = None  # causes ImportError on `import av`
 
         try:
-            import voip.codecs as fresh  # noqa: PLC0415
+            import voip.codecs as fresh
 
             assert "pcma" in fresh.REGISTRY
             assert "pcmu" in fresh.REGISTRY
@@ -85,7 +85,7 @@ class TestRegistry:
         sys.modules["av"] = None  # causes ImportError on `import av`
 
         try:
-            import voip.codecs as fresh  # noqa: PLC0415
+            import voip.codecs as fresh
 
             for name in ("G722", "Opus", "PyAVCodec"):
                 assert name not in fresh.__all__, (

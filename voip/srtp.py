@@ -1,4 +1,5 @@
-"""Secure Real-time Transport Protocol (SRTP) implementation of [RFC 3711].
+"""
+Secure Real-time Transport Protocol (SRTP) implementation of [RFC 3711].
 
 Provides symmetric key encryption and authentication for RTP media streams
 using the AES_CM_128_HMAC_SHA1_80 cipher suite.  Keys are negotiated via SDP
@@ -33,7 +34,8 @@ AUTH_TAG_SIZE = 10
 
 
 def prf(master_key: bytes, label: int, master_salt: bytes, length: int) -> bytes:
-    """Compute the SRTP pseudo-random function (RFC 3711 §4.3.1).
+    """
+    Compute the SRTP pseudo-random function (RFC 3711 §4.3.1).
 
     Uses AES Counter Mode with IV derived from the label and master salt.
 
@@ -58,7 +60,8 @@ def prf(master_key: bytes, label: int, master_salt: bytes, length: int) -> bytes
 
 @dataclasses.dataclass(slots=True)
 class SRTPSession:
-    """SRTP session for one call leg using AES_CM_128_HMAC_SHA1_80.
+    """
+    SRTP session for one call leg using AES_CM_128_HMAC_SHA1_80.
 
     Symmetric encryption and authentication of RTP packets.
     Key material is derived from `master_key` and `master_salt` via the
@@ -100,7 +103,8 @@ class SRTPSession:
 
     @classmethod
     def from_sdes(cls, value: str) -> SRTPSession:
-        """Build an SRTP session from a remote SDP `a=crypto:` value (RFC 4568).
+        """
+        Build an SRTP session from a remote SDP `a=crypto:` value (RFC 4568).
 
         Parses the SDES crypto attribute format::
 
@@ -143,7 +147,7 @@ class SRTPSession:
             )
         try:
             key_material = base64.b64decode(key_material_b64, validate=True)
-        except (ValueError, base64.binascii.Error) as exc:  # noqa: PERF203
+        except (ValueError, base64.binascii.Error) as exc:
             raise ValueError(f"Malformed SDES inline key: {inline!r}") from exc
         if len(key_material) < KEY_SIZE + SALT_SIZE:
             raise ValueError(
@@ -157,7 +161,8 @@ class SRTPSession:
 
     @property
     def sdes_attribute(self) -> str:
-        """SDP `a=crypto:` attribute value for SDES key exchange (RFC 4568).
+        """
+        SDP `a=crypto:` attribute value for SDES key exchange (RFC 4568).
 
         The key material (master key followed by master salt) is base64-encoded
         and wrapped in the standard SDES inline format.  Include this value in
@@ -171,7 +176,8 @@ class SRTPSession:
         return f"1 {CIPHER_SUITE} inline:{key_salt}"
 
     def compute_iv(self, ssrc: int, index: int) -> bytes:
-        """Compute the 128-bit AES-CM IV for a given SSRC and packet index.
+        """
+        Compute the 128-bit AES-CM IV for a given SSRC and packet index.
 
         IV = (session_salt * 2^16) XOR (SSRC * 2^64) XOR (index * 2^16)
         per RFC 3711 §4.1.1.
@@ -191,7 +197,8 @@ class SRTPSession:
         return mac.finalize()[:AUTH_TAG_SIZE]
 
     def estimate_recv_index(self, seq: int) -> tuple[int, int]:
-        """Estimate the packet index and new ROC for a received sequence number.
+        """
+        Estimate the packet index and new ROC for a received sequence number.
 
         Implements the index estimation algorithm from RFC 3711 §3.3.1.
 
@@ -219,7 +226,8 @@ class SRTPSession:
         return (roc_guess << 16) | seq, roc_guess
 
     def encrypt(self, packet: bytes) -> bytes:
-        """Encrypt an RTP packet to produce an SRTP packet.
+        """
+        Encrypt an RTP packet to produce an SRTP packet.
 
         Encrypts the RTP payload with AES-CM and appends an 80-bit
         HMAC-SHA1 authentication tag.  Tracks sequence number rollover per
@@ -252,7 +260,8 @@ class SRTPSession:
         return srtp_no_tag + self.auth_tag(srtp_no_tag, self.send_roc)
 
     def decrypt(self, packet: bytes) -> bytes | None:
-        """Decrypt and authenticate an SRTP packet.
+        """
+        Decrypt and authenticate an SRTP packet.
 
         Verifies the HMAC-SHA1-80 authentication tag and, if valid, decrypts
         the payload with AES-CM.  The packet index is estimated per

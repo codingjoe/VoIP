@@ -11,12 +11,12 @@ from .types import CallerID, SIPMethod, SIPStatus, SipURI
 
 __all__ = [
     "CallerID",
-    "SipURI",
-    "SIPStatus",
-    "SIPMethod",
+    "Dialog",
     "Message",
     "Request",
     "Response",
-    "Dialog",
+    "SIPMethod",
+    "SIPStatus",
     "SessionInitiationProtocol",
+    "SipURI",
 ]

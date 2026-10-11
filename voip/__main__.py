@@ -65,7 +65,8 @@ class ConsoleMessageProtocol(SessionInitiationProtocol):
         self.pprint(message)
 
     def pprint(self, msg):
-        """Pretty print the message.
+        """
+        Pretty print the message.
 
         Args:
             msg: Message to print.
@@ -194,7 +195,7 @@ def sip(ctx, aor, stun_server, no_verify_tls):
 @click.pass_context
 def echo(ctx, dial: str | None):
     """Echo the caller's speech back after they finish speaking."""
-    from .audio import EchoCall  # noqa: PLC0415
+    from .audio import EchoCall
 
     obj = ctx.obj
     aor = obj["aor"]
@@ -252,7 +253,7 @@ def transcribe(ctx, stt_model, dial: str | None):
     """Transcribe incoming call audio."""
     from faster_whisper import WhisperModel
 
-    from .ai import TranscribeCall  # noqa: PLC0415
+    from .ai import TranscribeCall
 
     obj = ctx.obj
     aor = obj["aor"]
@@ -356,7 +357,7 @@ def agent(
     """Register with a SIP carrier and start calls with an AI voice agent."""
     from faster_whisper import WhisperModel
 
-    from .ai import AgentCall  # noqa: PLC0415
+    from .ai import AgentCall
 
     obj = ctx.obj
     aor = obj["aor"]

@@ -1,4 +1,5 @@
-"""Audio codec implementations for RTP streams.
+"""
+Audio codec implementations for RTP streams.
 
 Provides the [RTPCodec][voip.codecs.base.RTPCodec] base class and concrete
 implementations for all supported RTP audio codecs:
@@ -37,7 +38,8 @@ except ImportError:
 
 
 def get(encoding_name: str) -> type[RTPCodec]:
-    """Get a codec class by its SDP encoding name.
+    """
+    Get a codec class by its SDP encoding name.
 
     Args:
         encoding_name: SDP encoding name, case-insensitive

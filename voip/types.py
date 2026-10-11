@@ -53,7 +53,7 @@ class NetworkAddress(typing.NamedTuple):
     def __str__(self):
         if self.port and isinstance(self.host, IPv6Address):
             return f"[{self.host}]:{self.port}"
-        elif self.port is None:
+        if self.port is None:
             return str(self.host)
         return f"{self.host}:{self.port}"
 

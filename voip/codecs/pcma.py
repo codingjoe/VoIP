@@ -1,4 +1,5 @@
-"""PCMA (G.711 A-law) codec implementation for RTP audio streams (RFC 3551).
+"""
+PCMA (G.711 A-law) codec implementation for RTP audio streams (RFC 3551).
 
 The [PCMA][voip.codecs.pcma.PCMA] class decodes and encodes A-law RTP
 payloads using a pure-NumPy implementation of the ITU-T G.711 A-law segmented
@@ -22,7 +23,8 @@ ALAW_SEG_UBOUND: np.ndarray = np.array(
 
 
 class PCMA(RTPCodec):
-    """G.711 A-law codec ([RFC 3551 §4.5.14][]).
+    """
+    G.711 A-law codec ([RFC 3551 §4.5.14][]).
 
     PCMA is the ITU-T G.711 A-law logarithmic companding codec for PSTN
     telephony, standardised in RFC 3551 with static payload type 8.

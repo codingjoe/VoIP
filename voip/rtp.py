@@ -22,13 +22,14 @@ if TYPE_CHECKING:
     from voip.sip.dialog import Dialog
     from voip.sip.types import CallerID
 
-__all__ = ["RTP", "Session", "RTPPacket", "RTPPayloadType", "RealtimeTransportProtocol"]
+__all__ = ["RTP", "RTPPacket", "RTPPayloadType", "RealtimeTransportProtocol", "Session"]
 
 logger = logging.getLogger(__name__)
 
 
 class RTPPayloadType(enum.IntEnum):
-    """Common RTP payload types, aligned with SDP media format identifiers.
+    """
+    Common RTP payload types, aligned with SDP media format identifiers.
 
     Static payload types (0–95) are defined by RFC 3551.
     Dynamic payload types (96–127) are negotiated via SDP.
@@ -88,7 +89,8 @@ class RTPPacket(ByteSerializableObject):
 
 @dataclasses.dataclass
 class Session:
-    """One call leg managed by the RTP multiplexer.
+    """
+    One call leg managed by the RTP multiplexer.
 
     Associates a SIP dialog with the `RealtimeTransportProtocol` media
     stream. Subclass and override `packet_received` to process incoming
@@ -121,7 +123,8 @@ class Session:
     srtp_recv: SRTPSession | None = None
 
     def packet_received(self, packet: RTPPacket, addr: NetworkAddress) -> None:
-        """Handle a parsed RTP packet. Override in subclasses to process media.
+        """
+        Handle a parsed RTP packet. Override in subclasses to process media.
 
         Args:
             packet: Parsed RTP packet.
@@ -129,7 +132,8 @@ class Session:
         """
 
     def send_packet(self, packet: RTPPacket, addr: NetworkAddress) -> None:
-        """Serialize *packet* and send it via the shared RTP socket.
+        """
+        Serialize *packet* and send it via the shared RTP socket.
 
         Encrypts the packet with the call's SRTP session when one is set.
 
@@ -143,7 +147,8 @@ class Session:
         self.rtp.send(data, addr)
 
     async def hang_up(self) -> None:
-        """Terminate the call by sending a SIP BYE request [RFC 3261 §15].
+        """
+        Terminate the call by sending a SIP BYE request [RFC 3261 §15].
 
         No-op when no dialog is associated with this call.
 
@@ -162,7 +167,8 @@ class Session:
 
     @classmethod
     def negotiate_codec(cls, remote_media: MediaDescription) -> MediaDescription:
-        """Negotiate a media codec from the remote SDP offer.
+        """
+        Negotiate a media codec from the remote SDP offer.
 
         Override in subclasses to implement codec selection. If the method
         raises, the exception propagates and the call is not answered.
@@ -184,7 +190,8 @@ class Session:
 
     @classmethod
     def sdp_formats(cls) -> list[RTPPayloadFormat]:
-        """Return the list of supported payload formats for outbound SDP offers.
+        """
+        Return the list of supported payload formats for outbound SDP offers.
 
         Override in subclasses to advertise codec capabilities.
         [AudioCall][voip.audio.AudioCall] overrides this to return all
@@ -194,14 +201,15 @@ class Session:
             List of [RTPPayloadFormat][voip.sdp.types.RTPPayloadFormat]
             objects describing the supported codecs.
         """
-        from voip.sdp.types import StaticPayloadType  # noqa: PLC0415
+        from voip.sdp.types import StaticPayloadType
 
         return [RTPPayloadFormat.from_pt(StaticPayloadType.PCMU.pt)]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
 class RealtimeTransportProtocol(STUNProtocol):
-    """RTP multiplexer: routes incoming datagrams to per-call handlers (RFC 3550).
+    """
+    RTP multiplexer: routes incoming datagrams to per-call handlers (RFC 3550).
 
     One instance manages multiple simultaneous calls on a single UDP socket.
     Register per-call `Call` handlers with
@@ -241,7 +249,8 @@ class RealtimeTransportProtocol(STUNProtocol):
         bind_address: str | None = None,
         stun_server: NetworkAddress | None = None,
     ) -> RealtimeTransportProtocol:
-        """Create a bound RTP endpoint and wait for the public address.
+        """
+        Create a bound RTP endpoint and wait for the public address.
 
         Suspend until the public address is confirmed (via STUN when configured,
         otherwise the local socket address) before returning.
@@ -270,7 +279,8 @@ class RealtimeTransportProtocol(STUNProtocol):
         addr: NetworkAddress | None,
         handler: Session,
     ) -> None:
-        """Register *handler* for RTP traffic arriving from *addr*.
+        """
+        Register *handler* for RTP traffic arriving from *addr*.
 
         Use `addr=None` as a wildcard to handle traffic from any source that
         has no dedicated routing entry (useful when the caller's RTP address is
@@ -296,7 +306,8 @@ class RealtimeTransportProtocol(STUNProtocol):
         self.calls[addr] = handler
 
     def unregister_call(self, addr: NetworkAddress | None) -> None:
-        """Remove the handler registered for *addr*.
+        """
+        Remove the handler registered for *addr*.
 
         Args:
             addr: The same key that was passed to `register_call`.
@@ -315,7 +326,8 @@ class RealtimeTransportProtocol(STUNProtocol):
             self.calls.pop(addr)
 
     def packet_received(self, data: bytes, addr: NetworkAddress) -> None:
-        """Route an incoming SRTP datagram to the matching per-call handler.
+        """
+        Route an incoming SRTP datagram to the matching per-call handler.
 
         Fall back to the wildcard `None` handler when no exact match exists,
         and drop the packet when no handler is registered at all.  SRTP packets

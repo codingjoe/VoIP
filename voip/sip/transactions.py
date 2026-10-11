@@ -142,7 +142,8 @@ class Transaction(asyncio.Future):
 
 
 class DigestAuthMixin:
-    """Digest authentication for SIP client transactions (RFC 3261 §22, RFC 8760).
+    """
+    Digest authentication for SIP client transactions (RFC 3261 §22, RFC 8760).
 
     Mix into a [Transaction][voip.sip.transactions.Transaction] subclass whose
     requests may receive a `401 Unauthorized` or `407 Proxy Authentication
@@ -163,7 +164,8 @@ class DigestAuthMixin:
     }
 
     def digest_uri(self) -> str:
-        """Return the Request-URI used for the digest `uri` parameter.
+        """
+        Return the Request-URI used for the digest `uri` parameter.
 
         Defaults to the request's Request-URI (RFC 3261 §22.1).  Override to
         customise per transaction.
@@ -171,7 +173,8 @@ class DigestAuthMixin:
         return str(self.request.uri)  # type: ignore[attr-defined]
 
     def handle_auth_challenge(self, response: Response) -> bool:
-        """Answer a 401/407 by resending the request with digest credentials.
+        """
+        Answer a 401/407 by resending the request with digest credentials.
 
         The original transaction must already be dropped by the caller.
 
@@ -223,7 +226,8 @@ class DigestAuthMixin:
     def retry_with_auth(
         self, response: Response, auth_value: str, is_proxy: bool
     ) -> bool:
-        """Rebuild and resend this request carrying *auth_value*.
+        """
+        Rebuild and resend this request carrying *auth_value*.
 
         Override in host transactions: construct a new transaction with a fresh
         branch and incremented CSeq, attach `auth_value` as `Authorization`
@@ -248,7 +252,8 @@ class DigestAuthMixin:
 
     @staticmethod
     def parse_auth_challenge(header: str) -> dict[str, str]:
-        """Parse Digest challenge parameters from a WWW/Proxy-Authenticate header.
+        """
+        Parse Digest challenge parameters from a WWW/Proxy-Authenticate header.
 
         Args:
             header: The raw `WWW-Authenticate` or `Proxy-Authenticate` value.
@@ -279,7 +284,8 @@ class DigestAuthMixin:
         nc: str = "00000001",
         cnonce: str | None = None,
     ) -> str:
-        """Compute a SIP digest response per RFC 3261 §22 and RFC 8760.
+        """
+        Compute a SIP digest response per RFC 3261 §22 and RFC 8760.
 
         RFC 8760 deprecates MD5 and mandates support for SHA-256 and
         SHA-512-256.  The `algorithm` parameter selects the hash function;
@@ -363,7 +369,8 @@ class RegisterTransaction(DigestAuthMixin, Transaction):
         self.sip.send(self.request)
 
     def response_received(self, response: Response) -> None:
-        """Handle a REGISTER response including digest auth challenges (RFC 3261 §22).
+        """
+        Handle a REGISTER response including digest auth challenges (RFC 3261 §22).
 
         Args:
             response: The parsed SIP response.
@@ -405,7 +412,8 @@ class RegisterTransaction(DigestAuthMixin, Transaction):
 
 @dataclasses.dataclass(kw_only=True, slots=True)
 class InviteTransaction(DigestAuthMixin, Transaction):
-    """SIP INVITE transaction for inbound and outbound calls [RFC 3261 §17].
+    """
+    SIP INVITE transaction for inbound and outbound calls [RFC 3261 §17].
 
     For inbound call handling, subclass [Dialog][voip.sip.Dialog]
     and override [call_received][voip.sip.Dialog.call_received]:
@@ -439,7 +447,8 @@ class InviteTransaction(DigestAuthMixin, Transaction):
         request: Request,
         sip: SessionInitiationProtocol,
     ) -> Dialog:
-        """Handle an incoming INVITE [RFC 3261 §13.3].
+        """
+        Handle an incoming INVITE [RFC 3261 §13.3].
 
         Resolve once the call is established (ACK received).
 
@@ -460,7 +469,8 @@ class InviteTransaction(DigestAuthMixin, Transaction):
         return await tx
 
     def ack_received(self, request: Request) -> None:
-        """Handle an ACK confirming dialog establishment (RFC 3261 §17.2.1).
+        """
+        Handle an ACK confirming dialog establishment (RFC 3261 §17.2.1).
 
         Args:
             request: The SIP ACK request.
@@ -469,7 +479,8 @@ class InviteTransaction(DigestAuthMixin, Transaction):
         self.complete()
 
     def cancel_received(self, request: Request) -> None:
-        """Handle a CANCEL request for a pending INVITE.
+        """
+        Handle a CANCEL request for a pending INVITE.
 
         Args:
             request: The SIP CANCEL request.
@@ -488,7 +499,8 @@ class InviteTransaction(DigestAuthMixin, Transaction):
             self.cancel()
 
     def ringing(self) -> None:
-        """Send a 180 Ringing provisional response [RFC 3261 §21.1.2].
+        """
+        Send a 180 Ringing provisional response [RFC 3261 §21.1.2].
 
         Call before `answer` to notify the caller that the UA is alerting the
         user.
@@ -506,7 +518,8 @@ class InviteTransaction(DigestAuthMixin, Transaction):
         )
 
     def reject(self, status_code: SIPStatus = SIPStatus.BUSY_HERE) -> None:
-        """Reject the incoming call.
+        """
+        Reject the incoming call.
 
         Args:
             status_code: SIP response status code (default: 486 Busy Here).
@@ -524,7 +537,8 @@ class InviteTransaction(DigestAuthMixin, Transaction):
     def answer(
         self, *, session_class: type[Session], **session_kwargs: typing.Any
     ) -> None:
-        """Answer the call and start the multimedia session.
+        """
+        Answer the call and start the multimedia session.
 
         Example:
             Call from within [Dialog.call_received][voip.sip.Dialog.call_received]
@@ -691,7 +705,8 @@ class InviteTransaction(DigestAuthMixin, Transaction):
         session_class: type[Session],
         **session_kwargs: typing.Any,
     ) -> Dialog:
-        """Initiate an outgoing call to *target* [RFC 3261 §13.1].
+        """
+        Initiate an outgoing call to *target* [RFC 3261 §13.1].
 
         Offers SRTP (`RTP/SAVP` + SDES `a=crypto:`) and falls back to plain RTP
         if the far end rejects it (488/606/415) or answers with `RTP/AVP`.
@@ -731,7 +746,8 @@ class InviteTransaction(DigestAuthMixin, Transaction):
             raise
 
     def build_invite_request(self, target: types.SipURI) -> messages.Request:
-        """Build the outbound INVITE request with SDP offer for *target*.
+        """
+        Build the outbound INVITE request with SDP offer for *target*.
 
         When [offer_srtp][voip.sip.transactions.InviteTransaction.offer_srtp]
         is set (default) the offer advertises `RTP/SAVP` with an SDES
@@ -795,7 +811,8 @@ class InviteTransaction(DigestAuthMixin, Transaction):
     def retry_with_auth(
         self, response: Response, auth_value: str, is_proxy: bool
     ) -> bool:
-        """Resend the INVITE with credentials after a 401/407 challenge.
+        """
+        Resend the INVITE with credentials after a 401/407 challenge.
 
         The SRTP/RTP offer mode is preserved across the retry.
         """
@@ -805,7 +822,8 @@ class InviteTransaction(DigestAuthMixin, Transaction):
         )
 
     def retry_with_rtp(self, response: Response) -> bool:
-        """Fall back from SRTP to plain RTP after the far end rejects SRTP.
+        """
+        Fall back from SRTP to plain RTP after the far end rejects SRTP.
 
         Any `Authorization`/`Proxy-Authorization` already obtained is carried
         over.  Triggered for `488`, `606` and `415` responses to an SRTP offer.
@@ -818,7 +836,8 @@ class InviteTransaction(DigestAuthMixin, Transaction):
         return self.retry_invite(offer_srtp=False, auth_headers=auth_headers)
 
     def retry_invite(self, *, offer_srtp: bool, auth_headers: dict[str, str]) -> bool:
-        """Build, register and send a fresh INVITE retry, chaining its result.
+        """
+        Build, register and send a fresh INVITE retry, chaining its result.
 
         Shared by [retry_with_auth][voip.sip.transactions.InviteTransaction.retry_with_auth]
         (which preserves the current SRTP/RTP mode) and
@@ -877,7 +896,8 @@ class InviteTransaction(DigestAuthMixin, Transaction):
         self.complete()
 
     def start_call(self, response: Response) -> None:
-        """Complete call setup after a 200 OK is received.
+        """
+        Complete call setup after a 200 OK is received.
 
         Args:
             response: The 200 OK SIP response containing the remote SDP answer.
@@ -967,7 +987,8 @@ class InviteTransaction(DigestAuthMixin, Transaction):
                 self.sip.rtp.send(b"\x00", remote_rtp_address)
 
     def ack(self, response: Response) -> None:
-        """Send an ACK after a terminal response to the INVITE.
+        """
+        Send an ACK after a terminal response to the INVITE.
 
         For 2xx responses the dialog is established (remote tag, parties, route
         set, remote target) and registered with the protocol; the ACK opens a
@@ -1041,7 +1062,8 @@ class InviteTransaction(DigestAuthMixin, Transaction):
 
 @dataclasses.dataclass(kw_only=True, slots=True)
 class ByeTransaction(Transaction):
-    """BYE transaction for terminating a dialog [RFC 3261 §15, §17.1.2].
+    """
+    BYE transaction for terminating a dialog [RFC 3261 §15, §17.1.2].
 
     Use [send][voip.sip.transactions.ByeTransaction.send] to terminate a
     dialog from the local side, or
@@ -1061,7 +1083,8 @@ class ByeTransaction(Transaction):
         sip: SessionInitiationProtocol,
         dialog: Dialog,
     ) -> Dialog:
-        """Send a BYE request and wait for the 200 OK [RFC 3261 §15.1.1].
+        """
+        Send a BYE request and wait for the 200 OK [RFC 3261 §15.1.1].
 
         Args:
             sip: The SIP session to send from.
@@ -1108,7 +1131,8 @@ class ByeTransaction(Transaction):
         request: Request,
         sip: SessionInitiationProtocol,
     ) -> Dialog:
-        """Handle an incoming BYE from the remote party [RFC 3261 §15.1.2].
+        """
+        Handle an incoming BYE from the remote party [RFC 3261 §15.1.2].
 
         Notifies the application via
         [hangup_received][voip.sip.Dialog.hangup_received].
@@ -1137,7 +1161,8 @@ class ByeTransaction(Transaction):
         return await tx
 
     def response_received(self, response: Response) -> None:
-        """Handle the 200 OK for an outgoing BYE [RFC 3261 §15.1.1].
+        """
+        Handle the 200 OK for an outgoing BYE [RFC 3261 §15.1.1].
 
         Args:
             response: The parsed SIP response to our BYE request.

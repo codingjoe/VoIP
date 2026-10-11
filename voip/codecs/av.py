@@ -1,4 +1,5 @@
-"""PyAV-backed RTP codec base class.
+"""
+PyAV-backed RTP codec base class.
 
 [PyAVCodec][voip.codecs.av.PyAVCodec] extends
 [RTPCodec][voip.codecs.base.RTPCodec] with
@@ -26,7 +27,8 @@ __all__ = ["PyAVCodec"]
 
 
 class PyAVCodec(RTPCodec):
-    """Decode and encode audio via [PyAV][].
+    """
+    Decode and encode audio via [PyAV][].
 
     Concrete implementations: [Opus][voip.codecs.Opus],
     [G722][voip.codecs.G722].
@@ -43,7 +45,8 @@ class PyAVCodec(RTPCodec):
         *,
         input_rate_hz: int | None = None,
     ) -> np.ndarray:
-        """Decode raw audio bytes via PyAV into float32 mono PCM.
+        """
+        Decode raw audio bytes via PyAV into float32 mono PCM.
 
         Args:
             data: Raw audio bytes in the codec's wire format.
@@ -81,7 +84,8 @@ class PyAVCodec(RTPCodec):
         av_codec_name: str,
         sample_rate_hz: int,
     ) -> bytes:
-        """Encode float32 mono PCM to raw codec bytes via PyAV.
+        """
+        Encode float32 mono PCM to raw codec bytes via PyAV.
 
         Args:
             samples: Float32 mono PCM array in the range `[-1, 1]`.

@@ -107,7 +107,8 @@ class TestPCMAEncode:
         assert PCMA.encode(np.array([1.0], dtype=np.float32))[0] == 0xAA
 
     def test_encode_decode__roundtrip_midrange(self):
-        """Roundtrip encode→decode stays within one G.711 quantisation step.
+        """
+        Roundtrip encode→decode stays within one G.711 quantisation step.
 
         Values in segments 2–5 had ~3× the expected error with the old (wrong)
         mantissa shift; this test guards against regression.

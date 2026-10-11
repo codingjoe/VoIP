@@ -42,7 +42,8 @@ FIELD_BY_LETTER: dict[str, Field] = {field.letter: field for field in FIELD_MAP}
 
 @dataclasses.dataclass(slots=True)
 class SessionDescription(ByteSerializableObject):
-    """Session Description Protocol message [RFC 4566].
+    """
+    Session Description Protocol message [RFC 4566].
 
     Holds all session-level and media-level fields in their canonical order.
 
@@ -106,7 +107,8 @@ class SessionDescription(ByteSerializableObject):
 
     @staticmethod
     def apply_media_attribute(attr: Attribute, media: MediaDescription) -> bool:
-        """Fold a media-level a= attribute into *media* if it is a format-specific attribute.
+        """
+        Fold a media-level a= attribute into *media* if it is a format-specific attribute.
 
         Returns `True` when the attribute was consumed (`a=rtpmap` or
         `a=fmtp`), `False` otherwise so the caller can fall through to the

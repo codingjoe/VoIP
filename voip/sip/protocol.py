@@ -39,9 +39,9 @@ PONG: typing.Final[bytes] = b"\r\n"
 
 __all__ = [
     "SIP",
-    "SessionInitiationProtocol",
     "InviteTransaction",
     "RegisterTransaction",
+    "SessionInitiationProtocol",
 ]
 
 
@@ -134,7 +134,8 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
         stun_server: NetworkAddress | None = None,
         **kwargs: typing.Any,
     ) -> SessionInitiationProtocol:
-        """Connect to the SIP proxy and return once registered.
+        """
+        Connect to the SIP proxy and return once registered.
 
         Suspend until SIP registration is confirmed before returning the ready
         protocol. After this call returns, the caller may safely place outbound
@@ -205,7 +206,8 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
         stun_server: NetworkAddress | None = None,
         **kwargs: typing.Any,
     ) -> None:
-        """Register with a carrier and handle inbound calls, reconnecting on disconnect.
+        """
+        Register with a carrier and handle inbound calls, reconnecting on disconnect.
 
         Enter a persistent loop: connect to the SIP proxy, wait for the
         connection to drop, and reconnect with exponential back-off. Use this
@@ -280,7 +282,8 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
             logger.warning("Transaction not found for removal: %r", tx)
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:  # type: ignore[override]
-        """Handle transport readiness by starting carrier registration.
+        """
+        Handle transport readiness by starting carrier registration.
 
         Keepalive pings (RFC 5626) are only started for TCP/TLS transports.
         """
@@ -426,7 +429,8 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
         return ",".join(m for m in SIPMethod if m in self.allowed_methods)
 
     def method_not_allowed(self, request: Request) -> None:
-        """Respond with 405 Method Not Allowed.
+        """
+        Respond with 405 Method Not Allowed.
 
         Override to customise the error response or add logging.
 
@@ -501,7 +505,8 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
             logger.error("Background task failed", exc_info=exc)
 
     def response_received(self, response: Response) -> None:
-        """Dispatch an incoming SIP response to its originating transaction.
+        """
+        Dispatch an incoming SIP response to its originating transaction.
 
         Args:
             response: The parsed SIP response.
@@ -518,7 +523,8 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
             tx.response_received(response)
 
     def on_registered(self) -> None:
-        """Handle successful carrier registration.
+        """
+        Handle successful carrier registration.
 
         Override in subclasses to initiate outbound calls or start other
         post-registration activity. The base implementation is a no-op.
@@ -527,7 +533,8 @@ class SessionInitiationProtocol(asyncio.Protocol, asyncio.DatagramProtocol):
 
     @property
     def contact(self) -> str:
-        """Return a `Contact:` header value for this UA.
+        """
+        Return a `Contact:` header value for this UA.
 
         The `ob` parameter ([RFC 5626 §5]) advertises outbound keep-alive
         support to the registrar for TCP/TLS transports.
