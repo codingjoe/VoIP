@@ -217,7 +217,7 @@ class TestRealtimeTransportProtocol:
 
     async def test_stun_discover__uses_actual_socket(self):
         """public_address is resolved via the socket bound to the RTP protocol."""
-        from voip.stun import MAGIC_COOKIE, STUNMessageType  # noqa: PLC0415
+        from voip.stun import MAGIC_COOKIE, STUNMessageType
 
         received_requests: list[bytes] = []
         server_transport: asyncio.DatagramTransport | None = None
@@ -351,7 +351,7 @@ class TestRealtimeTransportProtocol:
     @pytest.mark.asyncio
     async def test_register_call__logs_info(self, caplog):
         """register_call emits an info-level log entry."""
-        import logging  # noqa: PLC0415
+        import logging
 
         mux = RealtimeTransportProtocol()
         handler = Session(
@@ -364,7 +364,7 @@ class TestRealtimeTransportProtocol:
     @pytest.mark.asyncio
     async def test_unregister_call__logs_info(self, caplog):
         """unregister_call emits an info-level log entry."""
-        import logging  # noqa: PLC0415
+        import logging
 
         mux = RealtimeTransportProtocol()
         handler = Session(
@@ -398,7 +398,7 @@ class TestRealtimeTransportProtocol:
     @pytest.mark.asyncio
     async def test_packet_received__logs_debug_for_dropped_packet(self, caplog):
         """packet_received logs a debug message when no handler is registered."""
-        import logging  # noqa: PLC0415
+        import logging
 
         mux = RealtimeTransportProtocol()
         with caplog.at_level(logging.DEBUG, logger="voip.rtp"):
@@ -407,7 +407,7 @@ class TestRealtimeTransportProtocol:
 
     def test_inherits_stun_protocol(self):
         """RealtimeTransportProtocol inherits from STUNProtocol."""
-        from voip.stun import STUNProtocol  # noqa: PLC0415
+        from voip.stun import STUNProtocol
 
         assert issubclass(RealtimeTransportProtocol, STUNProtocol)
 
@@ -418,7 +418,7 @@ class TestSRTPIntegration:
     @pytest.mark.asyncio
     async def test_srtp_packet__decrypted_before_delivery(self):
         """SRTP-encrypted packets are decrypted before being passed to packet_received."""
-        from voip.srtp import SRTPSession  # noqa: PLC0415
+        from voip.srtp import SRTPSession
 
         received: list[RTPPacket] = []
 
@@ -448,9 +448,9 @@ class TestSRTPIntegration:
     @pytest.mark.asyncio
     async def test_srtp_invalid_auth_tag__discarded(self, caplog):
         """Discard SRTP packets with invalid authentication tags and log a warning."""
-        import logging  # noqa: PLC0415
+        import logging
 
-        from voip.srtp import SRTPSession  # noqa: PLC0415
+        from voip.srtp import SRTPSession
 
         received: list[RTPPacket] = []
 
@@ -482,7 +482,7 @@ class TestSRTPIntegration:
     @pytest.mark.asyncio
     async def test_srtp_recv_session_decrypts_inbound_media(self):
         """The mux decrypts with `srtp_recv` (remote key), not the send `srtp`."""
-        from voip.srtp import SRTPSession  # noqa: PLC0415
+        from voip.srtp import SRTPSession
 
         received: list[RTPPacket] = []
 
@@ -519,7 +519,7 @@ class TestSRTPIntegration:
     @pytest.mark.asyncio
     async def test_srtp_falls_back_to_send_session_for_decrypt(self):
         """With only `srtp` set (legacy symmetric), the mux decrypts with it."""
-        from voip.srtp import SRTPSession  # noqa: PLC0415
+        from voip.srtp import SRTPSession
 
         received: list[RTPPacket] = []
 
@@ -589,7 +589,7 @@ class TestSession:
 
     def test_send_packet__encrypts_with_srtp_when_set(self):
         """send_packet encrypts the payload when an SRTP session is attached."""
-        from voip.srtp import SRTPSession  # noqa: PLC0415
+        from voip.srtp import SRTPSession
 
         mock_rtp = MagicMock(spec=RealtimeTransportProtocol)
         session = SRTPSession.generate()

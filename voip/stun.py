@@ -35,7 +35,8 @@ class STUNAttributeType(enum.IntEnum):
 def parse_address(
     value: bytes, xor_key: bytes
 ) -> tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int] | None:
-    """Decode a STUN MAPPED-ADDRESS or XOR-MAPPED-ADDRESS attribute value.
+    """
+    Decode a STUN MAPPED-ADDRESS or XOR-MAPPED-ADDRESS attribute value.
 
     When *xor_key* is non-empty the port and address bytes are XORed with
     the key per RFC 5389 §15.2; pass an empty byte string for plain
@@ -136,7 +137,8 @@ class STUNProtocol(asyncio.DatagramProtocol):
         transport: asyncio.DatagramTransport,
         addr: NetworkAddress,
     ) -> None:
-        """Called when the socket is ready and the reachable address is known.
+        """
+        Called when the socket is ready and the reachable address is known.
 
         When STUN is configured, *addr* is the **public** `(ip, port)`
         discovered from the STUN Binding Response and this method is called
@@ -154,7 +156,8 @@ class STUNProtocol(asyncio.DatagramProtocol):
         """  # noqa: D401
 
     def send(self, data: bytes, addr: NetworkAddress) -> None:
-        """Send a raw datagram through the shared UDP socket.
+        """
+        Send a raw datagram through the shared UDP socket.
 
         Args:
             data: Raw bytes to transmit.
@@ -188,7 +191,8 @@ class STUNProtocol(asyncio.DatagramProtocol):
         logger.warning("UDP transport error (ignored): %s", exc)
 
     def packet_received(self, data: bytes, addr: NetworkAddress) -> None:
-        """Override in subclasses to handle non-STUN datagrams.
+        """
+        Override in subclasses to handle non-STUN datagrams.
 
         Args:
             data: Raw datagram payload (first byte ≥ 4, not a STUN packet).
@@ -196,7 +200,8 @@ class STUNProtocol(asyncio.DatagramProtocol):
         """
 
     def send_stun_request(self) -> None:
-        """Send a STUN Binding Request to discover the public address.
+        """
+        Send a STUN Binding Request to discover the public address.
 
         Use the transport bound to this protocol so the server observes the
         same NAT mapping as real traffic.

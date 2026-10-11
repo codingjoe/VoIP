@@ -93,7 +93,8 @@ class TestOpusDecode:
         assert result.dtype == np.float32
 
     def test_decode__real_decode_not_empty(self):
-        """Decode produces non-empty audio for a non-empty Opus packet.
+        """
+        Decode produces non-empty audio for a non-empty Opus packet.
 
         Regression test: a too-large OpusHead pre-skip combined with a zero
         granule position previously discarded all decoded samples, yielding
@@ -113,7 +114,8 @@ class TestOpusEncode:
         assert len(result) > 0
 
     def test_encode__produces_single_opus_frame(self):
-        """Encode produces exactly one Code-0 Opus frame per 960-sample chunk.
+        """
+        Encode produces exactly one Code-0 Opus frame per 960-sample chunk.
 
         Regression test: the previous implementation concatenated two raw Opus
         frames (one from `codec.encode(frame)` and one from the flush
@@ -142,7 +144,8 @@ class TestOpusPacketize:
             assert (pkt[0] & 0x03) == 0
 
     def test_packetize__frame_count(self):
-        """Packetize yields exactly one packet per 20 ms frame, no flush packet.
+        """
+        Packetize yields exactly one packet per 20 ms frame, no flush packet.
 
         Regression test: the previous implementation appended a flush packet
         (`codec.encode(None)`) after all frames, producing N+1 RTP packets
@@ -221,7 +224,8 @@ class TestOpusDecoderDecode:
         assert result.size > 0
 
     def test_decode__preserves_state_across_packets(self):
-        """OpusDecoder.decode produces consistent per-packet output for sequential packets.
+        """
+        OpusDecoder.decode produces consistent per-packet output for sequential packets.
 
         Regression test: the previous per-packet Ogg-container decode reset the
         `libopus` CELT MDCT overlap window every 20 ms, producing 50 Hz

@@ -1,4 +1,5 @@
-"""AI-powered call handlers for RTP streams.
+"""
+AI-powered call handlers for RTP streams.
 
 This module provides [TranscribeCall][voip.ai.TranscribeCall], which transcribes decoded audio
 with faster-whisper, and [AgentCall][voip.ai.AgentCall], which extends it with an
@@ -33,7 +34,8 @@ logger = logging.getLogger(__name__)
 
 @dataclasses.dataclass(kw_only=True, slots=True)
 class TranscribeCall(VoiceActivityCall):
-    """Transcribe spoken audio to text in an inbound call.
+    """
+    Transcribe spoken audio to text in an inbound call.
 
     Audio is decoded by [AudioCall][voip.audio.AudioCall] on a per-packet
     basis and delivered to [audio_received][voip.audio.AudioCall.audio_received],
@@ -89,7 +91,8 @@ class TranscribeCall(VoiceActivityCall):
         return result
 
     def transcription_received(self, text: str) -> None:
-        """Handle a transcription result.  Override in subclasses.
+        """
+        Handle a transcription result.  Override in subclasses.
 
         Args:
             text: Transcribed text for this audio chunk (already stripped).
@@ -98,7 +101,8 @@ class TranscribeCall(VoiceActivityCall):
 
 @dataclasses.dataclass(kw_only=True)
 class TTSMixin:
-    """Add Pocket TTS voice synthesis to a call.
+    """
+    Add Pocket TTS voice synthesis to a call.
 
     Provides shared `tts_model`, `voice`, and `voice_state` fields along with
     the [send_speech][voip.ai.TTSMixin.send_speech] method used by both
@@ -123,7 +127,8 @@ class TTSMixin:
         self.voice_state = self.tts_model.get_state_for_audio_prompt(self.voice)
 
     async def send_speech(self, text: str) -> None:
-        """Synthesise `text` and transmit it as outbound RTP audio.
+        """
+        Synthesise `text` and transmit it as outbound RTP audio.
 
         Args:
             text: The message to synthesise and send.
@@ -158,7 +163,8 @@ class SayCall(TTSMixin, AudioCall):
 
 @dataclasses.dataclass(kw_only=True, slots=True)
 class AgentCall(TTSMixin, TranscribeCall):
-    """Reply to caller speech with synthesised voice.
+    """
+    Reply to caller speech with synthesised voice.
 
     Uses Ollama to generate responses to transcribed
     text and Pocket TTS to synthesize voice replies.

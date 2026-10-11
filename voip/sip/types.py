@@ -6,9 +6,9 @@ __all__ = [
     "CallerID",
     "DigestAlgorithm",
     "DigestQoP",
-    "SipURI",
-    "SIPStatus",
     "SIPMethod",
+    "SIPStatus",
+    "SipURI",
     "parse_uri",
 ]
 
@@ -17,9 +17,6 @@ import urllib.parse
 from collections.abc import Iterator
 
 from voip.types import NetworkAddress
-
-if typing.TYPE_CHECKING:
-    pass
 
 
 def parse_uri(uri: str, aor: SipURI) -> SipURI:
@@ -35,7 +32,8 @@ def parse_uri(uri: str, aor: SipURI) -> SipURI:
 
 
 class SipURI(str):
-    """A parsed SIP or SIPS URI per [RFC 3261 §19.1].
+    """
+    A parsed SIP or SIPS URI per [RFC 3261 §19.1].
 
     Format: `sip:user:password@host:port;uri-parameters?headers`
 
@@ -59,7 +57,7 @@ class SipURI(str):
 
     """
 
-    __slots__ = ("scheme", "host", "user", "password", "port", "parameters", "headers")
+    __slots__ = ("headers", "host", "parameters", "password", "port", "scheme", "user")
 
     SIP_URL_PATTERN: typing.ClassVar[re.Pattern[str]] = re.compile(
         r"^(?P<scheme>sips?):"
@@ -201,7 +199,8 @@ class SipURI(str):
 
 
 class CallerID(str):
-    """SIP From/To header value with structured access and privacy-safe repr.
+    """
+    SIP From/To header value with structured access and privacy-safe repr.
 
     Behaves as a plain `str` so it is wire-format compatible and can be
     stored in header dicts unchanged.  `repr()` returns a short anonymized
@@ -256,7 +255,8 @@ class CallerID(str):
 
 
 class SIPStatus(enum.IntEnum):
-    """SIP Status Codes based on [RFC 3261].
+    """
+    SIP Status Codes based on [RFC 3261].
 
     [RFC 3261]: https://datatracker.ietf.org/doc/html/rfc3261#section-21
     """
@@ -419,7 +419,8 @@ class SIPStatus(enum.IntEnum):
 
 
 class SIPMethod(enum.StrEnum):
-    """SIP methods and descriptions as defined in [RFC 3261].
+    """
+    SIP methods and descriptions as defined in [RFC 3261].
 
     Extended in [RFC 3262], [RFC 3265], [RFC 3515], [RFC 3428], and [RFC 3311].
 
@@ -466,7 +467,8 @@ class SIPMethod(enum.StrEnum):
 
 
 class DigestAlgorithm(enum.StrEnum):
-    """Hash algorithms for SIP Digest Authentication (RFC 3261, RFC 8760).
+    """
+    Hash algorithms for SIP Digest Authentication (RFC 3261, RFC 8760).
 
     RFC 8760 deprecates MD5 in favour of SHA-256 and SHA-512-256.
     """
@@ -487,7 +489,8 @@ class DigestQoP(enum.StrEnum):
 
 
 def mask_caller(header: str) -> str:
-    """Return a privacy-safe label from a SIP From/To header value.
+    """
+    Return a privacy-safe label from a SIP From/To header value.
 
     Replace all but the last four characters of the display name or SIP user
     part with `*`, ignoring the `tag=` parameter and any other parameters.

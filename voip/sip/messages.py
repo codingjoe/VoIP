@@ -17,7 +17,7 @@ from .types import CallerID, SIPMethod, SIPStatus, SipURI
 if typing.TYPE_CHECKING:
     from voip.sip.dialog import Dialog
 
-__all__ = ["Request", "Response", "Message"]
+__all__ = ["Message", "Request", "Response"]
 
 logger = logging.getLogger("voip.sip")
 

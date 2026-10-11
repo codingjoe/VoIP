@@ -46,7 +46,8 @@ def make_agent_call(
     salutation: str = "",
     messages: list[dict] | None = None,
 ) -> MCPAgentCall:
-    """Instantiate a MCPAgentCall with mocked heavy dependencies.
+    """
+    Instantiate a MCPAgentCall with mocked heavy dependencies.
 
     Patches model-loading factories so no real models are downloaded.
     """
@@ -392,14 +393,16 @@ class TestRun:
         aor = SipURI.parse("sip:alice@example.com")
         mock_protocol = MagicMock(spec=SessionInitiationProtocol)
 
-        with patch.object(
-            SessionInitiationProtocol,
-            "run",
-            new_callable=AsyncMock,
-            return_value=mock_protocol,
+        with (
+            patch.object(
+                SessionInitiationProtocol,
+                "run",
+                new_callable=AsyncMock,
+                return_value=mock_protocol,
+            ),
+            patch.object(voip.mcp.mcp, "run_async", new_callable=AsyncMock),
         ):
-            with patch.object(voip.mcp.mcp, "run_async", new_callable=AsyncMock):
-                await run(aor)
+            await run(aor)
 
         assert connection_pool.sip is mock_protocol
 
@@ -408,16 +411,16 @@ class TestRun:
         aor = SipURI.parse("sip:alice@example.com")
         mock_protocol = MagicMock(spec=SessionInitiationProtocol)
 
-        with patch.object(
-            SessionInitiationProtocol,
-            "run",
-            new_callable=AsyncMock,
-            return_value=mock_protocol,
+        with (
+            patch.object(
+                SessionInitiationProtocol,
+                "run",
+                new_callable=AsyncMock,
+                return_value=mock_protocol,
+            ),
+            patch.object(voip.mcp.mcp, "run_async", new_callable=AsyncMock) as mock_run,
         ):
-            with patch.object(
-                voip.mcp.mcp, "run_async", new_callable=AsyncMock
-            ) as mock_run:
-                await run(aor, transport="stdio")
+            await run(aor, transport="stdio")
 
         mock_run.assert_awaited_once_with(transport="stdio")
 

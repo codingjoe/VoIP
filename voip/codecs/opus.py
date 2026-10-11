@@ -1,4 +1,5 @@
-"""Opus codec implementation for RTP audio streams (RFC 7587).
+"""
+Opus codec implementation for RTP audio streams (RFC 7587).
 
 The [Opus][voip.codecs.opus.Opus] class wraps raw Opus RTP payloads in a
 minimal [Ogg][] container before passing them to PyAV for decoding, and
@@ -28,7 +29,8 @@ __all__ = ["Opus", "OpusDecoder"]
 
 
 class Opus(PyAVCodec):
-    """Opus audio codec ([RFC 7587][]).
+    """
+    Opus audio codec ([RFC 7587][]).
 
     Opus is a highly flexible codec for interactive real-time speech and audio
     transmission. It uses dynamic payload type 111 and always operates at
@@ -48,7 +50,8 @@ class Opus(PyAVCodec):
 
     @staticmethod
     def ogg_crc32(data: bytes) -> int:
-        """Compute an Ogg CRC32 checksum (polynomial 0x04C11DB7).
+        """
+        Compute an Ogg CRC32 checksum (polynomial 0x04C11DB7).
 
         Args:
             data: Bytes to checksum.
@@ -72,7 +75,8 @@ class Opus(PyAVCodec):
         sequence_number: int,
         packets: list[bytes],
     ) -> bytes:
-        """Build a single Ogg page ([RFC 3533](https://datatracker.ietf.org/doc/html/rfc3533)).
+        """
+        Build a single Ogg page ([RFC 3533](https://datatracker.ietf.org/doc/html/rfc3533)).
 
         Args:
             header_type: Page header type flags (e.g. `0x02` for BOS, `0x04` for EOS).
@@ -107,7 +111,8 @@ class Opus(PyAVCodec):
 
     @classmethod
     def ogg_container(cls, packet: bytes) -> bytes:
-        """Wrap a raw Opus RTP payload in a minimal Ogg Opus container.
+        """
+        Wrap a raw Opus RTP payload in a minimal Ogg Opus container.
 
         Opus always uses 48 000 Hz internally
         ([RFC 7587 §4](https://datatracker.ietf.org/doc/html/rfc7587#section-4)).
@@ -186,7 +191,8 @@ class Opus(PyAVCodec):
 
 @dataclasses.dataclass(slots=True)
 class OpusDecoder:
-    """Preserve `libopus` CELT state across packets in a stateful Opus decoder.
+    """
+    Preserve `libopus` CELT state across packets in a stateful Opus decoder.
 
     Use a single persistent decoder for the life of a call so the CELT/MDCT
     overlap state carries across RTP packets, avoiding the window-boundary
@@ -219,7 +225,8 @@ class OpusDecoder:
         )
 
     def decode(self, payload: bytes) -> np.ndarray:
-        """Decode one Opus RTP payload, preserving CELT state from prior packets.
+        """
+        Decode one Opus RTP payload, preserving CELT state from prior packets.
 
         Args:
             payload: Raw Opus RTP payload bytes.

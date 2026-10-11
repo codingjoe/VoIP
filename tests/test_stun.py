@@ -32,7 +32,8 @@ def make_mapped_address_attribute(ip: str, port: int) -> bytes:
 def make_xor_mapped_address_attribute_ipv6(
     ip: str, port: int, transaction_id: bytes
 ) -> bytes:
-    """Build a XOR-MAPPED-ADDRESS attribute for the given IPv6 address and port.
+    """
+    Build a XOR-MAPPED-ADDRESS attribute for the given IPv6 address and port.
 
     Per RFC 5389 §15.2 the port is XORed with the top 16 bits of the magic
     cookie and the 128-bit address is XORed with the concatenation of the
@@ -284,7 +285,7 @@ class TestSTUNProtocol:
 
     async def test_parse_stun_response__no_address_attribute_logs_error(self, caplog):
         """Log an error when the STUN response contains no address attribute."""
-        import logging  # noqa: PLC0415
+        import logging
 
         transaction_id = b"\x04" * 12
         response = make_success_response(transaction_id)
@@ -321,7 +322,7 @@ class TestSTUNProtocol:
 
     def test_error_received__logs_warning(self, caplog):
         """error_received() logs a warning and does not raise."""
-        import logging  # noqa: PLC0415
+        import logging
 
         proto = STUNProtocol(stun_server_address=None)
         transport = unittest.mock.MagicMock(spec=asyncio.DatagramTransport)

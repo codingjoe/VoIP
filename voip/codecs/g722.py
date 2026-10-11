@@ -1,4 +1,5 @@
-"""G.722 wideband codec implementation for RTP audio streams (RFC 3551).
+"""
+G.722 wideband codec implementation for RTP audio streams (RFC 3551).
 
 The [G722][voip.codecs.g722.G722] class handles the RFC 3551 clock-rate
 quirk: SDP advertises 8 000 Hz but the actual audio runs at 16 000 Hz.
@@ -26,7 +27,8 @@ __all__ = ["G722", "G722Decoder"]
 
 
 class G722(PyAVCodec):
-    """G.722 wideband audio codec ([RFC 3551 §4.5.2][]).
+    """
+    G.722 wideband audio codec ([RFC 3551 §4.5.2][]).
 
     G.722 is an ITU-T ADPCM wideband codec.  Despite encoding audio at
     16 000 Hz, the RTP timestamp clock runs at 8 000 Hz per RFC 3551 —
@@ -81,7 +83,8 @@ class G722(PyAVCodec):
 
 @dataclasses.dataclass(slots=True)
 class G722Decoder:
-    """Preserve ADPCM predictor state across packets in a stateful G.722 decoder.
+    """
+    Preserve ADPCM predictor state across packets in a stateful G.722 decoder.
 
     Use a single persistent decoder for the life of a call so the ADPCM
     predictor state carries across RTP packets, avoiding the robotic
@@ -112,7 +115,8 @@ class G722Decoder:
         )
 
     def decode(self, payload: bytes) -> np.ndarray:
-        """Decode one G.722 RTP payload, preserving ADPCM state from prior packets.
+        """
+        Decode one G.722 RTP payload, preserving ADPCM state from prior packets.
 
         Args:
             payload: Raw G.722 RTP payload bytes (160 bytes per 20 ms frame).

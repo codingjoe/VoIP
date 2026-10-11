@@ -18,7 +18,7 @@ class TestFromSdes:
 
     def test_decrypts_media_encrypted_with_parsed_session(self):
         """A session built from a remote `a=crypto:` decrypts that remote's SRTP."""
-        from voip.rtp import RTPPacket  # noqa: PLC0415
+        from voip.rtp import RTPPacket
 
         remote = SRTPSession.generate()
         recv = SRTPSession.from_sdes(remote.sdes_attribute)

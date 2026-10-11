@@ -55,7 +55,7 @@ class TestToPayloadFormat:
     def test_to_payload_format__uses_rtp_clock_rate_for_sdp(self):
         """to_payload_format uses rtp_clock_rate_hz as the SDP sample_rate."""
         pytest.importorskip("av")
-        from voip.codecs.g722 import G722  # noqa: PLC0415
+        from voip.codecs.g722 import G722
 
         result = G722.to_payload_format()
         assert result.sample_rate == G722.rtp_clock_rate_hz  # 8000, not 16000
@@ -86,14 +86,14 @@ class TestAbstractMethods:
 class TestCreateDecoder:
     def test_create_decoder__returns_per_packet_decoder(self):
         """RTPCodec.create_decoder returns a PerPacketDecoder for stateless codecs."""
-        from voip.codecs.base import PerPacketDecoder  # noqa: PLC0415
+        from voip.codecs.base import PerPacketDecoder
 
         decoder = PCMA.create_decoder(16000)
         assert isinstance(decoder, PerPacketDecoder)
 
     def test_create_decoder__stores_codec_and_rates(self):
         """PerPacketDecoder holds the codec class and both rate parameters."""
-        from voip.codecs.base import PerPacketDecoder  # noqa: PLC0415
+        from voip.codecs.base import PerPacketDecoder
 
         decoder = PCMA.create_decoder(16000, input_rate_hz=8000)
         assert isinstance(decoder, PerPacketDecoder)
@@ -103,7 +103,7 @@ class TestCreateDecoder:
 
     def test_create_decoder__input_rate_hz_defaults_to_none(self):
         """input_rate_hz defaults to None when not specified."""
-        from voip.codecs.base import PerPacketDecoder  # noqa: PLC0415
+        from voip.codecs.base import PerPacketDecoder
 
         decoder = PCMA.create_decoder(16000)
         assert isinstance(decoder, PerPacketDecoder)

@@ -1,4 +1,5 @@
-"""MCP server for VoIP actions.
+"""
+MCP server for VoIP actions.
 
 Requires the `mcp` extra: `pip install voip[mcp]`.
 """
@@ -20,9 +21,9 @@ from voip.sip.types import SipURI, parse_uri
 from voip.types import NetworkAddress
 
 __all__ = [
+    "MCPAgentCall",
     "mcp",
     "run",
-    "MCPAgentCall",
 ]
 
 mcp = FastMCP(
@@ -81,7 +82,8 @@ class MCPAgentCall(ai.AgentCall):
 
 @mcp.tool
 async def say(ctx: Context, target: str, prompt: str = "") -> None:
-    """Call a phone number and speak a message.
+    """
+    Call a phone number and speak a message.
 
     Dials `target`, synthesises `prompt` as speech, then hangs
     up automatically once the message has been delivered.
@@ -108,7 +110,8 @@ async def call(
     initial_prompt: str = "",
     system_prompt: str | None = None,
 ) -> str:
-    """Call a phone number, hold a conversation, and return the transcript.
+    """
+    Call a phone number, hold a conversation, and return the transcript.
 
     Dials `target`, optionally speaks `initial_prompt`, then drives a conversation.
 

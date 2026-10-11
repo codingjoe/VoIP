@@ -1,4 +1,5 @@
-"""Base class for RTP audio codecs.
+"""
+Base class for RTP audio codecs.
 
 All concrete codec classes in this package inherit from
 [RTPCodec][voip.codecs.base.RTPCodec].
@@ -26,7 +27,8 @@ __all__ = ["PayloadDecoder", "PerPacketDecoder", "RTPCodec"]
 
 
 class PayloadDecoder(Protocol):
-    """Protocol for per-call RTP payload decoders.
+    """
+    Protocol for per-call RTP payload decoders.
 
     Implementations decode raw RTP payload bytes to float32 mono PCM.
     Stateful implementations (e.g. [G722Decoder][voip.codecs.g722.G722Decoder])
@@ -36,7 +38,8 @@ class PayloadDecoder(Protocol):
     """
 
     def decode(self, payload: bytes) -> np.ndarray:
-        """Decode one RTP payload to float32 mono PCM.
+        """
+        Decode one RTP payload to float32 mono PCM.
 
         Args:
             payload: Raw RTP payload bytes for a single packet.
@@ -48,7 +51,8 @@ class PayloadDecoder(Protocol):
 
 
 class RTPCodec:
-    """Base class for RTP audio codecs.
+    """
+    Base class for RTP audio codecs.
 
     Concrete implementations: [Opus][voip.codecs.Opus],
     [G722][voip.codecs.G722], [PCMA][voip.codecs.pcma.PCMA],
@@ -105,7 +109,8 @@ class RTPCodec:
     def resample(
         cls, audio: np.ndarray, source_rate_hz: int, destination_rate_hz: int
     ) -> np.ndarray:
-        """Resample *audio* from *source_rate_hz* to *destination_rate_hz*.
+        """
+        Resample *audio* from *source_rate_hz* to *destination_rate_hz*.
 
         Args:
             audio: Float32 mono PCM array.
@@ -129,7 +134,8 @@ class RTPCodec:
 
     @classmethod
     def to_payload_format(cls) -> RTPPayloadFormat:
-        """Create an [RTPPayloadFormat][voip.sdp.types.RTPPayloadFormat] for SDP negotiation.
+        """
+        Create an [RTPPayloadFormat][voip.sdp.types.RTPPayloadFormat] for SDP negotiation.
 
         Uses `rtp_clock_rate_hz` as the SDP sample rate, which is correct
         per RFC 3551 (e.g. G.722 advertises 8000 Hz in SDP even though the
@@ -153,7 +159,8 @@ class RTPCodec:
         *,
         input_rate_hz: int | None = None,
     ) -> np.ndarray:
-        """Decode an RTP payload to float32 mono PCM.
+        """
+        Decode an RTP payload to float32 mono PCM.
 
         Override in subclasses to implement codec-specific decoding.
 
@@ -172,7 +179,8 @@ class RTPCodec:
     def create_decoder(
         cls, output_rate_hz: int, *, input_rate_hz: int | None = None
     ) -> PayloadDecoder:
-        """Create a stateless per-call payload decoder for this codec.
+        """
+        Create a stateless per-call payload decoder for this codec.
 
         Args:
             output_rate_hz: Target PCM sample rate in Hz for decoded audio.
@@ -188,7 +196,8 @@ class RTPCodec:
 
     @classmethod
     def encode(cls, samples: np.ndarray) -> bytes:
-        """Encode float32 mono PCM to an RTP payload.
+        """
+        Encode float32 mono PCM to an RTP payload.
 
         Override in subclasses to implement codec-specific encoding.
 
@@ -202,7 +211,8 @@ class RTPCodec:
 
     @classmethod
     def packetize(cls, audio: np.ndarray) -> Iterator[bytes]:
-        """Encode *audio* and yield one encoded payload per 20 ms RTP frame.
+        """
+        Encode *audio* and yield one encoded payload per 20 ms RTP frame.
 
         Override in subclasses (e.g. G.722) where the entire buffer must be
         encoded at once to preserve codec state.
@@ -219,7 +229,8 @@ class RTPCodec:
 
 @dataclasses.dataclass(frozen=True)
 class PerPacketDecoder:
-    """Process each RTP packet independently as a stateless payload decoder.
+    """
+    Process each RTP packet independently as a stateless payload decoder.
 
     Suitable for stateless codecs such as PCMA, PCMU, and Opus.
 
@@ -234,7 +245,8 @@ class PerPacketDecoder:
     input_rate_hz: int | None = None
 
     def decode(self, payload: bytes) -> np.ndarray:
-        """Decode one RTP payload to float32 PCM.
+        """
+        Decode one RTP payload to float32 PCM.
 
         Args:
             payload: Raw RTP payload bytes.

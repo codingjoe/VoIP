@@ -8,17 +8,17 @@ from typing import ClassVar, NamedTuple, Protocol, runtime_checkable
 from ..types import ByteSerializableObject
 
 __all__ = [
-    "Field",
-    "StrField",
-    "IntField",
-    "Origin",
-    "ConnectionData",
-    "Bandwidth",
-    "Timing",
     "Attribute",
+    "Bandwidth",
+    "ConnectionData",
+    "Field",
+    "IntField",
+    "MediaDescription",
+    "Origin",
     "RTPPayloadFormat",
     "StaticPayloadType",
-    "MediaDescription",
+    "StrField",
+    "Timing",
 ]
 
 
@@ -210,7 +210,8 @@ class PayloadTypeSpec(NamedTuple):
 
 
 class StaticPayloadType(PayloadTypeSpec, enum.Enum):
-    """Static RTP payload types as defined by RFC 3551 §6.
+    """
+    Static RTP payload types as defined by RFC 3551 §6.
 
     Each member's `value` is a `PayloadTypeSpec` carrying the
     payload type number, sample rate, canonical encoding name, channel count,
@@ -262,7 +263,8 @@ class StaticPayloadType(PayloadTypeSpec, enum.Enum):
 
 @dataclasses.dataclass(slots=True)
 class RTPPayloadFormat(ByteSerializableObject):
-    """RTP payload format descriptor (RFC 3551 §6 / RFC 4566 §6).
+    """
+    RTP payload format descriptor (RFC 3551 §6 / RFC 4566 §6).
 
     Static payload types fall back to the `StaticPayloadType` table.
     Dynamic payload types (PT ≥ 96) require an explicit `a=rtpmap`.
@@ -315,7 +317,8 @@ class RTPPayloadFormat(ByteSerializableObject):
 
     @property
     def frame_size(self) -> int:
-        """Samples per standard 20 ms RTP frame.
+        """
+        Samples per standard 20 ms RTP frame.
 
         For static payload types the value comes from `StaticPayloadType`.
         For dynamic payload types (e.g. Opus, PT ≥ 96) it is derived from
@@ -354,7 +357,8 @@ class MediaDescription(ByteSerializableObject):
         return next((f for f in self.fmt if f.payload_type == target), None)
 
     def apply_attribute(self, attr: Attribute) -> bool:
-        """Apply a media-level `a=` attribute, returning `True` if consumed.
+        """
+        Apply a media-level `a=` attribute, returning `True` if consumed.
 
         `a=rtpmap` and `a=fmtp` update the matching `RTPPayloadFormat` entry;
         other attributes go to `attributes`.
