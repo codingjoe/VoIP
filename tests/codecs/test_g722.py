@@ -218,8 +218,9 @@ class TestG722Decoder:
             options={"sample_rate": "8000"},
         ) as container:
             for f in container.decode(audio=0):
-                for rs in resampler.resample(f):
-                    ref_frames.append(rs.to_ndarray().flatten())
+                ref_frames.extend(
+                    rs.to_ndarray().flatten() for rs in resampler.resample(f)
+                )
         reference = np.concatenate(ref_frames)
 
         # Stateful G722Decoder: should match the reference exactly.
@@ -259,8 +260,9 @@ class TestG722Decoder:
             options={"sample_rate": "8000"},
         ) as container:
             for f in container.decode(audio=0):
-                for rs in resampler.resample(f):
-                    ref_frames.append(rs.to_ndarray().flatten())
+                ref_frames.extend(
+                    rs.to_ndarray().flatten() for rs in resampler.resample(f)
+                )
         reference = np.concatenate(ref_frames)
 
         # Stateless (original buggy behaviour): fresh context per packet.

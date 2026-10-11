@@ -118,9 +118,11 @@ class TestTranscriptionReceived:
     async def test_transcription_received__appends_user_message(self) -> None:
         """Incoming transcription is appended as a user message."""
         agent = make_agent_call()
-        with patch.object(agent, "cancel_outbound_audio"):
-            with patch("asyncio.create_task"):
-                agent.transcription_received("How are you?")
+        with (
+            patch.object(agent, "cancel_outbound_audio"),
+            patch("asyncio.create_task"),
+        ):
+            agent.transcription_received("How are you?")
 
         user_msgs = [m for m in agent.messages if m["role"] == "user"]
         assert any(m["content"] == "How are you?" for m in user_msgs)
@@ -132,10 +134,12 @@ class TestTranscriptionReceived:
         old_task.done.return_value = False
         object.__setattr__(agent, "response_task", old_task)
 
-        with patch.object(agent, "cancel_outbound_audio"):
-            with patch("asyncio.create_task") as mock_create:
-                mock_create.return_value = MagicMock(spec=asyncio.Task)
-                agent.transcription_received("test")
+        with (
+            patch.object(agent, "cancel_outbound_audio"),
+            patch("asyncio.create_task") as mock_create,
+        ):
+            mock_create.return_value = MagicMock(spec=asyncio.Task)
+            agent.transcription_received("test")
 
         old_task.cancel.assert_called_once()
 
@@ -146,9 +150,11 @@ class TestTranscriptionReceived:
         old_task.done.return_value = True
         object.__setattr__(agent, "response_task", old_task)
 
-        with patch.object(agent, "cancel_outbound_audio"):
-            with patch("asyncio.create_task"):
-                agent.transcription_received("test")
+        with (
+            patch.object(agent, "cancel_outbound_audio"),
+            patch("asyncio.create_task"),
+        ):
+            agent.transcription_received("test")
 
         old_task.cancel.assert_not_called()
 
@@ -246,16 +252,18 @@ class TestSayTool:
         ctx = make_mock_context()
         target_uri = SipURI.parse("sip:bob@carrier.example")
 
-        with patch("voip.mcp.parse_uri", return_value=target_uri) as mock_parse:
-            with patch("voip.mcp.Dialog") as MockDialog:
-                mock_dialog = MagicMock(spec=Dialog)
-                MockDialog.return_value = mock_dialog
-                mock_dialog.dial = AsyncMock()
+        with (
+            patch("voip.mcp.parse_uri", return_value=target_uri) as mock_parse,
+            patch("voip.mcp.Dialog") as mock_dialog_cls,
+        ):
+            mock_dialog = MagicMock(spec=Dialog)
+            mock_dialog_cls.return_value = mock_dialog
+            mock_dialog.dial = AsyncMock()
 
-                await say(ctx=ctx, target="sip:bob@carrier.example", prompt="Hello!")
+            await say(ctx=ctx, target="sip:bob@carrier.example", prompt="Hello!")
 
         mock_parse.assert_called_once_with("sip:bob@carrier.example", aor)
-        MockDialog.assert_called_once_with(sip=mock_sip)
+        mock_dialog_cls.assert_called_once_with(sip=mock_sip)
         mock_dialog.dial.assert_awaited_once()
         _, kwargs = mock_dialog.dial.call_args
         assert kwargs["session_class"].__name__ == "SayCall"
@@ -269,12 +277,14 @@ class TestSayTool:
         connection_pool.sip = mock_sip
 
         ctx = make_mock_context()
-        with patch("voip.mcp.parse_uri", return_value=aor):
-            with patch("voip.mcp.Dialog") as MockDialog:
-                mock_dialog = MagicMock(spec=Dialog)
-                MockDialog.return_value = mock_dialog
-                mock_dialog.dial = AsyncMock()
-                await say(ctx=ctx, target="sip:bob@example.com")
+        with (
+            patch("voip.mcp.parse_uri", return_value=aor),
+            patch("voip.mcp.Dialog") as mock_dialog_cls,
+        ):
+            mock_dialog = MagicMock(spec=Dialog)
+            mock_dialog_cls.return_value = mock_dialog
+            mock_dialog.dial = AsyncMock()
+            await say(ctx=ctx, target="sip:bob@example.com")
 
         _, kwargs = mock_dialog.dial.call_args
         assert kwargs["text"] == ""
@@ -317,18 +327,20 @@ class TestCallTool:
         mock_session = MagicMock()
         mock_session.transcript = "Caller: Hi\nAgent: Hello!"
 
-        with patch("voip.mcp.parse_uri", return_value=target_uri):
-            with patch("voip.mcp.Dialog") as MockDialog:
-                mock_dialog = MagicMock(spec=Dialog)
-                mock_dialog.session = mock_session
-                MockDialog.return_value = mock_dialog
-                mock_dialog.dial = AsyncMock()
+        with (
+            patch("voip.mcp.parse_uri", return_value=target_uri),
+            patch("voip.mcp.Dialog") as mock_dialog_cls,
+        ):
+            mock_dialog = MagicMock(spec=Dialog)
+            mock_dialog.session = mock_session
+            mock_dialog_cls.return_value = mock_dialog
+            mock_dialog.dial = AsyncMock()
 
-                result = await call(
-                    ctx=ctx,
-                    target="sip:bob@example.com",
-                    initial_prompt="Hello!",
-                )
+            result = await call(
+                ctx=ctx,
+                target="sip:bob@example.com",
+                initial_prompt="Hello!",
+            )
 
         assert result == "Caller: Hi\nAgent: Hello!"
         _, kwargs = mock_dialog.dial.call_args
@@ -345,18 +357,20 @@ class TestCallTool:
         connection_pool.sip = mock_sip
 
         ctx = make_mock_context()
-        with patch("voip.mcp.parse_uri", return_value=aor):
-            with patch("voip.mcp.Dialog") as MockDialog:
-                mock_dialog = MagicMock(spec=Dialog)
-                mock_dialog.session = MagicMock(transcript="")
-                MockDialog.return_value = mock_dialog
-                mock_dialog.dial = AsyncMock()
+        with (
+            patch("voip.mcp.parse_uri", return_value=aor),
+            patch("voip.mcp.Dialog") as mock_dialog_cls,
+        ):
+            mock_dialog = MagicMock(spec=Dialog)
+            mock_dialog.session = MagicMock(transcript="")
+            mock_dialog_cls.return_value = mock_dialog
+            mock_dialog.dial = AsyncMock()
 
-                await call(
-                    ctx=ctx,
-                    target="sip:bob@example.com",
-                    system_prompt="Act as a robot.",
-                )
+            await call(
+                ctx=ctx,
+                target="sip:bob@example.com",
+                system_prompt="Act as a robot.",
+            )
 
         _, kwargs = mock_dialog.dial.call_args
         assert kwargs["system_prompt"] == "Act as a robot."
@@ -369,14 +383,16 @@ class TestCallTool:
         connection_pool.sip = mock_sip
 
         ctx = make_mock_context()
-        with patch("voip.mcp.parse_uri", return_value=aor):
-            with patch("voip.mcp.Dialog") as MockDialog:
-                mock_dialog = MagicMock(spec=Dialog)
-                mock_dialog.session = MagicMock(transcript="")
-                MockDialog.return_value = mock_dialog
-                mock_dialog.dial = AsyncMock()
+        with (
+            patch("voip.mcp.parse_uri", return_value=aor),
+            patch("voip.mcp.Dialog") as mock_dialog_cls,
+        ):
+            mock_dialog = MagicMock(spec=Dialog)
+            mock_dialog.session = MagicMock(transcript="")
+            mock_dialog_cls.return_value = mock_dialog
+            mock_dialog.dial = AsyncMock()
 
-                await call(ctx=ctx, target="sip:bob@example.com")
+            await call(ctx=ctx, target="sip:bob@example.com")
 
         _, kwargs = mock_dialog.dial.call_args
         assert kwargs["salutation"] == ""
@@ -429,14 +445,16 @@ class TestRun:
         aor = SipURI.parse("sip:alice@example.com;transport=TLS")
         mock_protocol = MagicMock(spec=SessionInitiationProtocol)
 
-        with patch.object(
-            SessionInitiationProtocol,
-            "run",
-            new_callable=AsyncMock,
-            return_value=mock_protocol,
-        ) as mock_sip_run:
-            with patch.object(voip.mcp.mcp, "run_async", new_callable=AsyncMock):
-                await run(aor, no_verify_tls=True)
+        with (
+            patch.object(
+                SessionInitiationProtocol,
+                "run",
+                new_callable=AsyncMock,
+                return_value=mock_protocol,
+            ) as mock_sip_run,
+            patch.object(voip.mcp.mcp, "run_async", new_callable=AsyncMock),
+        ):
+            await run(aor, no_verify_tls=True)
 
         _, kwargs = mock_sip_run.call_args
         assert kwargs["no_verify_tls"] is True
@@ -447,14 +465,16 @@ class TestRun:
         stun = NetworkAddress.parse("stun.example.com:3478")
         mock_protocol = MagicMock(spec=SessionInitiationProtocol)
 
-        with patch.object(
-            SessionInitiationProtocol,
-            "run",
-            new_callable=AsyncMock,
-            return_value=mock_protocol,
-        ) as mock_sip_run:
-            with patch.object(voip.mcp.mcp, "run_async", new_callable=AsyncMock):
-                await run(aor, stun_server=stun)
+        with (
+            patch.object(
+                SessionInitiationProtocol,
+                "run",
+                new_callable=AsyncMock,
+                return_value=mock_protocol,
+            ) as mock_sip_run,
+            patch.object(voip.mcp.mcp, "run_async", new_callable=AsyncMock),
+        ):
+            await run(aor, stun_server=stun)
 
         _, kwargs = mock_sip_run.call_args
         assert kwargs["stun_server"] is stun

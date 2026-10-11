@@ -135,25 +135,29 @@ class SRTPSession:
         """
         parts = value.split()
         if len(parts) < 3 or not parts[2].startswith("inline:"):
-            raise ValueError(f"Malformed SDES crypto attribute: {value!r}")
+            message = f"Malformed SDES crypto attribute: {value!r}"
+            raise ValueError(message)
         _tag, suite, key_params = parts[0], parts[1], parts[2]
         inline = key_params.split(";", 1)[0]
         key_material_b64, _, _trailing = inline.removeprefix("inline:").partition("|")
         key_material_b64 = key_material_b64.split("~", 1)[0]
         if suite != CIPHER_SUITE:
-            raise ValueError(
+            message = (
                 f"Unsupported SRTP cipher suite {suite!r}; "
                 f"only {CIPHER_SUITE!r} is implemented"
             )
+            raise ValueError(message)
         try:
             key_material = base64.b64decode(key_material_b64, validate=True)
         except (ValueError, base64.binascii.Error) as exc:
-            raise ValueError(f"Malformed SDES inline key: {inline!r}") from exc
+            message = f"Malformed SDES inline key: {inline!r}"
+            raise ValueError(message) from exc
         if len(key_material) < KEY_SIZE + SALT_SIZE:
-            raise ValueError(
+            message = (
                 f"SDES inline key too short ({len(key_material)} bytes); "
                 f"expected at least {KEY_SIZE + SALT_SIZE}"
             )
+            raise ValueError(message)
         return cls(
             master_key=key_material[:KEY_SIZE],
             master_salt=key_material[KEY_SIZE : KEY_SIZE + SALT_SIZE],
@@ -214,15 +218,9 @@ class SRTPSession:
         if s_l < 0:
             return (roc << 16) | seq, roc
         if s_l < 0x8000:  # s_l < 2^15
-            if seq - s_l > 0x8000:
-                roc_guess = (roc - 1) % (1 << 32)
-            else:
-                roc_guess = roc
+            roc_guess = (roc - 1) % (1 << 32) if seq - s_l > 32768 else roc
         else:  # s_l >= 2^15
-            if s_l - seq > 0x8000:
-                roc_guess = (roc + 1) % (1 << 32)
-            else:
-                roc_guess = roc
+            roc_guess = (roc + 1) % (1 << 32) if s_l - seq > 32768 else roc
         return (roc_guess << 16) | seq, roc_guess
 
     def encrypt(self, packet: bytes) -> bytes:

@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 
 MAGIC_COOKIE = 0x2112A442
 
+#: Default STUN server used to discover the public address of the local socket.
+DEFAULT_STUN_SERVER = NetworkAddress("stun.cloudflare.com", 3478)
+
 
 class STUNMessageType(enum.IntEnum):
     """STUN message types (RFC 5389 §6)."""
@@ -113,9 +116,7 @@ class STUNProtocol(asyncio.DatagramProtocol):
     ```
     """
 
-    stun_server_address: NetworkAddress | None = NetworkAddress(
-        "stun.cloudflare.com", 3478
-    )
+    stun_server_address: NetworkAddress | None = DEFAULT_STUN_SERVER
     stun_transaction_id: bytes = dataclasses.field(init=False, default=b"")
     transport: asyncio.DatagramTransport | None = dataclasses.field(
         init=False, default=None

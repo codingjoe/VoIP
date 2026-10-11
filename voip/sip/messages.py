@@ -42,7 +42,8 @@ class SIPHeaderDict(ByteSerializableObject, HTTPHeaderDict):
         for line in data.decode().split("\r\n"):
             name, sep, value = line.partition(":")
             if not sep:
-                raise ValueError(f"Invalid header: {line!r}")
+                message = f"Invalid header: {line!r}"
+                raise ValueError(message)
             name = name.strip()
             value = value.strip()
             self.add(name, CallerID(value) if name in CALLER_IDS_HEADERS else value)
@@ -85,7 +86,8 @@ class Message(ByteSerializableObject, abc.ABC):
         try:
             method, uri, version = parts
         except ValueError:
-            raise ValueError(f"Invalid SIP message first line: {data!r}")
+            message = f"Invalid SIP message first line: {data!r}"
+            raise ValueError(message)
         return Request(
             method=method.decode("ascii"),
             uri=uri.decode("ascii"),

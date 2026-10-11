@@ -648,8 +648,10 @@ class TestMediaDescription:
         )
         pcmu = media.get_format(0)
         opus = media.get_format(111)
-        assert pcmu is not None and pcmu.encoding_name == "PCMU"
-        assert opus is not None and opus.encoding_name == "opus"
+        assert pcmu is not None
+        assert pcmu.encoding_name == "PCMU"
+        assert opus is not None
+        assert opus.encoding_name == "opus"
         assert opus.channels == 2
         assert opus.fmtp == "minptime=10"
 
@@ -673,7 +675,7 @@ class TestRTPPayloadFormat:
 
     def test_parse__invalid__raises(self):
         """Raise ValueError for a malformed rtpmap value."""
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Invalid rtpmap value"):
             RTPPayloadFormat.parse("111 opus")
 
     def test_str__with_channels(self):

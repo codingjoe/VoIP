@@ -39,24 +39,24 @@ INVALID_BRANCH_MESSAGE = "Branch parameter must start with 'z9hG4bK'"
 class TestSessionInitiationProtocol:
     async def test_dispatch_frame__raise_invite_value_error(self, sip):
         """Raise the error when the inbound INVITE transaction fails."""
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match=INVALID_BRANCH_MESSAGE):
             await sip.dispatch_frame(INVITE_INVALID_BRANCH_BYTES)
 
     async def test_dispatch_frame__raise_bye_value_error(self, sip):
         """Raise the error when the inbound BYE transaction fails."""
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match=INVALID_BRANCH_MESSAGE):
             await sip.dispatch_frame(BYE_INVALID_BRANCH_BYTES)
 
     async def test_request_received__raise_invite_value_error(self, sip):
         """Raise the error when the inbound INVITE transaction fails."""
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match=INVALID_BRANCH_MESSAGE):
             await sip.request_received(
                 messages.Message.parse(INVITE_INVALID_BRANCH_BYTES)
             )
 
     async def test_request_received__raise_bye_value_error(self, sip):
         """Raise the error when the inbound BYE transaction fails."""
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match=INVALID_BRANCH_MESSAGE):
             await sip.request_received(messages.Message.parse(BYE_INVALID_BRANCH_BYTES))
 
     async def test_log_task_failure__success(self, sip, caplog):

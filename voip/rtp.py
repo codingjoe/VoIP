@@ -60,7 +60,8 @@ class RTPPacket(ByteSerializableObject):
     @classmethod
     def parse(cls, data: bytes) -> RTPPacket:
         if len(data) < cls.header_size:
-            raise ValueError(f"RTP packet too short: {len(data)} bytes")
+            message = f"RTP packet too short: {len(data)} bytes"
+            raise ValueError(message)
         payload_type = data[1] & 0x7F
         sequence_number = (data[2] << 8) | data[3]
         timestamp = (data[4] << 24) | (data[5] << 16) | (data[6] << 8) | data[7]

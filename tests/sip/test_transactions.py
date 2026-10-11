@@ -129,7 +129,8 @@ def _last_ack(sip: SessionInitiationProtocol) -> messages.Request:
         request = messages.Message.parse(raw)
         if isinstance(request, messages.Request) and request.method == SIPMethod.ACK:
             return request
-    raise AssertionError("no ACK was sent")
+    message = "no ACK was sent"
+    raise AssertionError(message)
 
 
 class TestInviteAck:

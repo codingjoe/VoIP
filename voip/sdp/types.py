@@ -258,7 +258,8 @@ class StaticPayloadType(PayloadTypeSpec, enum.Enum):
         for member in cls:
             if member.value.pt == pt:
                 return member
-        raise ValueError(f"No static payload type with PT {pt}")
+        message = f"No static payload type with PT {pt}"
+        raise ValueError(message)
 
 
 @dataclasses.dataclass(slots=True)
@@ -302,7 +303,8 @@ class RTPPayloadFormat(ByteSerializableObject):
         fmt, _, rest = value.partition(" ")
         parts = rest.split("/")
         if len(parts) < 2:
-            raise ValueError(f"Invalid rtpmap value: {value!r}")
+            message = f"Invalid rtpmap value: {value!r}"
+            raise ValueError(message)
         return cls(
             payload_type=int(fmt),
             encoding_name=parts[0],

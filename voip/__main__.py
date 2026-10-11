@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import asyncio
+import contextlib
 import dataclasses
 import logging
 import socket
@@ -11,6 +12,11 @@ from voip.sip.protocol import SessionInitiationProtocol
 from voip.sip.types import SipURI, parse_uri
 from voip.types import NetworkAddress
 
+#: Message shown when the optional CLI dependencies are not installed.
+MISSING_DEPENDENCIES_MESSAGE = (
+    "The VoIP CLI requires extra dependencies. Install via `pip install voip[cli]`."
+)
+
 try:
     import click
     import numpy as np
@@ -19,9 +25,7 @@ try:
 
     from voip.sip.lexers import SIPLexer
 except ImportError as e:
-    raise ImportError(
-        "The VoIP CLI requires extra dependencies. Install via `pip install voip[cli]`."
-    ) from e
+    raise ImportError(MISSING_DEPENDENCIES_MESSAGE) from e
 
 
 logger = logging.getLogger("voip")
@@ -228,10 +232,8 @@ def echo(ctx, dial: str | None):
             )
             await protocol.disconnected_event.wait()
 
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(run())
-    except KeyboardInterrupt:
-        pass
 
 
 @sip.command()
@@ -297,10 +299,8 @@ def transcribe(ctx, stt_model, dial: str | None):
             )
             await protocol.disconnected_event.wait()
 
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(run())
-    except KeyboardInterrupt:
-        pass
 
 
 @sip.command()
@@ -427,10 +427,8 @@ def agent(
             )
             await protocol.disconnected_event.wait()
 
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(run())
-    except KeyboardInterrupt:
-        pass
 
 
 @sip.command()
@@ -465,10 +463,8 @@ def say(ctx, target: str, prompt: str, voice: str):
         )
         await protocol.disconnected_event.wait()
 
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(run())
-    except KeyboardInterrupt:
-        pass
 
 
 main = voip

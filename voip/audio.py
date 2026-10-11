@@ -86,7 +86,8 @@ class AudioCall(Session):
     def __post_init__(self) -> None:
         fmt = self.media.fmt[0]
         if fmt.encoding_name is None:
-            raise ValueError(f"No encoding name for payload type {fmt.payload_type}")
+            message = f"No encoding name for payload type {fmt.payload_type}"
+            raise ValueError(message)
         self.codec = codecs.get(fmt.encoding_name)
         if fmt.payload_type != self.codec.payload_type:
             logger.warning(
