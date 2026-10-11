@@ -1,60 +1,62 @@
 [build-system]
-requires = ["flit_core>=3.2", "flit_scm", "wheel"]
 build-backend = "flit_scm:buildapi"
+requires = [ "flit-core>=3.2", "flit-scm", "wheel" ]
 
 [project]
-name = "VoIP"
-authors = [
-  { name = "Johannes Maron", email = "johannes@maron.family" },
-]
+name = "voip"
 readme = "README.md"
+keywords = [ "asyncio", "RTP", "SIP", "STUN", "VoIP", "WebRTC" ]
 license = { file = "LICENSE" }
-keywords = ["VoIP", "SIP", "RTP", "WebRTC", "STUN", "asyncio"]
-dynamic = ["version", "description"]
+requires-python = ">=3.14"
 classifiers = [
   # https://pypi.org/classifiers/
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
+  "Framework :: AsyncIO",
   "Intended Audience :: Developers",
   "Intended Audience :: Information Technology",
   "Intended Audience :: Telecommunications Industry",
   "License :: OSI Approved :: GNU Affero General Public License v3",
   "Operating System :: OS Independent",
   "Programming Language :: Python",
-  "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.14",
   "Programming Language :: Python :: 3.15",
-  "Framework :: AsyncIO",
   "Topic :: Communications :: Internet Phone",
   "Topic :: Communications :: Telephony",
+  "Topic :: Home Automation",
   "Topic :: Multimedia :: Sound/Audio",
   "Topic :: Multimedia :: Sound/Audio :: Speech",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
   "Topic :: Software Development :: Libraries",
   "Topic :: System :: Networking",
-  "Topic :: Home Automation",
 ]
-requires-python = ">=3.14"
-dependencies = ["cryptography"]
-
+dynamic = [ "description", "version" ]
+dependencies = [ "cryptography" ]
+[[project.authors]]
+name = "Johannes Maron"
+email = "johannes@maron.family"
 [project.optional-dependencies]
-audio = ["numpy"]
-hd-audio = ["numpy", "av"]
-ai = ["faster-whisper", "numpy", "av", "ollama", "pocket-tts"]
-mcp = ["fastmcp>=3.2.4", "faster-whisper", "numpy", "av", "ollama", "pocket-tts"]
-cli = ["click", "pygments", "faster-whisper", "numpy", "ollama", "pocket-tts"]
-pygments = ["Pygments"]
-
+ai = [ "av", "faster-whisper", "numpy", "ollama", "pocket-tts" ]
+audio = [ "numpy" ]
+cli = [ "click", "faster-whisper", "numpy", "ollama", "pocket-tts", "pygments" ]
+hd-audio = [ "av", "numpy" ]
+mcp = [ "av", "faster-whisper", "fastmcp>=3.2.4", "numpy", "ollama", "pocket-tts" ]
+pygments = [ "pygments" ]
+[project.urls]
+Changelog = "https://github.com/codingjoe/VoIP/releases"
+Documentation = "https://codingjoe.dev/VoIP/"
+Funding = "https://github.com/sponsors/codingjoe"
+# https://packaging.python.org/en/latest/specifications/well-known-project-urls/#well-known-labels
+Homepage = "https://github.com/codingjoe/VoIP"
+Issues = "https://github.com/codingjoe/VoIP/issues"
+Releasenotes = "https://github.com/codingjoe/VoIP/releases/latest"
+Source = "https://github.com/codingjoe/VoIP"
 [project.scripts]
 voip = "voip.__main__:main"
-
-[project.entry-points."pygments.lexers"]
-sip = "voip.sip.lexers:SIPLexer"
-sdp = "voip.sdp.lexers:SDPLexer"
-
-[tool.flit.module]
-name = "voip"
+[project.entry-points]
+"pygments.lexers".sdp = "voip.sdp.lexers:SDPLexer"
+"pygments.lexers".sip = "voip.sip.lexers:SIPLexer"
 
 [dependency-groups]
 dev = [
@@ -63,69 +65,58 @@ dev = [
 ]
 test = [
   "pytest",
+  "pytest-asyncio>=1.3",
   "pytest-cov",
-  "pytest-asyncio>=1.3.0",
 ]
 docs = [
-  "mkdocs",
-  "mkdocstrings[python]>=0.18",
-  "mkdocs-material",
   "markdown-callouts",
-  "Pygments",
+  "mkdocs",
+  "mkdocs-material",
+  "mkdocstrings[python]>=0.18",
+  "pygments",
 ]
-
-[project.urls]
-# https://packaging.python.org/en/latest/specifications/well-known-project-urls/#well-known-labels
-Homepage = "https://github.com/codingjoe/VoIP"
-Changelog = "https://github.com/codingjoe/VoIP/releases"
-Source = "https://github.com/codingjoe/VoIP"
-Releasenotes = "https://github.com/codingjoe/VoIP/releases/latest"
-Documentation = "https://codingjoe.dev/VoIP/"
-Issues = "https://github.com/codingjoe/VoIP/issues"
-Funding = "https://github.com/sponsors/codingjoe"
 
 [tool.setuptools_scm]
 write_to = "voip/_version.py"
 
-[tool.pytest.ini_options]
-minversion = "6.0"
-addopts = "--cov --strict-markers --cov-report=xml --cov-report=term --doctest-modules"
-asyncio_mode = "auto"
-testpaths = ["tests"]
-markers = [
-    "integration: marks tests as integration tests requiring network access (deselect with '-m \"not integration\"')",
-]
-
-[tool.coverage.run]
-source = ["voip"]
-
-[tool.coverage.report]
-show_missing = true
-skip_covered = true
+[tool.flit]
+[tool.flit.module]
+name = "voip"
 
 [tool.ruff]
-src = ["voip", "tests"]
-
+src = [ "tests", "voip" ]
 [tool.ruff.lint]
 select = [
-    "E", # pycodestyle errors
-    "W", # pycodestyle warnings
-    "F", # pyflakes
-    "I", # isort
-    "S", # flake8-bandit
-    "D", # pydocstyle
-    "UP", # pyupgrade
-    "B", # flake8-bugbear
-    "C", # flake8-comprehensions
+  "B",  # flake8-bugbear
+  "C",  # flake8-comprehensions
+  "D",  # pydocstyle
+  "E",  # pycodestyle errors
+  "F",  # pyflakes
+  "I",  # isort
+  "S",  # flake8-bandit
+  "UP", # pyupgrade
+  "W",  # pycodestyle warnings
 ]
+ignore = [ "B904", "D1", "E501", "S101" ]
+isort.combine-as-imports = true
+isort.force-wrap-aliases = true
+isort.section-order = [ "future", "standard-library", "third-party", "first-party", "local-folder" ]
+isort.split-on-trailing-comma = true
+pydocstyle.convention = "pep257"
 
-ignore = ["B904", "D1", "E501", "S101"]
+[tool.pytest]
+[tool.pytest.ini_options]
+minversion = "6.0"
+testpaths = [ "tests" ]
+addopts = "--cov --strict-markers --cov-report=xml --cov-report=term --doctest-modules"
+markers = [
+  "integration: marks tests as integration tests requiring network access (deselect with '-m \"not integration\"')",
+]
+asyncio_mode = "auto"
 
-[tool.ruff.lint.isort]
-combine-as-imports = true
-split-on-trailing-comma = true
-section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
-force-wrap-aliases = true
-
-[tool.ruff.lint.pydocstyle]
-convention = "pep257"
+[tool.coverage]
+[tool.coverage.run]
+source = [ "voip" ]
+[tool.coverage.report]
+skip_covered = true
+show_missing = true
