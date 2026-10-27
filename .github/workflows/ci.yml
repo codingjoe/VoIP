@@ -38,7 +38,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ matrix.python-version }}
-      - run: uv run --group test pytest
+      - run: uv run --with=pytest-github-actions-annotate-failures --group test pytest
       - uses: codecov/codecov-action@v7
         with:
           use_oidc: true
@@ -65,7 +65,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ matrix.python-version }}
-      - run: uv run --group=test --extra=${{ matrix.extra }} pytest
+      - run: uv run --with=pytest-github-actions-annotate-failures --group=test --extra=${{ matrix.extra }} pytest
       - uses: codecov/codecov-action@v7
         with:
           use_oidc: true
@@ -88,7 +88,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ matrix.python-version }}
-      - run: uv run --group=test pytest
+      - run: uv run --with=pytest-github-actions-annotate-failures --group=test pytest
       - uses: codecov/codecov-action@v7
         with:
           use_oidc: true
